@@ -166,3 +166,34 @@ def test_ezb_monatsmittel_und_speicher(db):
     assert u.monatskurs("USD", 2026, 9) == (D("1.1700"), "EZB-Monatsmittel")
     assert len(aufrufe) == 2  # zweiter Aufruf kommt aus der Datenbank
     assert u.in_euro(D("117.00"), "USD", date(2026, 9, 3)) == (D("100.00"), D("1.1700"), "EZB-Monatsmittel")
+
+
+def test_paperless_api_version_wird_ausgehandelt(db):
+    """Aktuelle Paperless-Versionen kennen nur API 9 und 10 und lehnen alles andere mit 406 ab."""
+    accept: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        kopf = request.headers["Accept"]
+        accept.append(kopf)
+        if "version=" in kopf and not kopf.endswith(("version=9", "version=10")):
+            return httpx.Response(406, json={"detail": 'Invalid version in "Accept" header.'})
+        kopfzeilen = {"X-Api-Version": "10", "X-Version": "2.20.0"}
+        if request.url.path == "/api/tags/":
+            return httpx.Response(200, headers=kopfzeilen,
+                                  json={"next": None, "results": [{"id": 1, "name": "Eingangsrechnung"}]})
+        return httpx.Response(200, headers=kopfzeilen, json={"next": None, "results": []})
+
+    cfg = Config(paperless_url="http://paperless.local", paperless_token="t")
+    ergebnis = paperless.importieren(db, cfg, 2026, 9, httpx.Client(transport=httpx.MockTransport(handler)))
+    assert ergebnis.fehler == []
+    assert accept[0] == "application/json"
+    assert set(accept[1:]) == {"application/json; version=10"}
+
+
+def test_paperless_fehlertext_mit_detail(db):
+    transport = httpx.MockTransport(
+        lambda r: httpx.Response(406, json={"detail": 'Invalid version in "Accept" header.'})
+    )
+    cfg = Config(paperless_url="http://paperless.local", paperless_token="t")
+    ergebnis = paperless.importieren(db, cfg, 2026, 9, httpx.Client(transport=transport))
+    assert ergebnis.fehler == ['Paperless antwortet mit Fehler 406: Invalid version in "Accept" header.']

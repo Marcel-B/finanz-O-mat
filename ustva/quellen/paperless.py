@@ -55,11 +55,37 @@ def _datum(wert: str | None) -> date | None:
         return None
 
 
+def _fehlertext(antwort: httpx.Response) -> str:
+    try:
+        detail = antwort.json().get("detail", "")
+    except (ValueError, AttributeError):
+        detail = ""
+    return f"Paperless antwortet mit Fehler {antwort.status_code}" + (f": {detail}" if detail else "")
+
+
 class PaperlessClient:
+    """Zugriff auf die REST-API.
+
+    Paperless versioniert die API über den Accept-Header und lehnt ältere
+    Versionen mit 406 ab (aktuell nur 9 und 10). Deshalb fragt der Client ohne
+    Version an und übernimmt für alle weiteren Anfragen die Version, die der
+    Server im Kopf ``X-Api-Version`` meldet. Die ausgewerteten Felder sind in
+    allen Versionen gleich.
+    """
+
     def __init__(self, url: str, token: str, client: httpx.Client | None = None):
         self.url = url.rstrip("/")
         self.client = client or httpx.Client(timeout=30)
-        self.client.headers.update({"Authorization": f"Token {token}", "Accept": "application/json; version=5"})
+        self.client.headers.update({"Authorization": f"Token {token}", "Accept": "application/json"})
+        self.api_version: str | None = None
+
+    def _get(self, adresse: str, params: dict | None = None) -> httpx.Response:
+        antwort = self.client.get(adresse, params=params)
+        version = antwort.headers.get("x-api-version", "")
+        if self.api_version is None and version.isdigit():
+            self.api_version = version
+            self.client.headers["Accept"] = f"application/json; version={version}"
+        return antwort
 
     def _alle(self, pfad: str, params: dict | None = None) -> list[dict]:
         ergebnisse: list[dict] = []
@@ -67,12 +93,12 @@ class PaperlessClient:
         params = {"page_size": 100, **(params or {})}
         while naechste:
             try:
-                antwort = self.client.get(naechste, params=params)
+                antwort = self._get(naechste, params=params)
                 antwort.raise_for_status()
             except httpx.HTTPStatusError as e:
                 if e.response.status_code in (401, 403):
                     raise PaperlessFehler("Paperless lehnt den Zugriff ab, bitte Token prüfen") from e
-                raise PaperlessFehler(f"Paperless antwortet mit Fehler {e.response.status_code}") from e
+                raise PaperlessFehler(_fehlertext(e.response)) from e
             except httpx.HTTPError as e:
                 raise PaperlessFehler(f"Paperless nicht erreichbar: {e}") from e
             daten = antwort.json()
@@ -92,7 +118,7 @@ class PaperlessClient:
 
     def original(self, dok_id: int) -> bytes:
         """Originaldatei; die archivierte PDF/A von Paperless enthält keine eingebettete XML mehr."""
-        antwort = self.client.get(f"{self.url}/api/documents/{dok_id}/download/", params={"original": "true"})
+        antwort = self._get(f"{self.url}/api/documents/{dok_id}/download/", params={"original": "true"})
         antwort.raise_for_status()
         return antwort.content
 
