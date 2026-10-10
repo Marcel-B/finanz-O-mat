@@ -275,6 +275,10 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         bank.abgleich_ausfuehren(db, umrechner)  # kann zu einem schon eingelesenen Umsatz passen
         return b.to_dict()
 
+    @app.get("/api/belege/{beleg_id}")
+    def beleg_lesen(beleg_id: int):
+        return _beleg(beleg_id).to_dict()
+
     @app.put("/api/belege/{beleg_id}")
     def beleg_aendern(beleg_id: int, eingabe: BelegEingabe):
         alt = _beleg(beleg_id)

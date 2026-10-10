@@ -227,3 +227,9 @@ def test_kandidaten_suche_und_schon_zugeordnete(client, db):
     treffer = client.get(f"/api/umsaetze/{aug.id}/kandidaten", params={"suche": "Laden 39"}).json()
     assert [k["partner"] for k in treffer] == ["Laden 39"]
     assert len(client.get(f"/api/umsaetze/{aug.id}/kandidaten").json()) == 30
+
+
+def test_beleg_einzeln_lesen(client):
+    beleg_id = client.post("/api/belege", json={**ANTHROPIC, "rechnungsdatum": "2026-09-17"}).json()["id"]
+    assert client.get(f"/api/belege/{beleg_id}").json()["rechnungsnummer"] == ANTHROPIC["rechnungsnummer"]
+    assert client.get("/api/belege/999").status_code == 404

@@ -13,7 +13,7 @@ import { betrag, datum } from "@/format";
 import KarteBox from "./KarteBox.vue";
 
 defineProps<{ umsaetze: Umsatz[] }>();
-const emit = defineEmits<{ geaendert: [] }>();
+const emit = defineEmits<{ geaendert: []; oeffnen: [belegId: number] }>();
 const toast = useToast();
 
 const datei = ref<HTMLInputElement | null>(null);
@@ -55,6 +55,13 @@ async function suchen(u: Umsatz, suche: string) {
     kandidaten[u.id] = [];
     fehler(e);
   }
+}
+
+// Liegt der Beleg in einem anderen Monat, sucht man ihn sonst in der Belegliste vergeblich.
+function belegDatum(u: Umsatz): string {
+  const d = u.beleg?.rechnungsdatum;
+  if (!d) return "ohne Rechnungsdatum";
+  return d.slice(0, 7) === u.buchungsdatum.slice(0, 7) ? "" : `Rechnung vom ${datum(d)}`;
 }
 
 const kandidatLabel = (b: BelegKurz) =>
@@ -120,8 +127,16 @@ const rueckgaengig = (u: Umsatz) => aktion(() => api.ignorieren(u.id, { ignorier
         <template #body="{ data }">
           <span v-if="data.beleg">
             <i class="pi pi-check-circle mr-1 text-green-600 dark:text-green-400" />
-            {{ data.beleg.partner || data.beleg.beschreibung || "Beleg" }}
-            <span v-if="data.beleg.rechnungsnummer" class="text-muted-color">· {{ data.beleg.rechnungsnummer }}</span>
+            <a
+              href="#"
+              class="hover:underline"
+              v-tooltip.top="'Beleg öffnen'"
+              @click.prevent="emit('oeffnen', data.beleg.id)"
+            >
+              {{ data.beleg.partner || data.beleg.beschreibung || "Beleg" }}
+              <span v-if="data.beleg.rechnungsnummer" class="text-muted-color">· {{ data.beleg.rechnungsnummer }}</span>
+            </a>
+            <div v-if="belegDatum(data)" class="text-xs text-amber-700 dark:text-amber-400">{{ belegDatum(data) }}</div>
             <div
               v-if="data.kosten_geldverkehr"
               class="text-xs text-muted-color"

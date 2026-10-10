@@ -220,6 +220,7 @@ export const api = {
   steuerfaelle: () => anfrage<Steuerfall[]>("/api/steuerfaelle"),
   bericht: (zeitraum: string) => anfrage<Bericht>(`/api/bericht/${zeitraum}`),
   offen: () => anfrage<Beleg[]>("/api/offen"),
+  beleg: (id: number) => anfrage<Beleg>(`/api/belege/${id}`),
   belegAnlegen: (b: BelegEingabe) => post<Beleg>("/api/belege", b),
   belegAendern: (id: number, b: BelegEingabe) =>
     anfrage<Beleg>(`/api/belege/${id}`, { method: "PUT", body: JSON.stringify(b) }),
