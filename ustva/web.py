@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from . import bank, einstellungen, export, uebersicht
+from . import aktualisierung, bank, einstellungen, export, uebersicht
 from .berechnung import berechnen, zeitraum
 from .config import Config
 from .db import Datenbank
@@ -398,6 +398,8 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
             raise HTTPException(403, "Das aktuelle Passwort stimmt nicht.")
         anmeldung.setzen(eingabe.benutzer or anmeldung.zugang()[0], eingabe.neu)
         return _einstellungen()["anmeldung"]
+
+    app.include_router(aktualisierung.router(cfg.update_verzeichnis))
 
     @app.exception_handler(ValueError)
     async def wertfehler(_request: Request, exc: ValueError):

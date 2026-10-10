@@ -42,7 +42,7 @@ Aufruf: $AUFRUF [-y | update <CTID> | tailscale <CTID>]
 Variablen (Vorgabe): CTID (nächste freie), CT_HOSTNAME (finanz-o-mat), CORES (1), MEMORY (1024), DISK (4),
 BRIDGE (vmbr0), IP (dhcp), GATEWAY, CT_STORAGE, TEMPLATE_STORAGE, BELEG_HOST_PATH, PAPERLESS_URL,
 PAPERLESS_TOKEN, APP_BENUTZER (admin), APP_PASSWORT (zufällig), VERSTEUERUNG (ist), BUNDESLAND (NW),
-EIGENE_USTID, PORT (8000), TAILSCALE (ja), TAILSCALE_AUTHKEY, TAILSCALE_SERVE (nein), REPO_URL, REPO_BRANCH (main). Details: deploy/proxmox/README.md
+EIGENE_USTID, PORT (8000), AUTO_UPDATE (nein), TAILSCALE (ja), TAILSCALE_AUTHKEY, TAILSCALE_SERVE (nein), REPO_URL, REPO_BRANCH (main). Details: deploy/proxmox/README.md
 EOF
 }
 
@@ -159,6 +159,10 @@ APP_PASSWORT="$APP_PASSWORT"
 # Datenbank und Port im Container
 DATENBANK="/var/lib/finanz-o-mat/finanzomat.sqlite"
 PORT="$PORT"
+
+# Update-Hinweis in der App; ja = neue Versionen automatisch installieren
+UPDATE_VERZEICHNIS="/var/lib/finanz-o-mat/update"
+AUTO_UPDATE="$AUTO_UPDATE"
 EOF
 }
 
@@ -223,6 +227,7 @@ installieren() {
     BUNDESLAND="${BUNDESLAND:-NW}"
     EIGENE_USTID="${EIGENE_USTID:-}"
     PORT="${PORT:-8000}"
+    AUTO_UPDATE="${AUTO_UPDATE:-nein}"
     TAILSCALE="${TAILSCALE:-ja}"
     TAILSCALE_AUTHKEY="${TAILSCALE_AUTHKEY:-}"
     TAILSCALE_SERVE="${TAILSCALE_SERVE:-nein}"
@@ -248,6 +253,7 @@ installieren() {
     frage VERSTEUERUNG "Versteuerung (ist/soll)"
     frage APP_BENUTZER "Benutzername für die Weboberfläche"
     frage APP_PASSWORT "Passwort für die Weboberfläche" geheim
+    frage AUTO_UPDATE "Neue Versionen automatisch installieren (ja/nein; nein = Hinweis in der App)"
     frage TAILSCALE "Tailscale einrichten (ja/nein)"
     if [[ $TAILSCALE == ja ]]; then
         frage TAILSCALE_AUTHKEY "Tailscale-Auth-Key (leer = Anmeldung über einen Link im Browser)" geheim
@@ -259,6 +265,7 @@ installieren() {
         abbruch "Container $CTID existiert schon. Für ein Update: $AUFRUF update $CTID"
     fi
     [[ $VERSTEUERUNG == ist || $VERSTEUERUNG == soll ]] || abbruch "VERSTEUERUNG muss ist oder soll sein."
+    [[ $AUTO_UPDATE == ja || $AUTO_UPDATE == nein ]] || abbruch "AUTO_UPDATE muss ja oder nein sein."
     [[ $TAILSCALE == ja || $TAILSCALE == nein ]] || abbruch "TAILSCALE muss ja oder nein sein."
     [[ $TAILSCALE_SERVE == ja || $TAILSCALE_SERVE == nein ]] || abbruch "TAILSCALE_SERVE muss ja oder nein sein."
     [[ $IP == dhcp || $IP =~ ^[0-9.]+/[0-9]+$ ]] || abbruch "IP muss dhcp oder Adresse/Präfix sein."
@@ -292,6 +299,7 @@ installieren() {
     echo "  Paperless:   ${PAPERLESS_URL:-nicht genutzt}"
     echo "  Tailscale:   $TAILSCALE${TAILSCALE_AUTHKEY:+ (mit Auth-Key)}, HTTPS über tailscale serve: $TAILSCALE_SERVE"
     echo "  App:         $REPO_URL ($REPO_BRANCH), Port $PORT, $VERSTEUERUNG-Versteuerung"
+    echo "  Updates:     alle 6 Stunden prüfen, $([[ $AUTO_UPDATE == ja ]] && echo "automatisch installieren" || echo "Hinweis in der App")"
     if [[ $NICHT_FRAGEN != 1 ]]; then
         read -rp "Container so anlegen? [J/n] " antwort
         [[ ${antwort:-j} =~ ^[JjYy]$ ]] || abbruch "Abgebrochen."

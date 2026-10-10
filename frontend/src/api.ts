@@ -168,6 +168,18 @@ export interface Jahresuebersicht {
   unvollstaendig: number;
 }
 
+export interface UpdateStatus {
+  unterstuetzt: boolean;
+  zustand?: "aktuell" | "neu" | "angefordert" | "laeuft" | "fehler" | "unbekannt";
+  installiert?: string | null;
+  installiert_datum?: string | null;
+  neu?: string | null;
+  aenderungen: string[];
+  geprueft?: string | null;
+  meldung?: string;
+  automatisch?: boolean;
+}
+
 async function anfrage<T>(pfad: string, optionen: RequestInit = {}): Promise<T> {
   const antwort = await fetch(pfad, {
     ...optionen,
@@ -223,4 +235,6 @@ export const api = {
   passwortAendern: (p: { aktuell: string; benutzer: string; neu: string }) =>
     post<Einstellungen["anmeldung"]>("/api/passwort", p),
   uebersicht: (jahr: number) => anfrage<Jahresuebersicht>(`/api/uebersicht/${jahr}`),
+  update: () => anfrage<UpdateStatus>("/api/update"),
+  updateStarten: () => post<UpdateStatus>("/api/update"),
 };

@@ -5,6 +5,10 @@
 #   ct-setup.sh tailscale Tailscale aus der offiziellen Paketquelle installieren (braucht /dev/net/tun)
 #   ct-setup.sh update    Datenbank sichern, neuesten Stand holen, neu installieren, Dienst neu starten
 #                         (im Container auch als finanz-o-mat-update aufrufbar)
+#   ct-setup.sh pruefen   nachsehen, ob es eine neue Version gibt (läuft per Timer), Ergebnis für die App
+#
+# Update aus der App: Die App legt /var/lib/finanz-o-mat/update/anfordern an, eine systemd-Path-Unit startet
+# dann finanz-o-mat-update.service (als root). Den Stand liest die App aus .../update/status.json.
 #
 # Konfiguration und Datenbank liegen außerhalb des Programmverzeichnisses und bleiben bei Updates erhalten:
 #   /etc/finanz-o-mat/finanz-o-mat.env   Einstellungen (Paperless, Anmeldung, Versteuerung, ...)
@@ -24,12 +28,27 @@ FRONTEND=$APP_DIR/frontend
 NODE_MIN=20.19
 NODE_LINIE=22
 NODE_DIR=/opt/node
+UPDATE_DIR=$DATEN/update
+SPERRE=/run/finanz-o-mat-update.lock
 
 info() { printf '\e[1;34m==>\e[0m %s\n' "$*"; }
 ok() { printf '\e[1;32m ok\e[0m %s\n' "$*"; }
 warn() { printf '\e[1;33m !!\e[0m %s\n' "$*" >&2; }
 abbruch() {
     printf '\e[1;31mFehler:\e[0m %s\n' "$*" >&2
+    # In einer Subshell nur abbrechen; aufräumen macht die Hauptshell
+    ((BASH_SUBSHELL == 0)) || exit 1
+    if [[ -n ${UPDATE_LAEUFT:-} ]]; then
+        unset UPDATE_LAEUFT
+        # Zurück auf den bisherigen Stand, damit Code und laufende Version zusammenpassen
+        if [[ -n ${VORHER_COMMIT:-} ]]; then
+            git -C "$APP_DIR" reset --quiet --hard "$VORHER_COMMIT" || true
+            hat_systemd && systemctl restart "$DIENST" || true
+            printf '\e[1;33m !!\e[0m %s\n' "Zurück auf $(git -C "$APP_DIR" rev-parse --short HEAD)" >&2
+        fi
+        # Der App mitteilen, dass das Update schiefging
+        status_schreiben fehler "$*" || true
+    fi
     exit 1
 }
 trap 'abbruch "Befehl in Zeile $LINENO fehlgeschlagen: $BASH_COMMAND"' ERR
@@ -39,6 +58,64 @@ hat_systemd() { [[ -d /run/systemd/system ]]; }
 env_wert() {
     # Wert einer Variable aus der Konfiguration, ohne Anführungszeichen
     sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$ENV_DATEI" | tail -n1
+}
+
+status_schreiben() {
+    # Stand für die App: installierte Version, neue Version (FETCH_HEAD) und die Commits dazwischen.
+    # Texte gehen über die Umgebung an Python, damit Anführungszeichen in Commit-Texten nichts kaputt machen.
+    local zustand=$1 meldung=${2:-} neu="" aenderungen="" installiert datum
+    [[ -d $UPDATE_DIR ]] || return 0
+    installiert=$(git -C "$APP_DIR" rev-parse --short HEAD)
+    datum=$(git -C "$APP_DIR" log -1 --format=%cI HEAD)
+    if git -C "$APP_DIR" rev-parse -q --verify FETCH_HEAD >/dev/null; then
+        neu=$(git -C "$APP_DIR" rev-parse --short FETCH_HEAD)
+        aenderungen=$(git -C "$APP_DIR" log --format=%s HEAD..FETCH_HEAD | head -n 30)
+    fi
+    ZUSTAND=$zustand MELDUNG=$meldung INSTALLIERT=$installiert DATUM=$datum NEU=$neu AENDERUNGEN=$aenderungen \
+        AUTO=$(env_wert AUTO_UPDATE) python3 - "$UPDATE_DIR/status.json" <<'PY'
+import json, os, sys
+from datetime import datetime
+e = os.environ
+ziel = sys.argv[1]
+daten = {
+    "zustand": e["ZUSTAND"],
+    "meldung": e["MELDUNG"],
+    "installiert": e["INSTALLIERT"],
+    "installiert_datum": e["DATUM"],
+    "neu": e["NEU"] or None,
+    "aenderungen": [z for z in e["AENDERUNGEN"].splitlines() if z.strip()],
+    "geprueft": datetime.now().astimezone().isoformat(timespec="seconds"),
+    "automatisch": e["AUTO"] == "ja",
+}
+with open(ziel + ".neu", "w", encoding="utf-8") as f:
+    json.dump(daten, f, ensure_ascii=False, indent=1)
+os.chmod(ziel + ".neu", 0o644)
+os.replace(ziel + ".neu", ziel)
+PY
+}
+
+pruefen() {
+    [[ $EUID -eq 0 ]] || abbruch "Bitte als root ausführen."
+    exec 9>"$SPERRE"
+    # Läuft gerade ein Update, nicht dazwischenfunken
+    flock -n 9 || return 0
+    local zweig
+    zweig=$(git -C "$APP_DIR" rev-parse --abbrev-ref HEAD)
+    if ! git -C "$APP_DIR" fetch --quiet origin "$zweig"; then
+        status_schreiben unbekannt "GitHub nicht erreichbar"
+        abbruch "git fetch fehlgeschlagen"
+    fi
+    if [[ $(git -C "$APP_DIR" rev-parse HEAD) == "$(git -C "$APP_DIR" rev-parse FETCH_HEAD)" ]]; then
+        status_schreiben aktuell
+        ok "Aktuell ($(git -C "$APP_DIR" rev-parse --short HEAD))"
+        return 0
+    fi
+    status_schreiben neu
+    ok "Neue Version: $(git -C "$APP_DIR" rev-parse --short FETCH_HEAD)"
+    if [[ $(env_wert AUTO_UPDATE) == ja ]]; then
+        info "AUTO_UPDATE=ja: Update wird angefordert"
+        touch "$UPDATE_DIR/anfordern"
+    fi
 }
 
 pakete() {
@@ -58,7 +135,7 @@ benutzer_und_ordner() {
     if ! id "$BENUTZER" >/dev/null 2>&1; then
         useradd --system --home-dir "$DATEN" --shell /usr/sbin/nologin "$BENUTZER"
     fi
-    install -d -o "$BENUTZER" -g "$BENUTZER" -m 750 "$DATEN" "$DATEN/sicherungen"
+    install -d -o "$BENUTZER" -g "$BENUTZER" -m 750 "$DATEN" "$DATEN/sicherungen" "$UPDATE_DIR"
     install -d -m 755 /srv/rechnungen
     install -d -m 750 -g "$BENUTZER" "$(dirname "$ENV_DATEI")"
     if [[ ! -f $ENV_DATEI ]]; then
@@ -67,6 +144,13 @@ benutzer_und_ordner() {
             -e "s|^RECHNUNGS_VERZEICHNIS=.*|RECHNUNGS_VERZEICHNIS=/srv/rechnungen|" \
             "$APP_DIR/.env.example" >"$ENV_DATEI"
         warn "$ENV_DATEI aus .env.example angelegt, bitte anpassen"
+    fi
+    # Einstellungen, die ältere Installationen noch nicht haben
+    if ! grep -q '^UPDATE_VERZEICHNIS=' "$ENV_DATEI"; then
+        printf '\n# Update-Hinweis in der App\nUPDATE_VERZEICHNIS="%s"\n' "$UPDATE_DIR" >>"$ENV_DATEI"
+    fi
+    if ! grep -q '^AUTO_UPDATE=' "$ENV_DATEI"; then
+        printf '# ja = neue Versionen automatisch installieren\nAUTO_UPDATE="nein"\n' >>"$ENV_DATEI"
     fi
     chown root:"$BENUTZER" "$ENV_DATEI"
     chmod 640 "$ENV_DATEI"
@@ -110,11 +194,11 @@ frontend_bauen() {
     node_bereitstellen
     info "Baue die Oberfläche mit Node $(node --version)"
     if [[ -f $FRONTEND/package-lock.json ]]; then
-        (cd "$FRONTEND" && npm ci --no-audit --no-fund --loglevel=error)
+        npm --prefix "$FRONTEND" ci --no-audit --no-fund --loglevel=error || abbruch "npm ci fehlgeschlagen"
     else
-        (cd "$FRONTEND" && npm install --no-audit --no-fund --loglevel=error)
+        npm --prefix "$FRONTEND" install --no-audit --no-fund --loglevel=error || abbruch "npm install fehlgeschlagen"
     fi
-    (cd "$FRONTEND" && npm run build --silent)
+    npm --prefix "$FRONTEND" run build --silent || abbruch "Bau der Oberfläche fehlgeschlagen"
     ok "Oberfläche gebaut"
 }
 
@@ -123,7 +207,8 @@ python_umgebung() {
     [[ -x $VENV/bin/python ]] || python3 -m venv "$VENV"
     "$VENV/bin/pip" install --quiet --disable-pip-version-check --upgrade pip
     # editierbar: Die App läuft direkt aus dem Checkout, gebaute Oberflächendateien sind so ohne Weiteres dabei
-    "$VENV/bin/pip" install --quiet --disable-pip-version-check --upgrade --editable "$APP_DIR"
+    "$VENV/bin/pip" install --quiet --disable-pip-version-check --upgrade --editable "$APP_DIR" \
+        || abbruch "Installation der Python-Pakete fehlgeschlagen"
     ok "$("$VENV/bin/pip" show finanz-o-mat | sed -n 's/^Version: /finanz-o-mat /p')"
 }
 
@@ -164,6 +249,52 @@ EOF
 exec bash $APP_DIR/deploy/proxmox/ct-setup.sh update "\$@"
 EOF
     chmod 755 /usr/local/bin/finanz-o-mat /usr/local/bin/finanz-o-mat-update
+
+    # Regelmäßig nach neuen Versionen sehen
+    cat >/etc/systemd/system/$DIENST-pruefen.service <<EOF
+[Unit]
+Description=Finanz-O-Mat: nach neuer Version sehen
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $APP_DIR/deploy/proxmox/ct-setup.sh pruefen
+EOF
+    cat >/etc/systemd/system/$DIENST-pruefen.timer <<EOF
+[Unit]
+Description=Finanz-O-Mat: alle 6 Stunden nach neuer Version sehen
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=6h
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target
+EOF
+    # Update auf Anforderung aus der App (Datei anfordern), läuft als root
+    cat >/etc/systemd/system/$DIENST-update.service <<EOF
+[Unit]
+Description=Finanz-O-Mat aktualisieren
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/rm -f $UPDATE_DIR/anfordern
+ExecStart=/bin/bash $APP_DIR/deploy/proxmox/ct-setup.sh update
+TimeoutStartSec=30min
+EOF
+    cat >/etc/systemd/system/$DIENST-update.path <<EOF
+[Unit]
+Description=Finanz-O-Mat: Update-Anforderung aus der App
+
+[Path]
+PathExists=$UPDATE_DIR/anfordern
+Unit=$DIENST-update.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
 }
 
 dienst_starten() {
@@ -172,6 +303,7 @@ dienst_starten() {
         return 0
     fi
     systemctl daemon-reload
+    systemctl enable --quiet --now "$DIENST-pruefen.timer" "$DIENST-update.path"
     systemctl enable --quiet "$DIENST"
     systemctl restart "$DIENST"
     pruefe_erreichbar
@@ -262,11 +394,18 @@ installieren() {
     python_umgebung
     dienst_dateien
     dienst_starten
+    pruefen || warn "Versionsprüfung fehlgeschlagen"
 }
 
 aktualisieren() {
     [[ $EUID -eq 0 ]] || abbruch "Bitte als root ausführen."
     local zweig vorher nachher erzwingen=${1:-}
+    # Nur ein Update gleichzeitig; die Sperre bleibt über das exec unten hinweg bestehen
+    exec 9>"$SPERRE"
+    flock -w 1800 9 || abbruch "Ein anderes Update läuft noch."
+    rm -f "$UPDATE_DIR/anfordern"
+    export UPDATE_LAEUFT=1
+    status_schreiben laeuft
     cd "$APP_DIR"
     zweig=$(git rev-parse --abbrev-ref HEAD)
     vorher=$(git rev-parse --short HEAD)
@@ -275,9 +414,13 @@ aktualisieren() {
     nachher=$(git rev-parse --short FETCH_HEAD)
     if [[ $vorher == "$nachher" && $erzwingen != --force ]]; then
         ok "Schon aktuell ($vorher). Neu installieren erzwingen: finanz-o-mat-update --force"
+        unset UPDATE_LAEUFT
+        status_schreiben aktuell
         return 0
     fi
     sichern
+    VORHER_COMMIT=$(git rev-parse HEAD)
+    export VORHER_COMMIT
     git reset --quiet --hard FETCH_HEAD
     ok "$vorher -> $nachher"
     # Neu einlesen, damit Änderungen an diesem Skript selbst schon für die Installation gelten
@@ -291,6 +434,8 @@ nach_update() {
     dienst_dateien
     dienst_starten
     tailscale_aktualisieren
+    unset UPDATE_LAEUFT
+    status_schreiben aktuell
     ok "Update fertig"
 }
 
@@ -300,7 +445,8 @@ main() {
         update) aktualisieren "${2:-}" ;;
         nach-update) nach_update ;;
         tailscale) tailscale_installieren ;;
-        *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+        pruefen) pruefen ;;
+        *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
     esac
 }
 
