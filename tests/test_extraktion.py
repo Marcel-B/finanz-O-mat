@@ -113,3 +113,20 @@ def test_hetzner_tabelle_in_jedem_textlayout(layout):
     e = erkennen(beispiele.HETZNER[layout], Art.EINGANG, "DE123456789")
     assert (e.netto, e.steuer, e.brutto) == (D("14.19"), D("2.70"), D("16.89"))
     assert e.steuersatz == D("19")
+
+
+def test_eu_anbieter_mit_deutscher_steuer_ist_reverse_charge():
+    e = erkennen(beispiele.JETBRAINS, Art.EINGANG, "DE123456789")
+    assert e.steuerfall == Steuerfall.EU_LEISTUNG_13B
+    assert e.partner_ustid == "CZ26502275"
+    assert any("nicht als Vorsteuer abziehbar" in h for h in e.hinweise)
+    b = beleg_aus_erkennung(e, Art.EINGANG)
+    assert (b.netto, b.steuersatz, b.steuer) == (D("51.00"), D("19"), D("9.69"))
+    assert b.zahlbetrag() == D("60.69")  # so steht es auf dem Konto
+
+
+def test_eu_anbieter_mit_deutscher_ustid_bleibt_inland():
+    # z. B. ein Händler mit Sitz in Luxemburg, der aus einem deutschen Lager liefert
+    text = beispiele.JETBRAINS.replace("VAT ID: CZ26502275", "VAT ID: LU26375245, USt-IdNr. DE814584193")
+    e = erkennen(text, Art.EINGANG, "DE123456789")
+    assert e.steuerfall == Steuerfall.VORSTEUER_INLAND

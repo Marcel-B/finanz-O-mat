@@ -137,3 +137,11 @@ def test_brutto_eur_je_steuerfall(umrechner):
     assert rc.brutto_eur == D("50.00")
     assert rc.to_dict()["brutto_eur"] == "50.00"
     assert rc.to_dict()["steuer_auf_rechnung"] is False
+
+
+def test_reverse_charge_mit_berechneter_steuer(umrechner):
+    # Anbieter hat 19 % berechnet, obwohl § 13b gilt: Kz 46/47/67 wie üblich, keine Vorsteuer in Kz 66
+    b = berechnen([eingang("51.00", Steuerfall.EU_LEISTUNG_13B, steuer=D("9.69"))], 2026, 9, umrechner)
+    assert (b.wert("46"), b.wert("47"), b.wert("67")) == (D("51"), D("9.69"), D("9.69"))
+    assert b.wert("66") in (None, D("0"))
+    assert b.zeilen[0].brutto_eur == D("60.69")

@@ -69,6 +69,8 @@ class BelegZeile:
             return None
         if self.beleg.steuer_auf_rechnung() and self.steuer_eur is not None:
             return self.netto_eur + self.steuer_eur
+        if self.beleg.steuer and self.kurs:  # vom Anbieter trotzdem berechnete Steuer
+            return self.netto_eur + cent(self.beleg.steuer / self.kurs)
         return self.netto_eur
 
     def to_dict(self) -> dict:

@@ -299,7 +299,7 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
             {{ betrag(data.steuersatz) }} %
             <span
               v-if="data.steuer_auf_rechnung === false && Number(data.steuer_eur) > 0"
-              v-tooltip.top="'Steuer schuldest du selbst (Reverse Charge); sie steht nicht auf der Rechnung und ist nicht im Brutto enthalten.'"
+              v-tooltip.top="'Diese Steuer schuldest du selbst (Reverse Charge) und ziehst sie zugleich als Vorsteuer ab.'"
             >· selbst geschuldet</span>
           </div>
         </template>

@@ -51,7 +51,8 @@ class Beleg:
         """Betrag, der laut Rechnung bezahlt wird (in Belegwährung)."""
         if self.steuer_auf_rechnung():
             return self.netto + self.steuer_in_belegwaehrung()
-        return self.netto
+        # Reverse Charge: nur Steuer, die der Anbieter trotzdem berechnet hat
+        return self.netto + (self.steuer or Decimal(0))
 
     def to_dict(self) -> dict:
         d = asdict(self)

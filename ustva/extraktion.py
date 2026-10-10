@@ -229,6 +229,7 @@ class Erkennung:
     rechnungsnummer: str = ""
     reverse_charge: bool = False
     drittland: bool = False
+    partner_de_ustid: bool = False  # Anbieter nennt (auch) eine deutsche USt-IdNr.
     hinweise: list[str] = field(default_factory=list)
 
 
@@ -340,6 +341,7 @@ def erkennen(text: str, art: Art | None = None, eigene_ustid: str = "") -> Erken
     ids = ustids_finden(text, eigene_ustid)
     fremde = [i for i in ids if not i.startswith("DE")]
     e.partner_ustid = (fremde or ids or [""])[0]
+    e.partner_de_ustid = any(i.startswith("DE") for i in ids)
     e.reverse_charge = bool(RE_REVERSE_CHARGE.search(text))
     e.drittland = bool(RE_DRITTLAND.search(text)) and not fremde
     if RE_OSS.search(text):
@@ -355,12 +357,26 @@ HINWEIS_AUSL_STEUER = ("Ausländischer Anbieter mit ausgewiesener Steuer: Ist es
                        "Nur dann ist sie als Vorsteuer abziehbar.")
 
 
+def hinweis_eu_steuer(e: Erkennung) -> str:
+    betrag = f" ({e.steuer:.2f} {e.waehrung})".replace(".", ",") if e.steuer else ""
+    return (f"Der Anbieter aus dem EU-Ausland ({e.partner_ustid}) hat Umsatzsteuer berechnet{betrag}. Für "
+            "Leistungen an dich als Unternehmer schuldest du die Steuer selbst (§ 13b, Kz 46/47, Vorsteuer in "
+            "Kz 67); die ausgewiesene Steuer ist nicht als Vorsteuer abziehbar. Hinterlege deine USt-IdNr. beim "
+            "Anbieter und fordere eine korrigierte Rechnung an.")
+
+
 def steuerfall_vorschlagen(e: Erkennung) -> Steuerfall | None:
     hat_steuer = bool(e.steuer) and e.steuer != 0
     eu_fremd = bool(e.partner_ustid) and not e.partner_ustid.startswith("DE")
     fremdwaehrung = e.waehrung != "EUR"
 
     if e.art == Art.EINGANG:
+        if hat_steuer and not e.reverse_charge and eu_fremd and not e.partner_de_ustid:
+            # Typisch, wenn beim Anbieter keine USt-IdNr. hinterlegt ist: Er behandelt dich wie eine Privatperson.
+            hinweis = hinweis_eu_steuer(e)
+            if hinweis not in e.hinweise:
+                e.hinweise.append(hinweis)
+            return Steuerfall.EU_LEISTUNG_13B
         if hat_steuer and not e.reverse_charge:
             if (fremdwaehrung or e.drittland) and HINWEIS_AUSL_STEUER not in e.hinweise:
                 e.hinweise.append(HINWEIS_AUSL_STEUER)
