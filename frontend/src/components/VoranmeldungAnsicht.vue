@@ -115,6 +115,14 @@ function bearbeiten(b: Beleg | null) {
   dialogOffen.value = true;
 }
 
+async function belegOeffnen(id: number) {
+  try {
+    bearbeiten(await api.beleg(id));
+  } catch (e) {
+    meldeFehler(e);
+  }
+}
+
 async function geprueft(b: Beleg) {
   try {
     await api.belegGeprueft(b.id);
@@ -323,7 +331,7 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
     </DataTable>
   </KarteBox>
 
-  <KontoUmsaetze v-if="bericht" :umsaetze="bericht.umsaetze" @geaendert="laden" />
+  <KontoUmsaetze v-if="bericht" :umsaetze="bericht.umsaetze" @geaendert="laden" @oeffnen="belegOeffnen" />
 
   <KarteBox v-if="offen.length" titel="Belege ohne Zeitraum">
     <p class="mb-2 text-sm text-muted-color">

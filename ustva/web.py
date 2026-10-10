@@ -226,11 +226,18 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         return u
 
     @app.get("/api/umsaetze/{umsatz_id}/kandidaten")
-    def umsatz_kandidaten(umsatz_id: int):
+    def umsatz_kandidaten(umsatz_id: int, suche: str = ""):
         u = _umsatz(umsatz_id)
-        vergeben = {x.beleg_id for x in db.alle_umsaetze() if x.beleg_id is not None and x.id != u.id}
-        return [_beleg_kurz(b) for b in bank.kandidaten(u, db.alle_belege(), vergeben, nur_passende=False,
-                                                         euro=bank.euro_schaetzer(umrechner))[:30]]
+        andere = {x.beleg_id: x for x in db.alle_umsaetze() if x.beleg_id is not None and x.id != u.id}
+        euro = bank.euro_schaetzer(umrechner)
+        belege = [b for b in db.alle_belege() if bank.passt_zur_suche(b, suche)]
+        offen = bank.kandidaten(u, belege, set(andere), nur_passende=False, euro=euro)[:30]
+        # Belege, die schon an einem anderen Umsatz hängen, zeigen wir mit an, damit man sie wiederfindet:
+        # bei einer Suche alle Treffer, sonst nur die, die genau passen würden.
+        vergeben = bank.kandidaten(u, [b for b in belege if b.id in andere], set(),
+                                   nur_passende=not suche, euro=euro)[:10]
+        return [*(_beleg_kurz(b) for b in offen),
+                *({**_beleg_kurz(b), "zugeordnet": andere[b.id].buchungsdatum.isoformat()} for b in vergeben)]
 
     @app.post("/api/umsaetze/{umsatz_id}/zuordnen")
     def umsatz_zuordnen(umsatz_id: int, eingabe: ZuordnungEingabe):
@@ -264,7 +271,13 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
 
     @app.post("/api/belege", status_code=201)
     def beleg_anlegen(eingabe: BelegEingabe):
-        return db.beleg_anlegen(Beleg(**eingabe.model_dump())).to_dict()
+        b = db.beleg_anlegen(Beleg(**eingabe.model_dump()))
+        bank.abgleich_ausfuehren(db, umrechner)  # kann zu einem schon eingelesenen Umsatz passen
+        return b.to_dict()
+
+    @app.get("/api/belege/{beleg_id}")
+    def beleg_lesen(beleg_id: int):
+        return _beleg(beleg_id).to_dict()
 
     @app.put("/api/belege/{beleg_id}")
     def beleg_aendern(beleg_id: int, eingabe: BelegEingabe):
@@ -272,7 +285,9 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         neu = Beleg(**eingabe.model_dump(), quelle=alt.quelle, quelle_ref=alt.quelle_ref,
                     quelle_link=alt.quelle_link, hinweise=alt.hinweise, erechnung=alt.erechnung,
                     id=beleg_id)
-        return db.beleg_aktualisieren(neu).to_dict()
+        b = db.beleg_aktualisieren(neu)
+        bank.abgleich_ausfuehren(db, umrechner)  # z. B. nachgetragenes Datum oder korrigierter Betrag
+        return b.to_dict()
 
     @app.post("/api/belege/neu-einlesen")
     def belege_neu_einlesen(anfrage: NeuEinlesenAnfrage):

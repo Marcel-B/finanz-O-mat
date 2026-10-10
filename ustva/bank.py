@@ -229,9 +229,12 @@ def kandidaten(u: Umsatz, belege: list[Beleg], vergeben: set[int], nur_passende:
     art = Art.AUSGANG if u.betrag > 0 else Art.EINGANG
     treffer: list[tuple[tuple, Beleg]] = []
     for b in belege:
-        if b.id in vergeben or b.art != art or b.steuerfall == Steuerfall.IGNORIEREN or b.rechnungsdatum is None:
+        if b.id in vergeben or b.art != art or b.steuerfall == Steuerfall.IGNORIEREN:
             continue
-        im_fenster = b.rechnungsdatum - VOR_RECHNUNG <= u.buchungsdatum <= b.rechnungsdatum + NACH_RECHNUNG
+        if b.rechnungsdatum is None and nur_passende:
+            continue  # zur manuellen Auswahl steht er trotzdem
+        im_fenster = b.rechnungsdatum is not None and \
+            b.rechnungsdatum - VOR_RECHNUNG <= u.buchungsdatum <= b.rechnungsdatum + NACH_RECHNUNG
         betrag = passt_betrag(u, b, euro)
         nummer = bool(b.rechnungsnummer) and len(b.rechnungsnummer) >= 4 and \
             b.rechnungsnummer.lower() in u.verwendungszweck.lower()
@@ -240,10 +243,19 @@ def kandidaten(u: Umsatz, belege: list[Beleg], vergeben: set[int], nur_passende:
         sicher = betrag == "genau" or (betrag == "ungefaehr" and name)
         if nur_passende and not (im_fenster and sicher):
             continue
-        abstand = abs((u.buchungsdatum - b.rechnungsdatum).days)
+        abstand = abs((u.buchungsdatum - b.rechnungsdatum).days) if b.rechnungsdatum else 99999
         rang = {"genau": 0, "ungefaehr": 1}.get(betrag, 2)
         treffer.append(((rang, not im_fenster, not nummer, not name, abstand), b))
     return [b for _, b in sorted(treffer, key=lambda t: t[0])]
+
+
+def passt_zur_suche(b: Beleg, suche: str) -> bool:
+    """Alle Suchwörter kommen in Partner, Beschreibung, Rechnungsnummer, Datum oder Betrag vor."""
+    betrag = f"{abs(b.zahlbetrag()):.2f}"
+    datum = f"{b.rechnungsdatum:%d.%m.%Y} {b.rechnungsdatum.isoformat()}" if b.rechnungsdatum else ""
+    text = " ".join([b.partner, b.beschreibung, b.rechnungsnummer, b.waehrung, datum, betrag,
+                     betrag.replace(".", ",")]).lower()
+    return all(wort in text for wort in suche.lower().split())
 
 
 def zuordnen(db: Datenbank, u: Umsatz, b: Beleg | None) -> None:
