@@ -154,13 +154,12 @@ paperless_conf_wert() {
     sed -n "s/^[[:space:]]*$1=[\"']\{0,1\}\([^\"']*\)[\"']\{0,1\}[[:space:]]*$/\1/p" "$datei" | tail -n 1
 }
 
-setze_paperless_conf() {
-    # setze_paperless_conf NAME WERT: Zeile ersetzen (auch auskommentierte) oder anhängen
-    local datei=$PAPERLESS_DIR/paperless.conf
-    if grep -Eq "^[#[:space:]]*$1=" "$datei"; then
-        sed -i -E "s|^[#[:space:]]*$1=.*|$1=$2|" "$datei"
+setze_zeile() {
+    # setze_zeile DATEI NAME WERT: Zeile NAME=… ersetzen (auch auskommentierte) oder anhängen
+    if grep -Eq "^[#[:space:]]*$2=" "$1"; then
+        sed -i -E "s|^[#[:space:]]*$2=.*|$2=$3|" "$1"
     else
-        printf '%s=%s\n' "$1" "$2" >>"$datei"
+        printf '%s=%s\n' "$2" "$3" >>"$1"
     fi
 }
 
@@ -192,6 +191,49 @@ mailabruf_skript() {
     echo "$LIB_DIR/mailabruf.py"
 }
 
+antwortet_paperless() {
+    # Die API antwortet ohne Token mit 401/403, mit Weiterleitung oder 200 je nach Version
+    local code
+    code=$(curl -s -o /dev/null -m 3 -w '%{http_code}' "$1/api/" 2>/dev/null || true)
+    [[ $code =~ ^(200|301|302|401|403)$ ]]
+}
+
+finde_paperless_url() {
+    # Setzt PAPERLESS_URL auf eine Adresse, unter der die Paperless-API auf diesem Rechner antwortet
+    [[ -n ${PAPERLESS_URL:-} ]] && { export PAPERLESS_URL; return 0; }
+    local ports=() port host url gesehen=" "
+    # Helper-Script: GRANIAN_PORT im Dienst; sonst PAPERLESS_PORT; dazu die Ports, auf denen der Webserver lauscht
+    port=$(systemctl show paperless-webserver.service -p Environment --value 2>/dev/null | tr ' ' '\n' \
+        | sed -n 's/^\(GRANIAN_PORT\|PAPERLESS_PORT\)=//p' | head -n 1 || true)
+    [[ -n $port ]] && ports+=("$port")
+    port=$(paperless_conf_wert PAPERLESS_PORT)
+    [[ -n $port ]] && ports+=("$port")
+    if [[ $PAPERLESS_ART == docker ]]; then
+        # z. B. "0.0.0.0:8000" -> 8000
+        while read -r port; do ports+=("${port##*:}"); done < <(docker port "$PAPERLESS_CONTAINER" 8000/tcp 2>/dev/null || true)
+    fi
+    if command -v ss >/dev/null; then
+        while read -r port; do ports+=("$port"); done < <(ss -Htlnp 2>/dev/null \
+            | awk '/granian|gunicorn|uvicorn|python|docker-proxy/ {n = split($4, a, ":"); print a[n]}' | sort -un || true)
+    fi
+    ports+=(8000)
+    for port in "${ports[@]}"; do
+        [[ $gesehen == *" $port "* ]] && continue
+        gesehen+="$port "
+        for host in 127.0.0.1 ::1 $(hostname -I 2>/dev/null || true); do
+            if [[ $host == *:* ]]; then url="http://[$host]:$port"; else url="http://$host:$port"; fi
+            if antwortet_paperless "$url"; then
+                PAPERLESS_URL=$url
+                export PAPERLESS_URL
+                ok "Paperless antwortet unter $url"
+                return 0
+            fi
+        done
+    done
+    warn "Paperless antwortet auf diesem Rechner unter keiner der üblichen Adressen (Ports:${gesehen% })."
+    warn "Läuft der Webserver? systemctl status paperless-webserver; offene Ports: ss -tlnp"
+}
+
 cmd_mail() {
     pruefe_root
     erkenne_paperless
@@ -210,7 +252,9 @@ EOF
     if ja "Gleiche Dateien, die schon in Paperless liegen, verwerfen statt doppelt anzulegen?" J; then
         paperless_conf_anpassen PAPERLESS_CONSUMER_DELETE_DUPLICATES=true
     fi
-    "$python" -I "$skript"
+    finde_paperless_url
+    # Fehler meldet das Python-Skript selbst
+    "$python" -I "$skript" || exit $?
 }
 
 # --- Teil 2: Nextcloud-Ordner -> Consume ------------------------------------------------------------------------
@@ -303,18 +347,54 @@ installiere_programm() {
     fi
 }
 
+docker_label() {
+    docker inspect -f "{{index .Config.Labels \"$1\"}}" "$PAPERLESS_CONTAINER" 2>/dev/null || true
+}
+
+docker_umgebung_anpassen() {
+    # Wie paperless_conf_anpassen, aber für Docker Compose: Werte in docker-compose.env, Container neu erstellen
+    local paar fehlt=() dir dienst datei dateien=() f code i
+    for paar in "$@"; do
+        [[ $(docker exec "$PAPERLESS_CONTAINER" printenv "${paar%%=*}" 2>/dev/null || true) == "${paar#*=}" ]] \
+            || fehlt+=("$paar")
+    done
+    [[ ${#fehlt[@]} -eq 0 ]] && return 0
+    dir=$(docker_label com.docker.compose.project.working_dir)
+    dienst=$(docker_label com.docker.compose.service)
+    datei=$dir/docker-compose.env
+    if [[ -z $dir || -z $dienst || ! -f $datei ]]; then
+        warn "Bitte in der Umgebung des Paperless-Containers setzen und ihn neu erstellen${dir:+ (Compose-Verzeichnis $dir)}:"
+        warn "  ${fehlt[*]}"
+        return 0
+    fi
+    [[ -f $datei.vor-eingang ]] || cp -a "$datei" "$datei.vor-eingang"
+    for paar in "${fehlt[@]}"; do
+        setze_zeile "$datei" "${paar%%=*}" "${paar#*=}"
+    done
+    ok "$datei: ${fehlt[*]} (vorher gesichert als docker-compose.env.vor-eingang)"
+    IFS=, read -ra dateien <<<"$(docker_label com.docker.compose.project.config_files)"
+    local compose=(docker compose)
+    docker compose version >/dev/null 2>&1 || compose=(docker-compose)
+    for f in "${dateien[@]}"; do [[ -f $f ]] && compose+=(-f "$f"); done
+    info "Erstelle den Container $PAPERLESS_CONTAINER neu, damit die Einstellung greift"
+    if ! (cd "$dir" && "${compose[@]}" up -d "$dienst"); then
+        warn "Neustart ging nicht; bitte in $dir selbst ausführen: docker compose up -d $dienst"
+        return 0
+    fi
+    # Warten, bis Paperless im Container wieder antwortet (Migrationen und Start dauern etwas)
+    for ((i = 0; i < 60; i++)); do
+        code=$(docker exec "$PAPERLESS_CONTAINER" curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/ 2>/dev/null || true)
+        [[ $code =~ ^(200|301|302|401|403)$ ]] && { ok "Paperless läuft wieder"; return 0; }
+        sleep 3
+    done
+    warn "Paperless antwortet nach 3 Minuten noch nicht; Stand prüfen mit: docker logs $PAPERLESS_CONTAINER"
+}
+
 paperless_conf_anpassen() {
     # paperless_conf_anpassen NAME=WERT ...: abweichende Einstellungen setzen und die betroffenen Dienste neu starten
     local paar name wert geaendert=() einheit datei
     if [[ $PAPERLESS_ART == docker ]]; then
-        for paar in "$@"; do
-            [[ $(docker exec "$PAPERLESS_CONTAINER" printenv "${paar%%=*}" 2>/dev/null || true) == "${paar#*=}" ]] \
-                || geaendert+=("$paar")
-        done
-        if [[ ${#geaendert[@]} -gt 0 ]]; then
-            warn "Bitte in der Paperless-Umgebung (docker-compose.env) setzen und den Container neu starten:"
-            warn "  ${geaendert[*]}"
-        fi
+        docker_umgebung_anpassen "$@"
         return 0
     fi
     datei=$PAPERLESS_DIR/paperless.conf
@@ -323,7 +403,7 @@ paperless_conf_anpassen() {
         name=${paar%%=*} wert=${paar#*=}
         [[ $(paperless_conf_wert "$name") == "$wert" ]] && continue
         [[ -f $datei.vor-eingang ]] || cp -a "$datei" "$datei.vor-eingang"
-        setze_paperless_conf "$name" "$wert"
+        setze_zeile "$datei" "$name" "$wert"
         geaendert+=("$paar")
     done
     [[ ${#geaendert[@]} -eq 0 ]] && return 0
