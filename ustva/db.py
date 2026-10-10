@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS bank_regeln (
     partner TEXT PRIMARY KEY,
     grund TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS einstellungen (
+    schluessel TEXT PRIMARY KEY,
+    wert TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS kurse (
     waehrung TEXT NOT NULL,
     zeitraum TEXT NOT NULL,
@@ -168,6 +172,23 @@ class Datenbank:
             spalten = {z["name"] for z in self._con.execute("PRAGMA table_info(belege)")}
             if "erechnung" not in spalten:  # Datenbanken von vor den E-Rechnungen
                 self._con.execute("ALTER TABLE belege ADD COLUMN erechnung TEXT NOT NULL DEFAULT ''")
+
+    # Einstellungen aus der Oberfläche (überschreiben die Umgebungsvariablen)
+    def einstellungen(self) -> dict[str, str]:
+        with self._lock:
+            return dict(self._con.execute("SELECT schluessel, wert FROM einstellungen").fetchall())
+
+    def einstellung_setzen(self, schluessel: str, wert: str | None) -> None:
+        """Speichert einen Wert; None löscht ihn (dann gilt wieder die Umgebungsvariable)."""
+        with self._lock, self._con:
+            if wert is None:
+                self._con.execute("DELETE FROM einstellungen WHERE schluessel = ?", (schluessel,))
+            else:
+                self._con.execute(
+                    "INSERT INTO einstellungen (schluessel, wert) VALUES (?, ?) "
+                    "ON CONFLICT(schluessel) DO UPDATE SET wert = excluded.wert",
+                    (schluessel, wert),
+                )
 
     # Belege
     def alle_belege(self) -> list[Beleg]:

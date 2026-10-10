@@ -69,6 +69,7 @@ pct enter <CTID>
 nano /etc/finanz-o-mat/finanz-o-mat.env      # Werte in "…", ohne " \ $ `
 systemctl restart finanz-o-mat
 journalctl -u finanz-o-mat -f                # Log
+finanz-o-mat passwort --zuruecksetzen        # Passwort vergessen (in der App gesetztes Passwort löschen)
 ```
 
 Kennzahlen auf der Kommandozeile, z. B. per Cronjob im Container:
@@ -148,6 +149,8 @@ Den Key-Ablauf für den Container in der Admin-Konsole abschalten, sonst muss er
 ## Erreichbarkeit
 
 Die App lauscht im Container auf allen Adressen, also im Heimnetz und im Tailnet. Nicht ins Internet freigeben.
-Die Anmeldung (`APP_BENUTZER`/`APP_PASSWORT`) ist HTTP Basic Auth; im Tailnet ist die Verbindung ohnehin
+Die Anmeldung (`APP_BENUTZER`/`APP_PASSWORT`) ist HTTP Basic Auth. Passwort und Paperless-Token lassen sich auch
+in der App unter „Einstellungen“ ändern; das hat dann Vorrang vor der Env-Datei (Passwort vergessen: siehe
+„Einstellungen und Anmeldung“ im Haupt-README). Die Verbindung ist im Tailnet ohnehin
 verschlüsselt, im Heimnetz ohne HTTPS mitlesbar. Wer HTTPS auch dort will, nimmt `TAILSCALE_SERVE=ja` oder einen
 Reverse Proxy.

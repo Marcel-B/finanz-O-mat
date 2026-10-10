@@ -4,6 +4,8 @@
     python -m ustva bericht                   Kennzahlen für die nächste fällige UStVA
     python -m ustva bericht --einlesen        vorher Verzeichnis/Paperless einlesen
     python -m ustva bericht --zeitraum 2026-09
+    python -m ustva passwort                  Passwort der Weboberfläche neu setzen
+    python -m ustva passwort --zuruecksetzen  wieder APP_BENUTZER/APP_PASSWORT verwenden
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import argparse
 import sys
 from datetime import date
 
+from . import einstellungen
 from .berechnung import berechnen
 from .config import Config
 from .db import Datenbank
@@ -60,6 +63,28 @@ def bericht(args, cfg: Config) -> int:
     return 0 if b.vollstaendig else 2
 
 
+def passwort(args, cfg: Config) -> int:
+    from getpass import getpass
+
+    anmeldung = einstellungen.Anmeldung(cfg, Datenbank(cfg.datenbank))
+    if args.zuruecksetzen:
+        anmeldung.zuruecksetzen()
+        print("Passwort aus der App entfernt; es gelten wieder APP_BENUTZER und APP_PASSWORT.")
+        return 0
+    benutzer = args.benutzer or anmeldung.zugang()[0]
+    neu = getpass(f"Neues Passwort für {benutzer}: ")
+    if neu != getpass("Wiederholen: "):
+        print("Die Passwörter stimmen nicht überein.", file=sys.stderr)
+        return 1
+    try:
+        anmeldung.setzen(benutzer, neu)
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return 1
+    print(f"Passwort für {benutzer} gespeichert. Ein laufender Dienst übernimmt es sofort.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ustva", description="Finanz-O-Mat: UStVA-Kennzahlen berechnen")
     sub = parser.add_subparsers(dest="befehl", required=True)
@@ -69,6 +94,9 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("bericht", help="Kennzahlen ausgeben")
     r.add_argument("--zeitraum", help="JJJJ-MM, Standard: nächste fällige Voranmeldung")
     r.add_argument("--einlesen", action="store_true", help="vorher Belege aus Verzeichnis/Paperless einlesen")
+    p = sub.add_parser("passwort", help="Passwort der Weboberfläche setzen (z. B. wenn vergessen)")
+    p.add_argument("--benutzer", help="Benutzername, Standard: der bisherige")
+    p.add_argument("--zuruecksetzen", action="store_true", help="Passwort aus der App entfernen")
     args = parser.parse_args(argv)
 
     cfg = Config.aus_umgebung()
@@ -79,7 +107,9 @@ def main(argv: list[str] | None = None) -> int:
 
         uvicorn.run(create_app(cfg), host=args.host, port=args.port)
         return 0
-    return bericht(args, cfg)
+    if args.befehl == "passwort":
+        return passwort(args, cfg)
+    return bericht(args, einstellungen.wirksam(cfg, Datenbank(cfg.datenbank)))
 
 
 if __name__ == "__main__":

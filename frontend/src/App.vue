@@ -10,6 +10,7 @@ import Toast from "primevue/toast";
 import { onMounted, ref } from "vue";
 
 import { api, type Status, type Steuerfall } from "./api";
+import EinstellungenAnsicht from "./components/EinstellungenAnsicht.vue";
 import UebersichtAnsicht from "./components/UebersichtAnsicht.vue";
 import UpdateHinweis from "./components/UpdateHinweis.vue";
 import VoranmeldungAnsicht from "./components/VoranmeldungAnsicht.vue";
@@ -18,6 +19,14 @@ const status = ref<Status | null>(null);
 const steuerfaelle = ref<Steuerfall[]>([]);
 const fehler = ref("");
 const tab = ref("voranmeldung");
+
+async function statusLaden() {
+  try {
+    status.value = await api.status();
+  } catch (e) {
+    fehler.value = (e as Error).message;
+  }
+}
 
 onMounted(async () => {
   try {
@@ -57,6 +66,7 @@ onMounted(async () => {
       <TabList>
         <Tab value="voranmeldung"><i class="pi pi-file-check mr-2" />Voranmeldung</Tab>
         <Tab value="uebersicht"><i class="pi pi-chart-bar mr-2" />Übersicht</Tab>
+        <Tab value="einstellungen"><i class="pi pi-cog mr-2" />Einstellungen</Tab>
       </TabList>
       <TabPanels class="!bg-transparent !px-0">
         <TabPanel value="voranmeldung">
@@ -64,6 +74,9 @@ onMounted(async () => {
         </TabPanel>
         <TabPanel value="uebersicht">
           <UebersichtAnsicht v-if="tab === 'uebersicht'" :status="status" />
+        </TabPanel>
+        <TabPanel value="einstellungen">
+          <EinstellungenAnsicht v-if="tab === 'einstellungen'" @geaendert="statusLaden" />
         </TabPanel>
       </TabPanels>
     </Tabs>

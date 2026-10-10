@@ -17,7 +17,30 @@ export interface Status {
   bundesland: string;
   verzeichnis: string | null;
   paperless: string | null;
+  anmeldung: boolean;
 }
+
+export type Herkunft = "app" | "umgebung" | "";
+
+export interface Feld {
+  wert: string;
+  quelle: Herkunft;
+}
+
+export interface Einstellungen {
+  paperless_url: Feld;
+  paperless_token: { gesetzt: boolean; quelle: Herkunft };
+  paperless_tags_ausgang: Feld;
+  paperless_tags_eingang: Feld;
+  eigene_ustid: Feld;
+  bundesland: Feld;
+  bundeslaender: { wert: string; name: string }[];
+  anmeldung: { aktiv: boolean; benutzer: string; quelle: Herkunft; min_laenge: number };
+}
+
+export type EinstellungenEingabe = Partial<Record<
+  "paperless_url" | "paperless_token" | "paperless_tags_ausgang" | "paperless_tags_eingang" | "eigene_ustid" |
+  "bundesland", string>>;
 
 export interface Steuerfall {
   wert: string;
@@ -204,6 +227,13 @@ export const api = {
     anfrage<Kurs[]>("/api/kurse", { method: "PUT", body: JSON.stringify(k) }),
   kursLoeschen: (waehrung: string, zeitraum: string) =>
     anfrage<null>(`/api/kurse/${waehrung}/${zeitraum}`, { method: "DELETE" }),
+  einstellungen: () => anfrage<Einstellungen>("/api/einstellungen"),
+  einstellungenSpeichern: (e: EinstellungenEingabe) =>
+    anfrage<Einstellungen>("/api/einstellungen", { method: "PUT", body: JSON.stringify(e) }),
+  paperlessTesten: (e: { paperless_url?: string; paperless_token?: string }) =>
+    post<{ text: string }>("/api/einstellungen/paperless-test", e),
+  passwortAendern: (p: { aktuell: string; benutzer: string; neu: string }) =>
+    post<Einstellungen["anmeldung"]>("/api/passwort", p),
   uebersicht: (jahr: number) => anfrage<Jahresuebersicht>(`/api/uebersicht/${jahr}`),
   update: () => anfrage<UpdateStatus>("/api/update"),
   updateStarten: () => post<UpdateStatus>("/api/update"),
