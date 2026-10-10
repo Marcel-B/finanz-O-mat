@@ -1,0 +1,74 @@
+<script setup lang="ts">
+import ConfirmDialog from "primevue/confirmdialog";
+import Message from "primevue/message";
+import Tab from "primevue/tab";
+import TabList from "primevue/tablist";
+import TabPanel from "primevue/tabpanel";
+import TabPanels from "primevue/tabpanels";
+import Tabs from "primevue/tabs";
+import Toast from "primevue/toast";
+import { onMounted, ref } from "vue";
+
+import { api, type Status, type Steuerfall } from "./api";
+import UebersichtAnsicht from "./components/UebersichtAnsicht.vue";
+import VoranmeldungAnsicht from "./components/VoranmeldungAnsicht.vue";
+
+const status = ref<Status | null>(null);
+const steuerfaelle = ref<Steuerfall[]>([]);
+const fehler = ref("");
+const tab = ref("voranmeldung");
+
+onMounted(async () => {
+  try {
+    [status.value, steuerfaelle.value] = await Promise.all([api.status(), api.steuerfaelle()]);
+  } catch (e) {
+    fehler.value = `Start fehlgeschlagen: ${(e as Error).message}`;
+  }
+});
+</script>
+
+<template>
+  <Toast />
+  <ConfirmDialog />
+  <header class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 pt-6 pb-4">
+    <div>
+      <h1 class="text-2xl font-semibold">Finanz-O-Mat</h1>
+      <p class="text-muted-color">Umsatzsteuer-Voranmeldung berechnen, abgeben in Mein ELSTER</p>
+    </div>
+    <div
+      v-if="status"
+      class="rounded-lg border border-surface-200 bg-surface-0 px-4 py-2 dark:border-surface-700 dark:bg-surface-900"
+      :class="status.frist.tage_bis <= 3 ? 'border-l-4 border-l-red-500' : 'border-l-4 border-l-primary'"
+    >
+      <div class="text-sm text-muted-color">Nächste Abgabe</div>
+      <div class="font-semibold">UStVA {{ status.frist.zeitraum_text }}</div>
+      <div class="text-sm">
+        bis {{ status.frist.faellig_text }} ·
+        {{ status.frist.tage_bis === 0 ? "heute" : `noch ${status.frist.tage_bis} Tag${status.frist.tage_bis === 1 ? "" : "e"}` }}
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-7xl px-4 pb-8">
+    <Message v-if="fehler" severity="error" class="mb-4">{{ fehler }}</Message>
+    <Tabs v-if="status" v-model:value="tab">
+      <TabList>
+        <Tab value="voranmeldung"><i class="pi pi-file-check mr-2" />Voranmeldung</Tab>
+        <Tab value="uebersicht"><i class="pi pi-chart-bar mr-2" />Übersicht</Tab>
+      </TabList>
+      <TabPanels class="!bg-transparent !px-0">
+        <TabPanel value="voranmeldung">
+          <VoranmeldungAnsicht :status="status" :steuerfaelle="steuerfaelle" />
+        </TabPanel>
+        <TabPanel value="uebersicht">
+          <UebersichtAnsicht v-if="tab === 'uebersicht'" :status="status" />
+        </TabPanel>
+      </TabPanels>
+    </Tabs>
+  </main>
+
+  <footer class="mx-auto max-w-7xl px-4 pb-8 text-sm text-muted-color">
+    Keine Steuerberatung. Die App übermittelt nichts ans Finanzamt; Abgabe und Zahlung erledigst du selbst in Mein
+    ELSTER. Bei Sonderfällen beim Finanzamt oder Steuerberater nachfragen.
+  </footer>
+</template>

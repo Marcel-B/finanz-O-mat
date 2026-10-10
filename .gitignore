@@ -8,3 +8,6 @@ build/
 dist/
 data/
 .env
+node_modules/
+# Build der Vue-Oberfläche (frontend/ -> npm run build)
+ustva/static/

@@ -24,7 +24,7 @@ build-backend = "setuptools.build_meta"
 packages = ["ustva", "ustva.quellen"]
 
 [tool.setuptools.package-data]
-ustva = ["static/*"]
+ustva = ["static/*", "static/assets/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -36,3 +36,7 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Beispiel-CSV-Daten sind lange Zeilen
+"tests/test_bank.py" = ["E501"]

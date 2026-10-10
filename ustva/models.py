@@ -33,6 +33,7 @@ class Beleg:
     quelle: str = "manuell"  # manuell | verzeichnis | paperless
     quelle_ref: str = ""  # Pfad oder Paperless-Dokument-ID
     quelle_link: str = ""
+    erechnung: str = ""  # Format, wenn aus einer E-Rechnung gelesen (z. B. "XRechnung (UBL)")
     pruefen: bool = False  # automatisch erkannt, noch nicht bestätigt
     hinweise: list[str] = field(default_factory=list)
     id: int | None = None
@@ -41,6 +42,16 @@ class Beleg:
         if self.steuer is not None:
             return self.steuer
         return self.netto * self.steuersatz / Decimal(100)
+
+    def zahlbetrag(self) -> Decimal:
+        """Betrag, der laut Rechnung bezahlt wird (in Belegwährung).
+
+        Bei Reverse Charge und steuerfreien Umsätzen steht keine Steuer auf der
+        Rechnung; dann ist der Zahlbetrag der Nettobetrag.
+        """
+        if self.steuerfall in (Steuerfall.INLAND, Steuerfall.VORSTEUER_INLAND):
+            return self.netto + self.steuer_in_belegwaehrung()
+        return self.netto
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -53,3 +64,36 @@ class Beleg:
                 d[key] = value.value
         return d
 
+
+
+@dataclass
+class Umsatz:
+    """Eine Buchung vom Bankkonto. ``betrag`` in EUR, negativ für Ausgaben."""
+
+    buchungsdatum: date
+    betrag: Decimal
+    partner: str = ""
+    iban: str = ""
+    verwendungszweck: str = ""
+    typ: str = ""
+    original_betrag: Decimal | None = None
+    original_waehrung: str = ""
+    konto: str = "N26"
+    pruefsumme: str = ""
+    beleg_id: int | None = None
+    ignoriert: bool = False
+    ignoriert_grund: str = ""
+    id: int | None = None
+
+    @property
+    def zeitraum(self) -> str:
+        return f"{self.buchungsdatum:%Y-%m}"
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        for key, value in d.items():
+            if isinstance(value, Decimal):
+                d[key] = str(value)
+            elif isinstance(value, date):
+                d[key] = value.isoformat()
+        return d

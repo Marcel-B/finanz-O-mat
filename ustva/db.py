@@ -9,7 +9,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from .models import Beleg
+from .models import Beleg, Umsatz
 from .steuerfaelle import Art, Steuerfall
 
 SCHEMA = """
@@ -32,9 +32,30 @@ CREATE TABLE IF NOT EXISTS belege (
     quelle_ref TEXT NOT NULL DEFAULT '',
     quelle_link TEXT NOT NULL DEFAULT '',
     pruefen INTEGER NOT NULL DEFAULT 0,
-    hinweise TEXT NOT NULL DEFAULT '[]'
+    hinweise TEXT NOT NULL DEFAULT '[]',
+    erechnung TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS belege_quelle ON belege(quelle, quelle_ref) WHERE quelle_ref != '';
+CREATE TABLE IF NOT EXISTS umsaetze (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    konto TEXT NOT NULL,
+    buchungsdatum TEXT NOT NULL,
+    betrag TEXT NOT NULL,
+    partner TEXT NOT NULL DEFAULT '',
+    iban TEXT NOT NULL DEFAULT '',
+    verwendungszweck TEXT NOT NULL DEFAULT '',
+    typ TEXT NOT NULL DEFAULT '',
+    original_betrag TEXT,
+    original_waehrung TEXT NOT NULL DEFAULT '',
+    pruefsumme TEXT NOT NULL UNIQUE,
+    beleg_id INTEGER,
+    ignoriert INTEGER NOT NULL DEFAULT 0,
+    ignoriert_grund TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS bank_regeln (
+    partner TEXT PRIMARY KEY,
+    grund TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS kurse (
     waehrung TEXT NOT NULL,
     zeitraum TEXT NOT NULL,
@@ -47,7 +68,7 @@ CREATE TABLE IF NOT EXISTS kurse (
 FELDER = [
     "art", "steuerfall", "rechnungsdatum", "zahlungsdatum", "netto", "steuersatz", "steuer", "waehrung",
     "kurs", "partner", "partner_ustid", "rechnungsnummer", "beschreibung", "quelle", "quelle_ref",
-    "quelle_link", "pruefen", "hinweise",
+    "quelle_link", "pruefen", "hinweise", "erechnung",
 ]
 
 
@@ -80,6 +101,7 @@ def _zeile_zu_beleg(z: sqlite3.Row) -> Beleg:
         quelle_link=z["quelle_link"],
         pruefen=bool(z["pruefen"]),
         hinweise=json.loads(z["hinweise"]),
+        erechnung=z["erechnung"],
     )
 
 
@@ -97,7 +119,41 @@ def _beleg_zu_werten(b: Beleg) -> list:
         b.art.value, b.steuerfall.value, s(b.rechnungsdatum), s(b.zahlungsdatum), s(b.netto), s(b.steuersatz),
         s(b.steuer), b.waehrung.upper(), s(b.kurs), b.partner, b.partner_ustid, b.rechnungsnummer,
         b.beschreibung, b.quelle, b.quelle_ref, b.quelle_link, int(b.pruefen), json.dumps(b.hinweise),
+        b.erechnung,
     ]
+
+
+UMSATZ_FELDER = [
+    "konto", "buchungsdatum", "betrag", "partner", "iban", "verwendungszweck", "typ", "original_betrag",
+    "original_waehrung", "pruefsumme", "beleg_id", "ignoriert", "ignoriert_grund",
+]
+
+
+def _umsatz_zu_werten(u: Umsatz) -> list:
+    return [
+        u.konto, u.buchungsdatum.isoformat(), str(u.betrag), u.partner, u.iban, u.verwendungszweck, u.typ,
+        None if u.original_betrag is None else str(u.original_betrag), u.original_waehrung, u.pruefsumme,
+        u.beleg_id, int(u.ignoriert), u.ignoriert_grund,
+    ]
+
+
+def _zeile_zu_umsatz(z: sqlite3.Row) -> Umsatz:
+    return Umsatz(
+        id=z["id"],
+        konto=z["konto"],
+        buchungsdatum=date.fromisoformat(z["buchungsdatum"]),
+        betrag=Decimal(z["betrag"]),
+        partner=z["partner"],
+        iban=z["iban"],
+        verwendungszweck=z["verwendungszweck"],
+        typ=z["typ"],
+        original_betrag=_dec(z["original_betrag"]),
+        original_waehrung=z["original_waehrung"],
+        pruefsumme=z["pruefsumme"],
+        beleg_id=z["beleg_id"],
+        ignoriert=bool(z["ignoriert"]),
+        ignoriert_grund=z["ignoriert_grund"],
+    )
 
 
 class Datenbank:
@@ -109,6 +165,9 @@ class Datenbank:
         self._lock = threading.Lock()
         with self._lock:
             self._con.executescript(SCHEMA)
+            spalten = {z["name"] for z in self._con.execute("PRAGMA table_info(belege)")}
+            if "erechnung" not in spalten:  # Datenbanken von vor den E-Rechnungen
+                self._con.execute("ALTER TABLE belege ADD COLUMN erechnung TEXT NOT NULL DEFAULT ''")
 
     # Belege
     def alle_belege(self) -> list[Beleg]:
@@ -146,6 +205,48 @@ class Datenbank:
     def beleg_loeschen(self, beleg_id: int) -> None:
         with self._lock, self._con:
             self._con.execute("DELETE FROM belege WHERE id = ?", (beleg_id,))
+            self._con.execute("UPDATE umsaetze SET beleg_id = NULL WHERE beleg_id = ?", (beleg_id,))
+
+    # Kontoumsätze
+    def umsatz_anlegen(self, u: Umsatz) -> bool:
+        """Legt den Umsatz an; False, wenn er (gleiche Prüfsumme) schon vorhanden ist."""
+        with self._lock, self._con:
+            cur = self._con.execute(
+                f"INSERT OR IGNORE INTO umsaetze ({', '.join(UMSATZ_FELDER)}) "
+                f"VALUES ({', '.join('?' for _ in UMSATZ_FELDER)})",
+                _umsatz_zu_werten(u),
+            )
+        if cur.rowcount:
+            u.id = cur.lastrowid
+        return bool(cur.rowcount)
+
+    def alle_umsaetze(self) -> list[Umsatz]:
+        with self._lock:
+            zeilen = self._con.execute("SELECT * FROM umsaetze ORDER BY buchungsdatum, id").fetchall()
+        return [_zeile_zu_umsatz(z) for z in zeilen]
+
+    def umsatz(self, umsatz_id: int) -> Umsatz | None:
+        with self._lock:
+            z = self._con.execute("SELECT * FROM umsaetze WHERE id = ?", (umsatz_id,)).fetchone()
+        return _zeile_zu_umsatz(z) if z else None
+
+    def umsatz_aktualisieren(self, u: Umsatz) -> Umsatz:
+        zuweisung = ", ".join(f"{f} = ?" for f in UMSATZ_FELDER)
+        with self._lock, self._con:
+            self._con.execute(f"UPDATE umsaetze SET {zuweisung} WHERE id = ?", [*_umsatz_zu_werten(u), u.id])
+        return u
+
+    def bank_regeln(self) -> dict[str, str]:
+        with self._lock:
+            return {z["partner"]: z["grund"] for z in self._con.execute("SELECT * FROM bank_regeln")}
+
+    def bank_regel_speichern(self, partner: str, grund: str) -> None:
+        with self._lock, self._con:
+            self._con.execute(
+                "INSERT INTO bank_regeln (partner, grund) VALUES (?, ?) "
+                "ON CONFLICT(partner) DO UPDATE SET grund = excluded.grund",
+                (partner.strip().lower(), grund),
+            )
 
     # Kurse
     def kurs_lesen(self, waehrung: str, zeitraum: str) -> tuple[Decimal, str] | None:

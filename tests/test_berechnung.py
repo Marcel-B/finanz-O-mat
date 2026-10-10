@@ -102,8 +102,10 @@ def test_ist_versteuerung_nach_zahlungseingang(umrechner):
     ist = berechnen(belege, 2026, 9, umrechner, "ist")
     assert ist.wert("81") == D("1000")
     assert ist.wert("66") == D("19.00")
+    assert any("1 Ausgangsrechnung(en) ohne Zahlungsdatum" in h.text for h in ist.hinweise)
     soll = berechnen(belege, 2026, 9, umrechner, "soll")
     assert soll.wert("81") == D("500")
+    assert not any("ohne Zahlungsdatum" in h.text for h in soll.hinweise)
 
 
 def test_ungepruefte_belege_werden_gemeldet(umrechner):
