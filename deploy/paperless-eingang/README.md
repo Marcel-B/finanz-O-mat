@@ -102,7 +102,8 @@ Fehler beim Mail-Abruf zeigt Paperless unter „E-Mail“ beim Konto und unter E
 erscheinen neue Belege ohnehin als ungeprüft, solche Ausreißer fallen dort auf.
 
 **Docker:** Statt des Helper-Script-LXC geht auch ein Docker-Host. Das Skript nimmt den laufenden
-`paperless-ngx`-Container und dessen unter `/usr/src/paperless/consume` eingebundenen Ordner. Unterordner als Tags
-und das Verwerfen gleicher Dateien dann in der `docker-compose.env` einschalten
-(`PAPERLESS_CONSUMER_RECURSIVE=true`, `PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS=true`,
-`PAPERLESS_CONSUMER_DELETE_DUPLICATES=true`); das Skript sagt, was noch fehlt.
+`paperless-ngx`-Container und dessen unter `/usr/src/paperless/consume` eingebundenen Ordner. Die Einstellungen
+(`PAPERLESS_CONSUMER_RECURSIVE`, `PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS`, `PAPERLESS_CONSUMER_DELETE_DUPLICATES`)
+trägt es in die `docker-compose.env` im Compose-Verzeichnis des Containers ein (vorher gesichert als
+`docker-compose.env.vor-eingang`) und erstellt den Container mit `docker compose up -d` neu. Gibt es keine
+`docker-compose.env`, nennt es die Werte, die noch fehlen. Die Paperless-Adresse findet es über `docker port`.
