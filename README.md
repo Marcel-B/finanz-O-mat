@@ -9,8 +9,10 @@ Steuerberater nachfragen.
 
 ## Was die App kann
 
-- Ausgangs- und Eingangsrechnungen aus einem Verzeichnis (PDF mit Textebene, .txt) oder aus Paperless-ngx einlesen.
-  Beträge, Datum, Steuersatz, Währung, USt-IdNr. und Steuerfall werden vorgeschlagen und müssen einmal bestätigt werden.
+- Ausgangs- und Eingangsrechnungen aus einem Verzeichnis (PDF mit Textebene, .txt, .xml) oder aus Paperless-ngx
+  einlesen. E-Rechnungen (ZUGFeRD 2.x / Factur-X, XRechnung in CII oder UBL) werden exakt aus den strukturierten
+  Daten gelesen. Bei anderen Rechnungen werden Beträge, Datum, Steuersatz, Währung, USt-IdNr. und Steuerfall aus dem
+  Text geschätzt und müssen einmal bestätigt werden.
 - Belege manuell anlegen und korrigieren.
 - Kennzahlen berechnen, auch mit Auslandsbezug:
 
@@ -99,6 +101,23 @@ Erkannt werden auch `ausgangsrechnungen`/`einnahmen` und `eingangsrechnungen`/`a
 (anpassbar über `ORDNER_AUSGANG` und `ORDNER_EINGANG`). Gescannte PDFs ohne Textebene lassen sich nicht auslesen;
 dafür Paperless nutzen oder die Werte manuell eintragen.
 
+### E-Rechnungen
+
+Seit 2025 müssen Unternehmen in Deutschland E-Rechnungen empfangen können. Die App liest sie strukturiert aus:
+
+- ZUGFeRD 2.x und Factur-X: PDF mit eingebetteter XML (`factur-x.xml`, `zugferd-invoice.xml`, `xrechnung.xml`),
+- XRechnung und andere Rechnungen nach EN 16931 als reine `.xml`-Datei, in CII- oder UBL-Syntax.
+
+Rechnungsnummer, Datum, Partner, USt-IdNr., Währung und die Beträge je Steuersatz kommen direkt aus der XML.
+Eine Rechnung mit 19 % und 7 % ergibt zwei Belege. Den Steuerfall leitet die App aus der Steuerkategorie ab
+(`S` Inland, `AE` Reverse Charge, `K` innergemeinschaftlich, `G` Ausfuhr) und aus dem Land des Partners.
+Gutschriften werden negativ übernommen. Solche Belege sind sofort geprüft, außer es bleibt etwas offen, z. B. der
+angenommene Steuersatz bei Reverse Charge, ausländische Umsatzsteuer oder das Profil Minimum ohne Steueraufschlüsselung.
+In der Belegliste tragen sie das Zeichen „E-Rechnung“. Ältere ZUGFeRD-1.0-Rechnungen werden wie normale PDFs gelesen.
+Ist `EIGENE_USTID` gesetzt, warnt die App, wenn eine Rechnung im falschen Ordner liegt.
+
+### Zusatzangaben
+
 Optional kann neben einer Rechnung eine JSON-Datei mit festen Werten liegen, die die Erkennung überschreiben,
 z. B. `openai-2026-09.pdf.json`:
 
@@ -130,6 +149,8 @@ werden automatisch übergangen (`BANK_IGNORIEREN`).
    `Netto` oder `Brutto` (Geldfeld, Währung wird übernommen), `Umsatzsteuer`, `Steuersatz`, `Zahlungsdatum`.
 
 Eingelesen werden Dokumente, deren Datum im gewählten Monat oder in den beiden Vormonaten liegt.
+Bei PDF-Dokumenten lädt die App die Originaldatei und liest eine eingebettete ZUGFeRD-/Factur-X-Rechnung aus;
+deren Angaben haben dann Vorrang vor Feldern und OCR-Text (Korrespondent und Zahlungsdatum aus Paperless bleiben).
 
 ## Annahmen und Grenzen
 

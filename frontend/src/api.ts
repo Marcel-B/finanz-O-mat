@@ -59,6 +59,7 @@ export interface Beleg {
   beschreibung: string;
   quelle: string;
   quelle_link: string;
+  erechnung: string;
   pruefen: boolean;
   hinweise: string[];
   netto_eur?: string | null;
@@ -67,7 +68,7 @@ export interface Beleg {
   fehler?: string;
 }
 
-export type BelegEingabe = Omit<Beleg, "id" | "quelle" | "quelle_link" | "hinweise" | "netto_eur" | "steuer_eur" |
+export type BelegEingabe = Omit<Beleg, "id" | "quelle" | "quelle_link" | "erechnung" | "hinweise" | "netto_eur" | "steuer_eur" |
   "kurs_verwendet" | "fehler">;
 
 export interface BelegKurz {
