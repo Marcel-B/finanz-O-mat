@@ -100,11 +100,24 @@ def test_startseite(client):
     assert "Finanz-O-Mat" in r.text
 
 
-def test_anmeldung(db, umrechner):
-    cfg = Config(app_benutzer="marcel", app_passwort="geheim")
-    c = TestClient(create_app(cfg, db, umrechner))
-    assert c.get("/api/status").status_code == 401
-    assert c.get("/api/status", auth=("marcel", "geheim")).status_code == 200
+def test_sicherheits_koepfe(client):
+    seite = client.get("/")
+    assert "frame-ancestors 'self'" in seite.headers["content-security-policy"]
+    assert seite.headers["x-frame-options"] == "SAMEORIGIN"
+    api = client.get("/api/status")
+    assert api.headers["cache-control"] == "no-store"
+    assert api.headers["x-content-type-options"] == "nosniff"
+
+
+def test_fremde_seite_darf_nichts_aendern(client):
+    beleg = {"art": "ausgang", "steuerfall": "inland", "rechnungsdatum": "2026-09-15", "netto": "1",
+             "steuersatz": "19"}
+    r = client.post("/api/belege", json=beleg, headers={"Sec-Fetch-Site": "cross-site"})
+    assert r.status_code == 403
+    assert client.post("/api/belege", json=beleg, headers={"Sec-Fetch-Site": "same-site"}).status_code == 403
+    assert client.post("/api/belege", json=beleg, headers={"Sec-Fetch-Site": "same-origin"}).status_code == 201
+    # Lesen und Links von außen bleiben möglich
+    assert client.get("/api/status", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 200
 
 
 def test_uebersicht_api(client):

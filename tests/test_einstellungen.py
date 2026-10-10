@@ -1,4 +1,3 @@
-import base64
 import secrets
 from datetime import date
 
@@ -20,8 +19,16 @@ def _mit_zugang(benutzer: str, kennwort: str) -> Config:
     return Config(app_benutzer=benutzer, app_passwort=kennwort)
 
 
-def _kopf(benutzer: str, passwort: str) -> dict:
-    return {"Authorization": "Basic " + base64.b64encode(f"{benutzer}:{passwort}".encode()).decode()}
+def _angemeldet(app, benutzer: str, passwort: str) -> TestClient:
+    """Eigener Browser (eigene Cookies), angemeldet; prüft, dass die Anmeldung klappt."""
+    c = TestClient(app)
+    r = c.post("/api/anmelden", json={"benutzer": benutzer, "passwort": passwort})
+    assert r.status_code == 200, r.text
+    return c
+
+
+def _anmelden_klappt(app, benutzer: str, passwort: str) -> bool:
+    return TestClient(app).post("/api/anmelden", json={"benutzer": benutzer, "passwort": passwort}).status_code == 200
 
 
 @pytest.fixture(autouse=True)
@@ -84,29 +91,37 @@ def test_paperless_test(db, umrechner, monkeypatch):
 
 def test_passwort_aendern_mit_umgebungs_zugang(db, umrechner):
     cfg = _mit_zugang("admin", PW_ENV)
-    c = TestClient(create_app(cfg, db, umrechner, heute=date(2026, 10, 10)))
-    assert c.get("/api/status").status_code == 401
-    alt = _kopf("admin", PW_ENV)
-    assert c.get("/api/status", headers=alt).json()["anmeldung"] is True
+    app = create_app(cfg, db, umrechner, heute=date(2026, 10, 10))
+    assert TestClient(app).get("/api/status").status_code == 401
+    c = _angemeldet(app, "admin", PW_ENV)
+    anderer = _angemeldet(app, "admin", PW_ENV)
+    assert c.get("/api/status").json()["anmeldung"] is True
 
-    r = c.post("/api/passwort", headers=alt, json={"aktuell": "falsch", "neu": PW_NEU})
+    r = c.post("/api/passwort", json={"aktuell": "falsch", "neu": PW_NEU})
     assert r.status_code == 403
-    r = c.post("/api/passwort", headers=alt, json={"aktuell": PW_ENV, "neu": "kurz"})
+    r = c.post("/api/passwort", json={"aktuell": PW_ENV, "neu": "kurz"})
     assert r.status_code == 400
-    r = c.post("/api/passwort", headers=alt, json={"aktuell": PW_ENV, "neu": PW_NEU})
+    r = c.post("/api/passwort", json={"aktuell": PW_ENV, "neu": PW_NEU})
     assert r.json()["quelle"] == "app"
 
-    assert c.get("/api/status", headers=alt).status_code == 401
-    assert c.get("/api/status", headers=_kopf("admin", PW_NEU)).status_code == 200
+    # dieser Browser bleibt angemeldet, alle anderen Sitzungen sind beendet
+    assert c.get("/api/status").status_code == 200
+    assert anderer.get("/api/status").status_code == 401
+    assert not _anmelden_klappt(app, "admin", PW_ENV)
+    assert _anmelden_klappt(app, "admin", PW_NEU)
     assert PW_NEU not in str(db.einstellungen())
 
 
 def test_passwort_ohne_bisherige_anmeldung(db, umrechner):
-    c = TestClient(create_app(Config(), db, umrechner, heute=date(2026, 10, 10)))
+    app = create_app(Config(), db, umrechner, heute=date(2026, 10, 10))
+    c = TestClient(app)
     assert c.get("/api/status").json()["anmeldung"] is False
+    assert c.get("/api/anmeldung").json() == {"aktiv": False, "angemeldet": True}
     c.post("/api/passwort", json={"benutzer": "marcel", "neu": PW_ERST})
-    assert c.get("/api/status").status_code == 401
-    assert c.get("/api/status", headers=_kopf("marcel", PW_ERST)).status_code == 200
+    # wer das erste Passwort setzt, bleibt angemeldet; ein anderer Browser nicht
+    assert c.get("/api/status").status_code == 200
+    assert TestClient(app).get("/api/status").status_code == 401
+    assert _anmelden_klappt(app, "marcel", PW_ERST)
 
 
 def test_kommandozeile_setzt_und_entfernt_passwort(tmp_path, monkeypatch, umrechner):
@@ -116,14 +131,16 @@ def test_kommandozeile_setzt_und_entfernt_passwort(tmp_path, monkeypatch, umrech
     monkeypatch.setenv("APP_PASSWORT", PW_ENV)
     monkeypatch.setattr("getpass.getpass", lambda prompt="": PW_CLI)
     db = Datenbank(pfad)
-    c = TestClient(create_app(Config.aus_umgebung(), db, umrechner, heute=date(2026, 10, 10)))
-    env = _kopf("admin", PW_ENV)
-    assert c.get("/api/status", headers=env).status_code == 200
+    app = create_app(Config.aus_umgebung(), db, umrechner, heute=date(2026, 10, 10))
+    c = _angemeldet(app, "admin", PW_ENV)
+    assert c.get("/api/status").status_code == 200
 
     assert main(["passwort"]) == 0
-    # der laufende Dienst merkt die Änderung ohne Neustart
-    assert c.get("/api/status", headers=env).status_code == 401
-    assert c.get("/api/status", headers=_kopf("admin", PW_CLI)).status_code == 200
+    # der laufende Dienst merkt die Änderung ohne Neustart, bestehende Sitzungen enden
+    assert c.get("/api/status").status_code == 401
+    assert not _anmelden_klappt(app, "admin", PW_ENV)
+    c = _angemeldet(app, "admin", PW_CLI)
 
     assert main(["passwort", "--zuruecksetzen"]) == 0
-    assert c.get("/api/status", headers=env).status_code == 200
+    assert c.get("/api/status").status_code == 401
+    assert _anmelden_klappt(app, "admin", PW_ENV)

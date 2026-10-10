@@ -211,8 +211,8 @@ Den Key-Ablauf für den Container in der Admin-Konsole abschalten, sonst muss er
 ## Erreichbarkeit
 
 Die App lauscht im Container auf allen Adressen, also im Heimnetz und im Tailnet. Nicht ins Internet freigeben.
-Die Anmeldung (`APP_BENUTZER`/`APP_PASSWORT`) ist HTTP Basic Auth. Passwort und Paperless-Token lassen sich auch
-in der App unter „Einstellungen“ ändern; das hat dann Vorrang vor der Env-Datei (Passwort vergessen: siehe
-„Einstellungen und Anmeldung“ im Haupt-README). Die Verbindung ist im Tailnet ohnehin
-verschlüsselt, im Heimnetz ohne HTTPS mitlesbar. Wer HTTPS auch dort will, nimmt `TAILSCALE_SERVE=ja` oder einen
-Reverse Proxy.
+Die Anmeldung (`APP_BENUTZER`/`APP_PASSWORT`) läuft über ein Formular mit Sitzungs-Cookie, Sperre nach
+Fehlversuchen und Ablauf. Passwort und Paperless-Token lassen sich auch in der App unter „Einstellungen“ ändern; das
+hat dann Vorrang vor der Env-Datei (Details und Passwort vergessen: „Einstellungen und Anmeldung“ im Haupt-README).
+Die Verbindung ist im Tailnet ohnehin verschlüsselt, im Heimnetz ohne HTTPS mitlesbar. Wer HTTPS auch dort will,
+nimmt `TAILSCALE_SERVE=ja` oder einen Reverse Proxy.

@@ -132,10 +132,12 @@ async function passwortSpeichern() {
     return;
   }
   try {
-    await api.passwortAendern({ aktuell: zugang.aktuell, benutzer: zugang.benutzer, neu: zugang.neu });
+    const anmeldung = await api.passwortAendern({ aktuell: zugang.aktuell, benutzer: zugang.benutzer, neu: zugang.neu });
+    // Dieser Browser bleibt angemeldet, andere Geräte müssen sich neu anmelden
+    if (daten.value) daten.value.anmeldung = anmeldung;
+    Object.assign(zugang, { aktuell: "", neu: "", wiederholung: "" });
     passwortGeaendert.value = true;
-    // Der Browser hat noch die alten Zugangsdaten; nach dem Neuladen fragt er nach den neuen.
-    setTimeout(() => window.location.reload(), 2500);
+    emit("geaendert");
   } catch (e) {
     passwortFehler.value = (e as Error).message;
   }
@@ -216,17 +218,17 @@ async function passwortSpeichern() {
     </KarteBox>
 
     <KarteBox titel="Anmeldung">
-      <Message v-if="passwortGeaendert" severity="success">
-        Passwort geändert. Die Seite lädt gleich neu, dann fragt der Browser nach der neuen Anmeldung.
+      <Message v-if="passwortGeaendert" severity="success" class="mb-3">
+        Passwort geändert. Andere Geräte und Browser sind damit abgemeldet.
       </Message>
-      <form v-else class="flex flex-col gap-3" @submit.prevent="passwortSpeichern">
+      <form class="flex flex-col gap-3" @submit.prevent="passwortSpeichern">
         <p class="text-sm text-muted-color">
           <template v-if="daten!.anmeldung.aktiv">
             Angemeldet als <strong>{{ daten!.anmeldung.benutzer }}</strong>,
             Passwort {{ herkunftText[daten!.anmeldung.quelle] }}.
           </template>
           <template v-else>
-            Die App ist noch ohne Passwort erreichbar. Mit einem Passwort fragt der Browser künftig nach der Anmeldung.
+            Die App ist noch ohne Passwort erreichbar. Mit einem Passwort fragt sie künftig nach der Anmeldung.
           </template>
         </p>
         <label class="flex flex-col gap-1 text-sm">
@@ -248,8 +250,8 @@ async function passwortSpeichern() {
           </label>
         </div>
         <span class="text-xs text-muted-color">
-          Mindestens {{ minLaenge }} Zeichen. Gespeichert wird nur ein Hash. Passwort vergessen: im Container
-          <code>python -m ustva passwort</code> ausführen.
+          Mindestens {{ minLaenge }} Zeichen. Gespeichert wird nur ein Hash. Nach 5 Fehlversuchen ist die Anmeldung
+          15 Minuten gesperrt. Passwort vergessen: im Container <code>python -m ustva passwort</code> ausführen.
         </span>
         <Message v-if="passwortFehler" severity="error" size="small">{{ passwortFehler }}</Message>
         <div>
