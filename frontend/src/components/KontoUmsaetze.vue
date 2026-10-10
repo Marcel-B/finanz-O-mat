@@ -118,6 +118,15 @@ const rueckgaengig = (u: Umsatz) => aktion(() => api.ignorieren(u.id, { ignorier
             <i class="pi pi-check-circle mr-1 text-green-600 dark:text-green-400" />
             {{ data.beleg.partner || data.beleg.beschreibung || "Beleg" }}
             <span v-if="data.beleg.rechnungsnummer" class="text-muted-color">· {{ data.beleg.rechnungsnummer }}</span>
+            <div
+              v-if="data.kosten_geldverkehr"
+              class="text-xs text-muted-color"
+              v-tooltip.top="'Kursaufschlag oder Gebühren der Bank. Spielt für die Umsatzsteuer keine Rolle.'"
+            >
+              {{ Number(data.kosten_geldverkehr) > 0
+                ? `${betrag(data.kosten_geldverkehr)} € Kosten Geldverkehr`
+                : `${betrag(Math.abs(Number(data.kosten_geldverkehr)))} € Kursgewinn` }}
+            </div>
           </span>
           <span v-else-if="data.ignoriert" class="text-sm text-muted-color">
             kein Beleg nötig{{ data.ignoriert_grund ? ` (${data.ignoriert_grund})` : "" }}

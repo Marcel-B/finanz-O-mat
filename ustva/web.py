@@ -175,10 +175,16 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         if text := bank.hinweis_fehlende_belege(umsaetze, zr):
             daten["hinweise"].insert(0, {"stufe": "warnung", "text": text})
         belege_nach_id = {b.id: b for b in belege}
-        daten["umsaetze"] = [
-            {**u.to_dict(), "beleg": _beleg_kurz(belege_nach_id.get(u.beleg_id))}
-            for u in umsaetze if u.zeitraum == zr
-        ]
+        euro = bank.euro_schaetzer(umrechner)
+        daten["umsaetze"] = []
+        for u in umsaetze:
+            if u.zeitraum != zr:
+                continue
+            b = belege_nach_id.get(u.beleg_id)
+            # Kursaufschlag und Gebühren der Bank bei Fremdwährung; für die Umsatzsteuer ohne Bedeutung.
+            kosten = bank.kosten_geldverkehr(u, b, euro) if b and b.waehrung.upper() != "EUR" else None
+            daten["umsaetze"].append({**u.to_dict(), "beleg": _beleg_kurz(b),
+                                      "kosten_geldverkehr": str(kosten) if kosten else None})
         return daten
 
     def _beleg_kurz(b: Beleg | None) -> dict | None:
@@ -207,11 +213,11 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         roh = await request.body()
         if len(roh) > 10_000_000:
             raise HTTPException(413, "Datei zu groß")
-        return bank.importieren(db, aktuell(), roh.decode("utf-8-sig", errors="replace")).to_dict()
+        return bank.importieren(db, aktuell(), roh.decode("utf-8-sig", errors="replace"), umrechner).to_dict()
 
     @app.post("/api/abgleich")
     def abgleich():
-        return {"zugeordnet": bank.abgleich_ausfuehren(db)}
+        return {"zugeordnet": bank.abgleich_ausfuehren(db, umrechner)}
 
     def _umsatz(umsatz_id: int):
         u = db.umsatz(umsatz_id)
@@ -223,7 +229,8 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     def umsatz_kandidaten(umsatz_id: int):
         u = _umsatz(umsatz_id)
         vergeben = {x.beleg_id for x in db.alle_umsaetze() if x.beleg_id is not None and x.id != u.id}
-        return [_beleg_kurz(b) for b in bank.kandidaten(u, db.alle_belege(), vergeben, nur_passende=False)[:30]]
+        return [_beleg_kurz(b) for b in bank.kandidaten(u, db.alle_belege(), vergeben, nur_passende=False,
+                                                         euro=bank.euro_schaetzer(umrechner))[:30]]
 
     @app.post("/api/umsaetze/{umsatz_id}/zuordnen")
     def umsatz_zuordnen(umsatz_id: int, eingabe: ZuordnungEingabe):
@@ -271,7 +278,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     def belege_neu_einlesen(anfrage: NeuEinlesenAnfrage):
         ergebnis = neu_einlesen.neu_einlesen(db, aktuell(), anfrage.ids)
         if ergebnis.aktualisiert or ergebnis.neu:
-            bank.abgleich_ausfuehren(db)  # geänderte Beträge können jetzt zu Umsätzen passen
+            bank.abgleich_ausfuehren(db, umrechner)  # geänderte Beträge können jetzt zu Umsätzen passen
         return ergebnis.to_dict()
 
     @app.post("/api/belege/{beleg_id}/geprueft")
@@ -317,7 +324,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
                 ergebnisse["konto"] = konto.to_dict()
         if ergebnisse:
             # Neue Belege können zu bereits eingelesenen Umsätzen passen
-            zugeordnet = bank.abgleich_ausfuehren(db)
+            zugeordnet = bank.abgleich_ausfuehren(db, umrechner)
             if zugeordnet:
                 ergebnisse.setdefault("konto", bank.BankImport().to_dict())["zugeordnet"] += zugeordnet
         if not ergebnisse:

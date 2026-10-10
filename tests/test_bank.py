@@ -140,3 +140,48 @@ def test_web_ablauf(client, db):
     # Beleg löschen löst die Zuordnung
     client.delete(f"/api/belege/{beleg_id}")
     assert db.umsatz(hosting["id"]).beleg_id is None
+
+
+# Kartenzahlung in USD, im Export nur der Euro-Betrag (Kursaufschlag der Bank)
+N26_CURSOR = N26_NEU.splitlines()[0] + """
+"2026-09-10","2026-09-10","CURSOR, AI POWERED IDE","","Presentment","","Hauptkonto","-18.00","","",""
+"""
+
+
+def _cursor_beleg(**felder) -> Beleg:
+    werte = {"art": Art.EINGANG, "steuerfall": Steuerfall.AUSLAND_13B, "rechnungsdatum": date(2026, 9, 9),
+             "netto": D("20.00"), "waehrung": "USD", "kurs": D("1.1513"), "partner": "Cursor"}
+    return Beleg(**{**werte, **felder})
+
+
+def test_fremdwaehrung_mit_kursdifferenz_wird_zugeordnet(client, db):
+    beleg = db.beleg_anlegen(_cursor_beleg())
+    r = client.post("/api/import/bank", content=N26_CURSOR.encode(), headers={"Content-Type": "text/csv"}).json()
+    assert r["zugeordnet"] == 1
+
+    [u] = client.get("/api/bericht/2026-09").json()["umsaetze"]
+    assert u["beleg"]["id"] == beleg.id
+    assert u["kosten_geldverkehr"] == "0.63"  # 18,00 € abgebucht, Beleg 20 USD / 1,1513 = 17,37 €
+
+
+@pytest.mark.parametrize("felder", [
+    {"partner": "Anderer Anbieter"},  # Betrag ungefähr, Name passt nicht
+    {"netto": D("25.00")},  # Name passt, Betrag zu weit weg
+])
+def test_fremdwaehrung_ohne_sicheren_treffer_bleibt_offen(db, umrechner, felder):
+    b = _cursor_beleg(**felder)
+    b.id = 1
+    [u] = bank.n26_csv_lesen(N26_CURSOR)
+    euro = bank.euro_schaetzer(umrechner)
+    assert bank.kandidaten(u, [b], set(), euro=euro) == []
+    # zur Auswahl steht der Beleg trotzdem
+    assert bank.kandidaten(u, [b], set(), nur_passende=False, euro=euro) == [b]
+
+
+def test_fremdwaehrung_ohne_belegkurs_nutzt_monatskurs(umrechner):
+    b = _cursor_beleg(kurs=None)  # 20 USD / 1,16 = 17,24 €
+    [u] = bank.n26_csv_lesen(N26_CURSOR)
+    euro = bank.euro_schaetzer(umrechner)
+    assert bank.passt_betrag(u, b, euro) == "ungefaehr"
+    assert bank.kosten_geldverkehr(u, b, euro) == D("0.76")
+    assert bank.passt_betrag(u, b) is None  # ohne Kurs kein Vergleich
