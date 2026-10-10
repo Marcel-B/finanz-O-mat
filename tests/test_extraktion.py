@@ -132,3 +132,18 @@ def test_eu_anbieter_mit_deutscher_ustid_bleibt_inland():
     e = erkennen(text, Art.EINGANG, "DE123456789")
     assert e.steuerfall == Steuerfall.VORSTEUER_INLAND
     assert not any("§ 13b" in h for h in e.hinweise)
+
+
+@pytest.mark.parametrize("eigene", ["DE123456789", ""])
+@pytest.mark.parametrize("rc_text", ["", "VAT reverse charged\n"])
+def test_eu_anbieter_ohne_steuer_mit_eigener_ustid_ist_reverse_charge(eigene, rc_text):
+    # So kommen künftige Rechnungen, wenn die USt-IdNr. beim Anbieter hinterlegt ist
+    text = (beispiele.JETBRAINS.replace("Germany\n", "Germany\nVAT ID: DE123456789\n")
+            .replace("VAT Rate: 19.00%", "VAT Rate: 0.00%").replace("VAT Amount: 9.69 EUR", "VAT Amount: 0.00 EUR")
+            .replace("60.69", "51.00") + rc_text)
+    e = erkennen(text, Art.EINGANG, eigene)
+    assert e.steuerfall == Steuerfall.EU_LEISTUNG_13B
+    assert e.partner_ustid == "CZ26502275"
+    b = beleg_aus_erkennung(e, Art.EINGANG)
+    assert (b.netto, b.steuersatz, b.steuer) == (D("51.00"), D("19"), None)
+    assert b.zahlbetrag() == D("51.00")
