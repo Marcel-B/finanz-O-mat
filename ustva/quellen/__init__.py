@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from ..extraktion import Erkennung
+from ..extraktion import Erkennung, steuer_passt
 from ..models import Beleg
 from ..steuerfaelle import Art, Steuerfall
 
@@ -27,6 +27,10 @@ class ImportErgebnis:
                 "fehler": self.fehler}
 
 
+def _euro(wert: Decimal) -> str:
+    return f"{wert:.2f} €".replace(".", ",")
+
+
 def beleg_aus_erkennung(e: Erkennung, art: Art, **felder) -> Beleg:
     """Baut aus einem Erkennungsergebnis einen zu prüfenden Beleg."""
     steuerfall = e.steuerfall or (Steuerfall.INLAND if art == Art.AUSGANG else Steuerfall.VORSTEUER_INLAND)
@@ -46,6 +50,16 @@ def beleg_aus_erkennung(e: Erkennung, art: Art, **felder) -> Beleg:
     elif steuersatz is None:
         steuersatz = Decimal(19)
         hinweise.append("Kein Steuersatz erkannt, 19 % angenommen.")
+
+    if steuer is not None and e.netto and not steuer_passt(e.netto, steuer, steuersatz):
+        text = f"Erkannte Steuer {_euro(steuer)} passt nicht zu {steuersatz:g} % von {_euro(e.netto)}"
+        if Decimal(0) < steuer / e.netto <= Decimal("0.1905"):
+            # Kann eine Rechnung mit mehreren Steuersätzen sein; dann stimmt der Betrag.
+            hinweise.append(f"{text}. Mehrere Steuersätze? Bitte mit der Rechnung vergleichen.")
+        else:
+            # Negative oder zu hohe Steuer stammt aus der falschen Zeile; dann lieber dem Satz glauben.
+            hinweise.append(f"{text}; aus dem Steuersatz berechnet. Bitte mit der Rechnung vergleichen.")
+            steuer = None
 
     b = Beleg(
         art=art,
