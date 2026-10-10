@@ -3,6 +3,8 @@ import AutoComplete from "primevue/autocomplete";
 import Button from "primevue/button";
 import Column from "primevue/column";
 import DataTable from "primevue/datatable";
+import Dialog from "primevue/dialog";
+import InputText from "primevue/inputtext";
 import Tag from "primevue/tag";
 import { useToast } from "primevue/usetoast";
 import { reactive, ref } from "vue";
@@ -88,6 +90,26 @@ const zuordnen = (u: Umsatz, belegId: number | null) => aktion(() => api.zuordne
 const ignorieren = (u: Umsatz, regel = false) =>
   aktion(() => api.ignorieren(u.id, regel ? { regel: true, grund: "Partner ohne Beleg" } : {}));
 const rueckgaengig = (u: Umsatz) => aktion(() => api.ignorieren(u.id, { ignoriert: false }));
+
+// Fehlbuchung oder private Ausgabe vom Geschäftskonto: zählt nicht zur Steuer, steht aber im Monats-ZIP.
+const FEHLBUCHUNG = "Fehlbuchung/privat";
+const fehlbuchung = ref<Umsatz | null>(null);
+const notiz = ref("");
+const istFehlbuchung = (u: Umsatz) => u.ignoriert && u.ignoriert_grund.startsWith(FEHLBUCHUNG);
+const fehlbuchungNotiz = (u: Umsatz) => u.ignoriert_grund.slice(FEHLBUCHUNG.length).replace(/^[\s:]+/, "");
+
+function fehlbuchungMarkieren(u: Umsatz) {
+  fehlbuchung.value = u;
+  notiz.value = "";
+}
+
+async function fehlbuchungSpeichern() {
+  const u = fehlbuchung.value;
+  if (!u) return;
+  const grund = notiz.value.trim() ? `${FEHLBUCHUNG}: ${notiz.value.trim()}` : FEHLBUCHUNG;
+  fehlbuchung.value = null;
+  await aktion(() => api.ignorieren(u.id, { grund }));
+}
 </script>
 
 <template>
@@ -147,6 +169,10 @@ const rueckgaengig = (u: Umsatz) => aktion(() => api.ignorieren(u.id, { ignorier
                 : `${betrag(Math.abs(Number(data.kosten_geldverkehr)))} € Kursgewinn` }}
             </div>
           </span>
+          <span v-else-if="istFehlbuchung(data)" class="text-sm">
+            <Tag value="Fehlbuchung/privat" severity="warn" />
+            <span v-if="fehlbuchungNotiz(data)" class="ml-1 text-muted-color">{{ fehlbuchungNotiz(data) }}</span>
+          </span>
           <span v-else-if="data.ignoriert" class="text-sm text-muted-color">
             kein Beleg nötig{{ data.ignoriert_grund ? ` (${data.ignoriert_grund})` : "" }}
           </span>
@@ -187,6 +213,14 @@ const rueckgaengig = (u: Umsatz) => aktion(() => api.ignorieren(u.id, { ignorier
               />
               <Button size="small" severity="secondary" label="Kein Beleg nötig" @click="ignorieren(data)" />
               <Button
+                size="small"
+                severity="secondary"
+                text
+                label="Fehlbuchung"
+                v-tooltip.top="'Privat oder versehentlich gebucht: zählt nicht zur Steuer, steht im ZIP für die Steuerberatung'"
+                @click="fehlbuchungMarkieren(data)"
+              />
+              <Button
                 v-if="data.partner"
                 size="small"
                 severity="secondary"
@@ -200,5 +234,27 @@ const rueckgaengig = (u: Umsatz) => aktion(() => api.ignorieren(u.id, { ignorier
         </template>
       </Column>
     </DataTable>
+    <Dialog
+      :visible="!!fehlbuchung"
+      modal
+      header="Als Fehlbuchung / privat markieren"
+      class="w-[min(480px,calc(100vw-2rem))]"
+      @update:visible="(v: boolean) => !v && (fehlbuchung = null)"
+    >
+      <form class="flex flex-col gap-3" @submit.prevent="fehlbuchungSpeichern">
+        <p class="text-sm text-muted-color">
+          {{ fehlbuchung?.partner || fehlbuchung?.verwendungszweck }} · {{ betrag(fehlbuchung?.betrag ?? "0") }} €.
+          Der Umsatz zählt nicht zur Umsatzsteuer und erscheint im ZIP für die Steuerberatung in der INFO.txt.
+        </p>
+        <label class="flex flex-col gap-1 text-sm">
+          Notiz für die Steuerberatung (optional)
+          <InputText v-model="notiz" fluid autofocus placeholder="z. B. privater Einkauf, Karte verwechselt" />
+        </label>
+        <div class="flex justify-end gap-2">
+          <Button label="Abbrechen" severity="secondary" text @click="fehlbuchung = null" />
+          <Button type="submit" label="Markieren" icon="pi pi-check" />
+        </div>
+      </form>
+    </Dialog>
   </KarteBox>
 </template>

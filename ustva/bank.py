@@ -139,6 +139,15 @@ class BankImport:
         return {"neu": self.neu, "vorhanden": self.vorhanden, "zugeordnet": self.zugeordnet, "fehler": self.fehler}
 
 
+# Grund für Umsätze, die keine betriebliche Ausgabe sind (versehentlich vom Geschäftskonto bezahlt usw.).
+# Sie zählen nicht zur Umsatzsteuer, die Steuerberatung bekommt sie im Monats-ZIP aufgelistet.
+FEHLBUCHUNG = "Fehlbuchung/privat"
+
+
+def ist_fehlbuchung(u: Umsatz) -> bool:
+    return u.ignoriert and u.ignoriert_grund.startswith(FEHLBUCHUNG)
+
+
 def ignorier_grund(u: Umsatz, regeln: dict[str, str], stichworte: list[str]) -> str:
     partner = u.partner.strip().lower()
     if partner in regeln:
