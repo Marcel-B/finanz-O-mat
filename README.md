@@ -43,6 +43,7 @@ Steuerberater nachfragen.
 - CSV-Export der Kennzahlen und Belege (Semikolon, Dezimalkomma, öffnet direkt in Excel).
 - Reiter „Übersicht“: grobe Jahresübersicht der Einnahmen und Ausgaben (netto) je Monat mit Diagramm, Ergebnis,
   USt-Zahllast und größten Kunden und Lieferanten. Nur zum eigenen Überblick, keine Gewinnermittlung (EÜR).
+- Reiter „Tätigkeiten“: Tätigkeitsnachweis für den Kunden, siehe unten.
 
 ## Starten
 
@@ -208,6 +209,19 @@ Der laufende Dienst übernimmt die Änderung sofort. Im Proxmox-Container:
 runuser -u finanzomat -- env DATENBANK=/var/lib/finanz-o-mat/finanzomat.sqlite \
   /opt/finanz-o-mat/.venv/bin/python -m ustva passwort
 ```
+
+## Tätigkeitsnachweis
+
+Im Reiter „Tätigkeiten“ trägst du je Tag ein, wie viele Stunden du für welchen Auftrag was gemacht hast. Ein neuer
+Eintrag ist mit dem letzten vorbelegt (Auftrag, Ticket, Tätigkeit, Rolle, Ort, Leistungsart), das Datum springt auf den
+nächsten freien Werktag. Frühere Tätigkeiten schlägt das Feld beim Tippen vor, Werktage ohne Eintrag stehen unter dem
+Formular. Mit „Excel erstellen“ gibt es den Monat als .xlsx im Layout des bisherigen Nachweises (Satz × Menge,
+Summen, geleistete Stunden, Feld für die Unterschrift des Kunden).
+
+Was gleich bleibt, steht in der Vorlage (Reiter „Tätigkeiten“ → „Vorlage“ oder unter „Einstellungen“): Stundensatz,
+Name, Überschrift, Absender rechts oben, Aufträge mit Auftragsnummer und die Auswahllisten. „Excel-Datei übernehmen“
+liest all das aus der bisherigen Excel-Datei (Blatt „Werte“ und die Monatsblätter) und übernimmt auch die schon
+erfassten Monate. Der Stundensatz wird am Eintrag gespeichert; ein neuer Satz ändert also keine alten Monate.
 
 ## Umzug aus sevDesk
 
