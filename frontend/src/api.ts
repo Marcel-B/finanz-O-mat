@@ -193,6 +193,17 @@ export interface UpdateStatus {
   pruefung_laeuft?: boolean;
 }
 
+export interface BackupStatus {
+  unterstuetzt: boolean;
+  zustand?: "aus" | "ok" | "fehler" | "laeuft" | "angefordert";
+  meldung?: string;
+  ziel?: string | null;
+  letzte_sicherung?: string | null;
+  letzter_versuch?: string | null;
+  anzahl?: number | null;
+  groesse?: number | null;
+}
+
 async function anfrage<T>(pfad: string, optionen: RequestInit = {}): Promise<T> {
   const antwort = await fetch(pfad, {
     ...optionen,
@@ -254,4 +265,6 @@ export const api = {
   update: () => anfrage<UpdateStatus>("/api/update"),
   updateStarten: () => post<UpdateStatus>("/api/update"),
   updatePruefen: () => post<UpdateStatus>("/api/update/pruefen"),
+  backup: () => anfrage<BackupStatus>("/api/backup"),
+  backupStarten: () => post<BackupStatus>("/api/backup"),
 };

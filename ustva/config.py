@@ -55,6 +55,8 @@ class Config:
 
     # Austausch mit dem Update-Dienst im Proxmox-Container (siehe ustva/aktualisierung.py)
     update_verzeichnis: Path | None = None
+    # Stand des Nextcloud-Backups im Proxmox-Container (siehe ustva/backup.py)
+    backup_verzeichnis: Path | None = None
 
     @classmethod
     def aus_umgebung(cls) -> Config:
@@ -85,6 +87,7 @@ class Config:
             app_benutzer=env.get("APP_BENUTZER", ""),
             app_passwort=env.get("APP_PASSWORT", ""),
             update_verzeichnis=Path(env["UPDATE_VERZEICHNIS"]) if env.get("UPDATE_VERZEICHNIS") else None,
+            backup_verzeichnis=Path(env["BACKUP_VERZEICHNIS"]) if env.get("BACKUP_VERZEICHNIS") else None,
         )
         if cfg.versteuerung not in {"soll", "ist"}:
             raise ValueError("VERSTEUERUNG muss 'soll' oder 'ist' sein")

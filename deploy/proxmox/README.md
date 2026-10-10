@@ -55,12 +55,15 @@ bash finanz-o-mat-lxc.sh -y
 | `/var/lib/finanz-o-mat/finanzomat.sqlite` | Datenbank |
 | `/var/lib/finanz-o-mat/sicherungen/` | Sicherung der Datenbank vor jedem Update (die letzten 10) |
 | `/var/lib/finanz-o-mat/update/` | Stand der Update-Prüfung für die App (`status.json`) |
+| `/var/lib/finanz-o-mat/backup/` | Stand des Nextcloud-Backups für die App (`status.json`) |
+| `/etc/finanz-o-mat/backup.env`, `backup.passwort`, `rclone.conf` | Zugang zum Backup, nur für root lesbar |
 | `/srv/rechnungen` | Belegordner vom Host (falls eingebunden) |
 | `/opt/finanz-o-mat` | Programm (Git-Checkout mit Python-Umgebung in `.venv`, läuft direkt aus dem Checkout) |
 | `/opt/node` | Node.js, nur falls das System kein Node 20.19 oder neuer mitbringt (Debian 12) |
 
 Konfiguration und Datenbank bleiben bei Updates unverändert. Der Container läuft in den normalen Proxmox-Backups
-(vzdump) mit; der eingebundene Belegordner nicht, der gehört in die Sicherung des Hosts.
+(vzdump) mit; der eingebundene Belegordner nicht, der gehört in die Sicherung des Hosts. Zusätzlich gibt es ein
+tägliches Backup außer Haus auf eine Nextcloud, siehe [Backup auf die Nextcloud](#backup-auf-die-nextcloud).
 
 Konfiguration ändern:
 
@@ -101,6 +104,48 @@ oder im Container `finanz-o-mat-update` (sofort nachsehen ohne Installation: `sy
 die App neu und startet den Dienst. Ist nichts Neues da, passiert nichts (`finanz-o-mat-update --force` installiert
 trotzdem neu). Eine Sicherung zurückspielen: Dienst stoppen, Datei aus `sicherungen/` über `finanzomat.sqlite`
 kopieren, Dienst starten.
+
+## Backup auf die Nextcloud
+
+Datenbank und Konfiguration gehen jede Nacht (gegen 2:30 Uhr) verschlüsselt auf eine Nextcloud, z. B. eine Hetzner
+Storage Share. Das macht [restic](https://restic.net) über WebDAV (mit rclone); auf der Nextcloud liegen nur
+verschlüsselte Blöcke. Es bleiben 30 tägliche, 12 monatliche und 10 jährliche Stände. Belege selbst liegen in
+Paperless bzw. im Belegordner und gehören in deren Backup.
+
+Einmal einrichten, im Container:
+
+```sh
+pct enter <CTID>
+finanz-o-mat-backup einrichten
+```
+
+Das fragt nach der Nextcloud-Adresse (`https://nx12345.your-storageshare.de`), dem Benutzer und einem App-Passwort
+(in der Nextcloud unter Persönliche Einstellungen > Sicherheit > „Neues App-Passwort erstellen“), legt den Ordner
+`Backups/finanz-o-mat` an (neben `Backups/paperless` vom Paperless-Backup) und macht das erste Backup. Am Ende
+zeigt es das **Backup-Passwort**: das in den Passwortmanager. Ohne es lassen sich die Backups nicht entschlüsseln,
+auch nicht von Hetzner.
+
+In der App steht unter „Einstellungen“ → „Backup“, wann das letzte Backup lief und wie viele Stände es gibt;
+„Jetzt sichern“ startet eins sofort. Schlägt ein Backup fehl oder ist das letzte drei Tage oder älter, zeigt die App
+oben eine Warnung. Log: `journalctl -u finanz-o-mat-backup`.
+
+```sh
+finanz-o-mat-backup                       # Backup sofort (wie der Timer)
+finanz-o-mat-backup liste                 # vorhandene Stände
+finanz-o-mat-backup wiederherstellen      # neuesten Stand zurückspielen (fragt nach)
+finanz-o-mat-backup wiederherstellen 1a2b3c4d   # bestimmten Stand (ID aus liste)
+```
+
+Beim Zurückspielen wird die jetzige Datenbank vorher nach `sicherungen/vor-wiederherstellung-…` kopiert. Die
+Konfiguration aus dem Backup landet zum Vergleich in `finanz-o-mat.env.aus-backup`; mit `--mit-konfig` ersetzt sie
+die aktuelle.
+
+Container weg (z. B. Platte defekt): neuen Container mit dem Installationsskript anlegen, dann darin
+`finanz-o-mat-backup einrichten` mit denselben Nextcloud-Daten. Es erkennt das vorhandene Backup und fragt nach dessen
+Backup-Passwort. Danach `finanz-o-mat-backup wiederherstellen --mit-konfig`.
+
+Ohne Rückfragen: `BACKUP_URL`, `BACKUP_BENUTZER`, `BACKUP_APP_PASSWORT` und optional `BACKUP_ORDNER` und
+`BACKUP_PASSWORT` (für ein vorhandenes Backup) als Umgebungsvariablen setzen.
 
 ## Oberfläche (Vue)
 

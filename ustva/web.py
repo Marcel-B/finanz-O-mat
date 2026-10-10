@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from . import aktualisierung, bank, einstellungen, export, monatsexport, uebersicht
+from . import aktualisierung, backup, bank, einstellungen, export, monatsexport, uebersicht
 from .berechnung import berechnen, zeitraum
 from .config import Config
 from .db import Datenbank
@@ -447,6 +447,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         return _einstellungen()["anmeldung"]
 
     app.include_router(aktualisierung.router(cfg.update_verzeichnis))
+    app.include_router(backup.router(cfg.backup_verzeichnis))
 
     @app.exception_handler(ValueError)
     async def wertfehler(_request: Request, exc: ValueError):
