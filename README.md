@@ -211,9 +211,10 @@ runuser -u finanzomat -- env DATENBANK=/var/lib/finanz-o-mat/finanzomat.sqlite \
 
 ## Umzug aus sevDesk
 
-`python -m ustva sevdesk sichern|importieren|abgleich` sichert alle Daten und PDFs aus sevDesk, legt die Dateien in
-Paperless ab, übernimmt die Buchungen als geprüfte Belege und vergleicht die Zahllast je Monat mit den abgegebenen
-Voranmeldungen. Anleitung: [docs/sevdesk-migration.md](docs/sevdesk-migration.md).
+`finanz-o-mat sevdesk importieren|abgleich` übernimmt die Export-Dateien der sevDesk-Oberfläche (oder eine
+Sicherung über die API mit `sevdesk sichern`), legt die Dateien in Paperless ab, übernimmt die Buchungen als
+geprüfte Belege und vergleicht die Zahllast je Monat mit den abgegebenen Voranmeldungen.
+Anleitung: [docs/sevdesk-migration.md](docs/sevdesk-migration.md).
 
 ## Annahmen und Grenzen
 

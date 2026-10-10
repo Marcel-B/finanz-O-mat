@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Protocol
 
 import httpx
 
@@ -274,6 +275,9 @@ class Sicherung:
             pfad = ordner / f"{modell}.json"
             daten[modell] = json.loads(pfad.read_text(encoding="utf-8")) if pfad.exists() else []
         return cls(ordner, daten, uebersicht.get("dateien", {}), uebersicht.get("erstellt", ""))
+
+    def kandidaten(self) -> list[Kandidat]:
+        return kandidaten(self)
 
     def datei(self, modell: str, objekt_id: str) -> Path | None:
         eintrag = self.dateien.get(f"{modell}/{objekt_id}")
@@ -663,12 +667,20 @@ def _anlegen(db: Datenbank, cfg: Config, k: Kandidat, dok_id: str, task: str, er
     erg.belege.extend(k.belege)
 
 
+class Quelle(Protocol):
+    """Sicherung über die API oder Export-Dateien der Oberfläche (sevdesk_export.Export)."""
+
+    erstellt: str
+
+    def kandidaten(self) -> list[Kandidat]: ...
+
+
 def importieren(
-    db: Datenbank, cfg: Config, sicherung: Sicherung, *, trocken: bool = False, paperless_nutzen: bool = True,
+    db: Datenbank, cfg: Config, sicherung: Quelle, *, trocken: bool = False, paperless_nutzen: bool = True,
     von: str | None = None, bis: str | None = None, warten: float = 300, client: httpx.Client | None = None,
     schlafen: Callable[[float], None] = time.sleep, uhr: Callable[[], float] = time.monotonic,
 ) -> Uebernahme:
-    """Übernimmt die Belege aus der Sicherung; ``von``/``bis`` als JJJJ-MM (Rechnungsdatum)."""
+    """Übernimmt die Belege aus Sicherung oder Export; ``von``/``bis`` als JJJJ-MM (Rechnungsdatum)."""
     erg = Uebernahme()
     bekannt = db.sevdesk_importe()
     vorhandene = {
@@ -687,7 +699,7 @@ def importieren(
             return erg
 
     offen: list[tuple[Kandidat, str]] = []
-    for k in kandidaten(sicherung):
+    for k in sicherung.kandidaten():
         if k.grund:
             erg.uebersprungen[k.grund] += 1
             continue
@@ -759,15 +771,23 @@ def importieren(
 # --- Schritt 3: Abgleich ---------------------------------------------------------------------
 
 RE_MONAT = [
-    (re.compile(r"^(\d{4})-(\d{1,2})$"), lambda m: (m[1], m[2])),
-    (re.compile(r"^(\d{1,2})[./](\d{4})$"), lambda m: (m[2], m[1])),
+    (re.compile(r"^(\d{4})-(\d{1,2})$"), lambda m: f"{int(m[1]):04d}-{int(m[2]):02d}"),
+    (re.compile(r"^(\d{1,2})[./](\d{4})$"), lambda m: f"{int(m[2]):04d}-{int(m[1]):02d}"),
+    (re.compile(r"^(\d{4})-?Q([1-4])$", re.I), lambda m: f"{m[1]}-Q{m[2]}"),
+    (re.compile(r"^Q([1-4])[./ ]?(\d{4})$", re.I), lambda m: f"{m[2]}-Q{m[1]}"),
 ]
+
+
+def quartal(monat: str) -> str:
+    jahr, mon = monat.split("-")
+    return f"{jahr}-Q{(int(mon) - 1) // 3 + 1}"
 
 
 def erwartet_lesen(pfad: Path) -> dict[str, Decimal]:
     """Abgegebene Zahllast je Monat aus einer CSV: ``Zeitraum;Zahllast``.
 
-    Zeitraum als 2024-01, 01/2024 oder 01.2024; Beträge deutsch oder englisch geschrieben.
+    Zeitraum als 2024-01, 01/2024 oder 01.2024, Quartale als 2023-Q1 oder Q1/2023; Beträge deutsch oder
+    englisch geschrieben.
     Zeilen, die nicht passen (z. B. die Überschrift), werden übersprungen.
     """
     werte: dict[str, Decimal] = {}
@@ -778,10 +798,9 @@ def erwartet_lesen(pfad: Path) -> dict[str, Decimal]:
             continue
         for muster, teil in RE_MONAT:
             if m := muster.match(teile[0]):
-                jahr, monat = teil(m)
                 betrag = betrag_parsen(teile[1].replace("€", ""))
                 if betrag is not None:
-                    werte[f"{int(jahr):04d}-{int(monat):02d}"] = betrag
+                    werte[teil(m)] = betrag
                 break
     return werte
 
@@ -790,25 +809,48 @@ def monatsvergleich(
     belege: list[Beleg], umrechner: Umrechner, versteuerung: str, monate: list[str],
     erwartet: dict[str, Decimal] | None = None, toleranz: Decimal = Decimal("1.00"),
 ) -> list[dict]:
-    """Zahllast (Kz 83) je Monat, auf Wunsch neben den abgegebenen Werten."""
+    """Zahllast (Kz 83) je Monat, auf Wunsch neben den abgegebenen Werten.
+
+    Liegt für ein Quartal (``2023-Q1``) statt der Monate ein abgegebener Wert vor, werden dessen Monate zu einer
+    Zeile zusammengefasst.
+    """
     erwartet = erwartet or {}
-    zeilen = []
+    gruppen: dict[str, list[str]] = {}
     for monat in monate:
-        jahr, mon = (int(t) for t in monat.split("-"))
-        bericht = berechnen(belege, jahr, mon, umrechner, versteuerung)
-        soll = erwartet.get(monat)
-        differenz = None if soll is None else bericht.zahllast - soll
+        q = quartal(monat)
+        gruppen.setdefault(q if q in erwartet and monat not in erwartet else monat, []).append(monat)
+    zeilen = []
+    for zeitraum, liste in gruppen.items():
+        if zeitraum.endswith(tuple(f"Q{i}" for i in range(1, 5))):  # alle drei Monate, auch ohne Belege
+            jahr, q = zeitraum.split("-Q")
+            liste = [f"{jahr}-{m:02d}" for m in range(3 * int(q) - 2, 3 * int(q) + 1)]
+        berichte = [berechnen(belege, int(m[:4]), int(m[5:]), umrechner, versteuerung) for m in liste]
+        zahllast = sum((b.zahllast for b in berichte), Decimal(0))
+        soll = erwartet.get(zeitraum)
+        differenz = None if soll is None else zahllast - soll
         zeilen.append({
-            "zeitraum": monat,
-            "zahllast": bericht.zahllast,
-            "umsatzsteuer": bericht.umsatzsteuer,
-            "vorsteuer": bericht.vorsteuer,
+            "zeitraum": zeitraum,
+            "zahllast": zahllast,
+            "umsatzsteuer": sum((b.umsatzsteuer for b in berichte), Decimal(0)),
+            "vorsteuer": sum((b.vorsteuer for b in berichte), Decimal(0)),
             "erwartet": soll,
             "differenz": differenz,
             "passt": differenz is None or abs(differenz) <= toleranz,
-            "vollstaendig": bericht.vollstaendig,
+            "vollstaendig": all(b.vollstaendig for b in berichte),
         })
     return zeilen
+
+
+def monate_von(erwartet: dict[str, Decimal]) -> list[str]:
+    """Alle Monate der abgegebenen Zeiträume, Quartale aufgelöst."""
+    ergebnis = set()
+    for z in erwartet:
+        if "-Q" in z:
+            jahr, q = z.split("-Q")
+            ergebnis.update(f"{jahr}-{m:02d}" for m in range(3 * int(q) - 2, 3 * int(q) + 1))
+        else:
+            ergebnis.add(z)
+    return sorted(ergebnis)
 
 
 def monate(belege: list[Beleg], versteuerung: str, von: str | None = None, bis: str | None = None) -> list[str]:
