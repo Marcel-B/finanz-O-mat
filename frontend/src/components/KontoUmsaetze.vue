@@ -7,14 +7,15 @@ import Dialog from "primevue/dialog";
 import InputText from "primevue/inputtext";
 import Tag from "primevue/tag";
 import { useToast } from "primevue/usetoast";
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 
 import { api, type BelegKurz, type Umsatz } from "@/api";
-import { betrag, datum } from "@/format";
+import { betrag, datum, passtZurSuche, suchtext } from "@/format";
 
 import KarteBox from "./KarteBox.vue";
+import SuchFeld from "./SuchFeld.vue";
 
-defineProps<{ umsaetze: Umsatz[] }>();
+const props = defineProps<{ umsaetze: Umsatz[] }>();
 const emit = defineEmits<{ geaendert: []; oeffnen: [belegId: number] }>();
 const toast = useToast();
 
@@ -86,6 +87,20 @@ async function aktion(fn: () => Promise<unknown>) {
   }
 }
 
+const suche = ref("");
+const gefunden = computed(() =>
+  props.umsaetze.filter((u) =>
+    passtZurSuche(
+      suchtext(
+        u.buchungsdatum, u.partner, u.verwendungszweck, u.typ, u.betrag, u.original_betrag, u.original_waehrung,
+        u.ignoriert_grund, u.beleg?.partner, u.beleg?.beschreibung, u.beleg?.rechnungsnummer,
+        !u.beleg && !u.ignoriert && "ohne Beleg",
+      ),
+      suche.value,
+    ),
+  ),
+);
+
 const zuordnen = (u: Umsatz, belegId: number | null) => aktion(() => api.zuordnen(u.id, belegId));
 const ignorieren = (u: Umsatz, regel = false) =>
   aktion(() => api.ignorieren(u.id, regel ? { regel: true, grund: "Partner ohne Beleg" } : {}));
@@ -115,6 +130,7 @@ async function fehlbuchungSpeichern() {
 <template>
   <KarteBox titel="Kontoumsätze">
     <template #aktionen>
+      <SuchFeld v-model="suche" :treffer="gefunden.length" :gesamt="umsaetze.length" />
       <input ref="datei" type="file" accept=".csv,text/csv" hidden @change="hochladen" />
       <Button label="N26-CSV hochladen" icon="pi pi-upload" severity="secondary" :loading="laedtHoch" @click="datei?.click()" />
     </template>
@@ -123,13 +139,17 @@ async function fehlbuchungSpeichern() {
       passenden Rechnungen zugeordnet; bei Ausgangsrechnungen setzt das das Zahlungsdatum.
     </p>
     <DataTable
-      :value="umsaetze"
+      :value="gefunden"
       size="small"
       data-key="id"
       scrollable
       :row-class="(u: Umsatz) => (!u.beleg && !u.ignoriert ? '!bg-amber-50 dark:!bg-amber-950/40' : '')"
     >
-      <template #empty><span class="text-muted-color">Für diesen Monat sind keine Kontoumsätze eingelesen.</span></template>
+      <template #empty>
+        <span class="text-muted-color">
+          {{ suche.trim() ? "Keine Kontoumsätze passen zur Suche." : "Für diesen Monat sind keine Kontoumsätze eingelesen." }}
+        </span>
+      </template>
       <Column header="Datum"><template #body="{ data }">{{ datum(data.buchungsdatum) }}</template></Column>
       <Column header="Partner / Verwendungszweck">
         <template #body="{ data }">

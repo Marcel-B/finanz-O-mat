@@ -78,6 +78,8 @@ Ohne gebaute Oberfläche läuft nur die API; die Startseite zeigt dann den Build
    beide Dokumente. Schon erfasste Doppel zeigt die Monatsansicht als Warnung.
 3. Bezahlte Ausgangsrechnungen unter „Belege ohne Zeitraum“ anklicken und das Zahlungsdatum eintragen.
    Gelb markierte Belege anklicken, mit der Rechnung vergleichen, ggf. korrigieren und speichern (oder „OK“).
+   Über den Belegen und den Kontoumsätzen filtert je ein Suchfeld die Liste des Monats (Partner, Text,
+   Rechnungsnummer, Betrag wie „62,89“, Datum wie „22.09.2026“; mehrere Wörter müssen alle vorkommen).
 4. Hinweise lesen. Bei Fremdwährungen den BMF-Kurs des Monats eintragen.
 5. In Mein ELSTER das Formular „Umsatzsteuer-Voranmeldung“ öffnen und die Kennzahlen eintragen. Werte mit
    „berechnet ELSTER“ rechnet ELSTER selbst aus; sie dienen zum Abgleich.
