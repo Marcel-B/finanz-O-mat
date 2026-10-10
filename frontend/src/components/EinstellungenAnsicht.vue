@@ -22,6 +22,8 @@ const form = reactive({
   paperless_token: "",
   paperless_tags_ausgang: "",
   paperless_tags_eingang: "",
+  paperless_tag_kontoauszug: "",
+  paperless_tag_protokoll: "",
   eigene_ustid: "",
   bundesland: "",
 });
@@ -38,6 +40,8 @@ function uebernehmen(e: Einstellungen) {
   form.paperless_token = "";
   form.paperless_tags_ausgang = e.paperless_tags_ausgang.wert;
   form.paperless_tags_eingang = e.paperless_tags_eingang.wert;
+  form.paperless_tag_kontoauszug = e.paperless_tag_kontoauszug.wert;
+  form.paperless_tag_protokoll = e.paperless_tag_protokoll.wert;
   form.eigene_ustid = e.eigene_ustid.wert;
   form.bundesland = e.bundesland.wert;
   zugang.benutzer = e.anmeldung.benutzer;
@@ -62,7 +66,11 @@ async function speichern() {
   if (!d) return;
   // Nur geänderte Felder senden, damit Werte aus der Konfigurationsdatei nicht ungewollt in die App wandern.
   const aenderungen: Record<string, string> = {};
-  for (const k of ["paperless_url", "paperless_tags_ausgang", "paperless_tags_eingang", "eigene_ustid", "bundesland"] as const) {
+  const felder = [
+    "paperless_url", "paperless_tags_ausgang", "paperless_tags_eingang", "paperless_tag_kontoauszug",
+    "paperless_tag_protokoll", "eigene_ustid", "bundesland",
+  ] as const;
+  for (const k of felder) {
     if (form[k] !== d[k].wert) aenderungen[k] = form[k] ?? "";
   }
   if (form.paperless_token) aenderungen.paperless_token = form.paperless_token;
@@ -173,7 +181,19 @@ async function passwortSpeichern() {
             Tags Eingangsrechnungen
             <InputText v-model="form.paperless_tags_eingang" fluid />
           </label>
+          <label class="flex flex-col gap-1 text-sm">
+            Tag Kontoauszug
+            <InputText v-model="form.paperless_tag_kontoauszug" fluid />
+          </label>
+          <label class="flex flex-col gap-1 text-sm">
+            Tag ELSTER-Protokoll
+            <InputText v-model="form.paperless_tag_protokoll" fluid />
+          </label>
         </div>
+        <span class="-mt-1 text-xs text-muted-color">
+          Kontoauszug und ELSTER-Übertragungsprotokoll landen über diese Tags im Monats-ZIP für die Steuerberatung.
+          Titel oder Text müssen den Monat nennen, z. B. „09/2026“ oder „September 2026“.
+        </span>
         <Message v-if="testErgebnis" :severity="testErgebnis.ok ? 'success' : 'error'" size="small">
           {{ testErgebnis.text }}
         </Message>

@@ -32,6 +32,8 @@ export interface Einstellungen {
   paperless_token: { gesetzt: boolean; quelle: Herkunft };
   paperless_tags_ausgang: Feld;
   paperless_tags_eingang: Feld;
+  paperless_tag_kontoauszug: Feld;
+  paperless_tag_protokoll: Feld;
   eigene_ustid: Feld;
   bundesland: Feld;
   bundeslaender: { wert: string; name: string }[];
@@ -40,7 +42,7 @@ export interface Einstellungen {
 
 export type EinstellungenEingabe = Partial<Record<
   "paperless_url" | "paperless_token" | "paperless_tags_ausgang" | "paperless_tags_eingang" | "eigene_ustid" |
-  "bundesland", string>>;
+  "bundesland" | "paperless_tag_kontoauszug" | "paperless_tag_protokoll", string>>;
 
 export interface Steuerfall {
   wert: string;

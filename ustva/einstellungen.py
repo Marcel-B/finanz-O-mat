@@ -21,7 +21,8 @@ from .config import Config
 from .db import Datenbank
 
 # Schlüssel in der Datenbank -> Feld in Config
-TEXTE = ("paperless_url", "paperless_token", "eigene_ustid", "bundesland")
+TEXTE = ("paperless_url", "paperless_token", "eigene_ustid", "bundesland", "paperless_tag_kontoauszug",
+         "paperless_tag_protokoll")
 LISTEN = ("paperless_tags_ausgang", "paperless_tags_eingang")
 BENUTZER = "app_benutzer"
 PASSWORT_HASH = "app_passwort_hash"
