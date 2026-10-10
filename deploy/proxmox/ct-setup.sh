@@ -18,6 +18,10 @@ DATEN=/var/lib/finanz-o-mat
 BENUTZER=finanzomat
 DIENST=finanz-o-mat
 SICHERUNGEN_BEHALTEN=10
+FRONTEND=$APP_DIR/frontend
+NODE_MIN=20
+NODE_LINIE=22
+NODE_DIR=/opt/node
 
 info() { printf '\e[1;34m==>\e[0m %s\n' "$*"; }
 ok() { printf '\e[1;32m ok\e[0m %s\n' "$*"; }
@@ -66,11 +70,58 @@ benutzer_und_ordner() {
     chmod 640 "$ENV_DATEI"
 }
 
+node_bereitstellen() {
+    # Debian 13 bringt Node 20 mit; bei älteren Systemen die offizielle LTS-Version nach $NODE_DIR laden
+    if [[ -x $NODE_DIR/bin/node ]]; then
+        export PATH="$NODE_DIR/bin:$PATH"
+        return 0
+    fi
+    local kandidat
+    kandidat=$(apt-cache policy nodejs 2>/dev/null | awk '/Candidate:/ {print $2}' | sed 's/^[0-9]*://; s/\..*//')
+    if [[ $kandidat =~ ^[0-9]+$ ]] && ((kandidat >= NODE_MIN)); then
+        apt-get install -y -qq --no-install-recommends nodejs npm >/dev/null
+        return 0
+    fi
+    local arch datei summen tmp
+    case $(dpkg --print-architecture) in
+        amd64) arch=x64 ;;
+        arm64) arch=arm64 ;;
+        *) abbruch "Keine Node.js-Version für $(dpkg --print-architecture) hinterlegt." ;;
+    esac
+    info "Lade Node.js $NODE_LINIE von nodejs.org"
+    apt-get install -y -qq --no-install-recommends curl xz-utils >/dev/null
+    summen=$(curl -fsSL "https://nodejs.org/dist/latest-v$NODE_LINIE.x/SHASUMS256.txt")
+    datei=$(awk -v a="linux-$arch.tar.xz" '$2 ~ a"$" {print $2}' <<<"$summen")
+    [[ -n $datei ]] || abbruch "Node.js-Paket für linux-$arch nicht gefunden."
+    tmp=$(mktemp -d)
+    curl -fsSL -o "$tmp/$datei" "https://nodejs.org/dist/latest-v$NODE_LINIE.x/$datei"
+    (cd "$tmp" && grep " $datei\$" <<<"$summen" | sha256sum -c --quiet -)
+    install -d "$NODE_DIR"
+    tar -xJf "$tmp/$datei" -C "$NODE_DIR" --strip-components=1
+    rm -rf "$tmp"
+    export PATH="$NODE_DIR/bin:$PATH"
+}
+
+frontend_bauen() {
+    # Vue-Oberfläche (Vite) bauen, sobald es im Repo ein frontend/ gibt
+    [[ -f $FRONTEND/package.json ]] || return 0
+    node_bereitstellen
+    info "Baue die Oberfläche mit Node $(node --version)"
+    if [[ -f $FRONTEND/package-lock.json ]]; then
+        (cd "$FRONTEND" && npm ci --no-audit --no-fund --loglevel=error)
+    else
+        (cd "$FRONTEND" && npm install --no-audit --no-fund --loglevel=error)
+    fi
+    (cd "$FRONTEND" && npm run build --silent)
+    ok "Oberfläche gebaut"
+}
+
 python_umgebung() {
     info "Installiere die App in $VENV"
     [[ -x $VENV/bin/python ]] || python3 -m venv "$VENV"
     "$VENV/bin/pip" install --quiet --disable-pip-version-check --upgrade pip
-    "$VENV/bin/pip" install --quiet --disable-pip-version-check --upgrade "$APP_DIR"
+    # editierbar: Die App läuft direkt aus dem Checkout, gebaute Oberflächendateien sind so ohne Weiteres dabei
+    "$VENV/bin/pip" install --quiet --disable-pip-version-check --upgrade --editable "$APP_DIR"
     ok "$("$VENV/bin/pip" show finanz-o-mat | sed -n 's/^Version: /finanz-o-mat /p')"
 }
 
@@ -173,6 +224,7 @@ installieren() {
     [[ -d $APP_DIR/.git ]] || abbruch "$APP_DIR ist kein Git-Checkout der App."
     pakete
     benutzer_und_ordner
+    frontend_bauen
     python_umgebung
     dienst_dateien
     dienst_starten
@@ -200,6 +252,7 @@ aktualisieren() {
 
 nach_update() {
     benutzer_und_ordner
+    frontend_bauen
     python_umgebung
     dienst_dateien
     dienst_starten

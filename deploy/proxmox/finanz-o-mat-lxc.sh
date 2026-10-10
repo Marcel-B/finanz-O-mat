@@ -38,7 +38,7 @@ Aufruf: $AUFRUF [-y | update <CTID>]
   -y              ohne Rückfragen, Werte aus Umgebungsvariablen
   update <CTID>   App im Container aktualisieren (Datenbank wird vorher gesichert)
 
-Variablen (Vorgabe): CTID (nächste freie), CT_HOSTNAME (finanz-o-mat), CORES (1), MEMORY (512), DISK (4),
+Variablen (Vorgabe): CTID (nächste freie), CT_HOSTNAME (finanz-o-mat), CORES (1), MEMORY (1024), DISK (4),
 BRIDGE (vmbr0), IP (dhcp), GATEWAY, CT_STORAGE, TEMPLATE_STORAGE, BELEG_HOST_PATH, PAPERLESS_URL,
 PAPERLESS_TOKEN, APP_BENUTZER (admin), APP_PASSWORT (zufällig), VERSTEUERUNG (ist), BUNDESLAND (NW),
 EIGENE_USTID, PORT (8000), REPO_URL, REPO_BRANCH (main). Details: deploy/proxmox/README.md
@@ -164,7 +164,7 @@ installieren() {
     CTID="${CTID:-$(pvesh get /cluster/nextid)}"
     CT_HOSTNAME="${CT_HOSTNAME:-finanz-o-mat}"
     CORES="${CORES:-1}"
-    MEMORY="${MEMORY:-512}"
+    MEMORY="${MEMORY:-1024}"
     SWAP="${SWAP:-512}"
     DISK="${DISK:-4}"
     BRIDGE="${BRIDGE:-vmbr0}"

@@ -1,7 +1,8 @@
 # Finanz-O-Mat in Proxmox VE (LXC)
 
 `finanz-o-mat-lxc.sh` legt auf einem Proxmox-VE-Host einen unprivilegierten Debian-Container an, installiert die App
-darin und startet sie als systemd-Dienst. Ohne Docker, der Container braucht etwa 512 MB RAM und 4 GB Platte.
+darin und startet sie als systemd-Dienst. Ohne Docker, der Container bekommt 1 GB RAM (für den Bau der Oberfläche) und
+4 GB Platte.
 
 ## Installieren
 
@@ -29,7 +30,7 @@ bash finanz-o-mat-lxc.sh -y
 |---|---|---|
 | `CTID` | nächste freie ID | Container-ID |
 | `CT_HOSTNAME` | `finanz-o-mat` | Hostname |
-| `CORES`, `MEMORY`, `SWAP`, `DISK` | 1, 512, 512, 4 | CPU-Kerne, RAM und Swap in MB, Platte in GB |
+| `CORES`, `MEMORY`, `SWAP`, `DISK` | 1, 1024, 512, 4 | CPU-Kerne, RAM und Swap in MB, Platte in GB |
 | `BRIDGE`, `IP`, `GATEWAY` | `vmbr0`, `dhcp`, – | Netzwerk; feste IP als `192.168.1.50/24` |
 | `CT_STORAGE`, `TEMPLATE_STORAGE` | `local-lvm`, `local` (sonst erster passender) | Speicher für Container und Vorlage |
 | `DEBIAN_VERSION` | `13 12` | gesuchte Debian-Vorlage, erste gefundene gewinnt |
@@ -50,7 +51,8 @@ bash finanz-o-mat-lxc.sh -y
 | `/var/lib/finanz-o-mat/finanzomat.sqlite` | Datenbank |
 | `/var/lib/finanz-o-mat/sicherungen/` | Sicherung der Datenbank vor jedem Update (die letzten 10) |
 | `/srv/rechnungen` | Belegordner vom Host (falls eingebunden) |
-| `/opt/finanz-o-mat` | Programm (Git-Checkout mit Python-Umgebung in `.venv`) |
+| `/opt/finanz-o-mat` | Programm (Git-Checkout mit Python-Umgebung in `.venv`, läuft direkt aus dem Checkout) |
+| `/opt/node` | Node.js, nur falls das System kein Node 20 oder neuer mitbringt (Debian 12) |
 
 Konfiguration und Datenbank bleiben bei Updates unverändert. Der Container läuft in den normalen Proxmox-Backups
 (vzdump) mit; der eingebundene Belegordner nicht, der gehört in die Sicherung des Hosts.
@@ -82,6 +84,13 @@ oder im Container `finanz-o-mat-update`. Das sichert die Datenbank, holt den neu
 die App neu und startet den Dienst. Ist nichts Neues da, passiert nichts (`finanz-o-mat-update --force` installiert
 trotzdem neu). Eine Sicherung zurückspielen: Dienst stoppen, Datei aus `sicherungen/` über `finanzomat.sqlite`
 kopieren, Dienst starten.
+
+## Oberfläche (Vue)
+
+Gibt es im Repo ein `frontend/` mit `package.json` (Vue/Vite), baut das Skript die Oberfläche bei Installation und
+jedem Update im Container (`npm ci` bzw. `npm install`, dann `npm run build`). Node.js kommt unter Debian 13 aus den
+Paketquellen, unter Debian 12 als offizielle LTS-Version von nodejs.org (Prüfsumme wird kontrolliert). Die App läuft
+direkt aus dem Checkout, daher werden gebaute Dateien ausgeliefert, egal wohin Vite sie im Repo schreibt.
 
 ## Belegordner und Rechte
 
