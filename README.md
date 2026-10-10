@@ -189,6 +189,12 @@ runuser -u finanzomat -- env DATENBANK=/var/lib/finanz-o-mat/finanzomat.sqlite \
   /opt/finanz-o-mat/.venv/bin/python -m ustva passwort
 ```
 
+## Umzug aus sevDesk
+
+`python -m ustva sevdesk sichern|importieren|abgleich` sichert alle Daten und PDFs aus sevDesk, legt die Dateien in
+Paperless ab, übernimmt die Buchungen als geprüfte Belege und vergleicht die Zahllast je Monat mit den abgegebenen
+Voranmeldungen. Anleitung: [docs/sevdesk-migration.md](docs/sevdesk-migration.md).
+
 ## Annahmen und Grenzen
 
 - Standard ist Ist-Versteuerung: Steuerpflichtige Inlandsumsätze zählen erst im Monat des Zahlungseingangs.

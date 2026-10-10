@@ -60,6 +60,15 @@ CREATE TABLE IF NOT EXISTS einstellungen (
     schluessel TEXT PRIMARY KEY,
     wert TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sevdesk_import (
+    objekt TEXT NOT NULL,
+    sevdesk_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    paperless_task TEXT NOT NULL DEFAULT '',
+    paperless_id TEXT NOT NULL DEFAULT '',
+    belege TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (objekt, sevdesk_id)
+);
 CREATE TABLE IF NOT EXISTS kurse (
     waehrung TEXT NOT NULL,
     zeitraum TEXT NOT NULL,
@@ -293,3 +302,24 @@ class Datenbank:
         with self._lock:
             zeilen = self._con.execute("SELECT * FROM kurse ORDER BY zeitraum DESC, waehrung").fetchall()
         return [dict(z) for z in zeilen]
+
+    # Umzug aus sevDesk (siehe ustva/sevdesk.py): was schon übernommen wurde
+    def sevdesk_importe(self) -> dict[tuple[str, str], dict]:
+        with self._lock:
+            zeilen = self._con.execute("SELECT * FROM sevdesk_import").fetchall()
+        return {
+            (z["objekt"], z["sevdesk_id"]): {**dict(z), "belege": json.loads(z["belege"])} for z in zeilen
+        }
+
+    def sevdesk_import_speichern(
+        self, objekt: str, sevdesk_id: str, status: str, paperless_task: str = "", paperless_id: str = "",
+        belege: list[int] | None = None,
+    ) -> None:
+        with self._lock, self._con:
+            self._con.execute(
+                "INSERT INTO sevdesk_import (objekt, sevdesk_id, status, paperless_task, paperless_id, belege) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(objekt, sevdesk_id) DO UPDATE SET status = excluded.status, "
+                "paperless_task = excluded.paperless_task, paperless_id = excluded.paperless_id, "
+                "belege = excluded.belege",
+                (objekt, sevdesk_id, status, paperless_task, paperless_id, json.dumps(belege or [])),
+            )
