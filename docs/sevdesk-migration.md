@@ -59,6 +59,9 @@ Export (Kategorie „Umsatzsteuer-Vorauszahlungen“): maßgeblich ist der Text 
 werden als Quartal verglichen. Wer die Werte aus Mein ELSTER nehmen will, gibt `--erwartet` an (siehe Weg B,
 Schritt 3).
 
+Kunden und Lieferanten aus `contacts.csv` (mit Anschrift, Kundennummer, USt-IdNr. und Ansprechpartner) und die
+Empfänger der Rechnungen landen dabei im Adressbuch der App.
+
 Doppelte, Zeitraum (`--von`/`--bis`), Paperless-Wartezeit und `--ohne-paperless` funktionieren wie bei Weg B.
 **Monate, die schon mit finanz-O-mat gemacht sind, mit `--bis` ausklammern.**
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 
+from ..adressbuch import anschriften_uebernehmen
 from ..db import Datenbank
 from ..doppelt import beschreibung, doppel, herkunft
 from ..extraktion import Erkennung, steuer_passt
@@ -39,6 +40,7 @@ def speichern(db: Datenbank, belege: list[Beleg], vorhandene: list[Beleg], ergeb
         return
     for beleg in belege:
         vorhandene.append(db.beleg_anlegen(beleg))
+    anschriften_uebernehmen(db, belege)
     ergebnis.neu += 1
 
 

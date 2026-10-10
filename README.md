@@ -43,6 +43,10 @@ Steuerberater nachfragen.
 - CSV-Export der Kennzahlen und Belege (Semikolon, Dezimalkomma, öffnet direkt in Excel).
 - Reiter „Übersicht“: grobe Jahresübersicht der Einnahmen und Ausgaben (netto) je Monat mit Diagramm, Ergebnis,
   USt-Zahllast und größten Kunden und Lieferanten. Nur zum eigenen Überblick, keine Gewinnermittlung (EÜR).
+- Reiter „Adressbuch“: alle Kunden und Lieferanten mit Anschrift, USt-IdNr., Kundennummer und Anzahl der Belege.
+  Neue Partner aus Belegen kommen von selbst dazu; Anschriften stammen aus E-Rechnungen und dem sevDesk-Umzug oder
+  werden von Hand ergänzt. Doppelte Schreibweisen lassen sich zusammenführen, CSV-Export für Excel. Automatische
+  Quellen füllen nur leere Felder, eigene Einträge bleiben stehen.
 
 ## Starten
 
