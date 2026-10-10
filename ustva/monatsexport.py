@@ -21,7 +21,7 @@ from datetime import date
 
 import httpx
 
-from . import export
+from . import bank, export
 from .berechnung import Bericht
 from .config import Config
 from .fristen import monat_plus
@@ -159,17 +159,36 @@ def monats_zip(cfg: Config, bericht: Bericht, umsaetze: list[Umsatz], belege_nac
         except (PaperlessFehler, httpx.HTTPError) as e:
             fehlt.append(f"{bezeichnung}: {e}")
 
+    fehlbuchungen: list[str] = []
+    ohne_beleg: list[str] = []
     for u in umsaetze:
-        if u.beleg_id is None and not u.ignoriert:
-            betrag = f"{u.betrag:.2f}".replace(".", ",")
-            fehlt.append(f"Kontoumsatz {u.buchungsdatum:%d.%m.%Y} {u.partner or u.verwendungszweck} {betrag} € "
-                         "ohne Beleg")
+        if u.beleg_id is not None:
+            continue
+        if not u.ignoriert:
+            fehlt.append(f"{_umsatz(u)} ohne Beleg")
+        elif bank.ist_fehlbuchung(u):
+            notiz = u.ignoriert_grund[len(bank.FEHLBUCHUNG):].lstrip(" :")
+            fehlbuchungen.append(_umsatz(u) + (f": {notiz}" if notiz else ""))
+        else:
+            ohne_beleg.append(_umsatz(u) + (f" ({u.ignoriert_grund})" if u.ignoriert_grund else ""))
 
     z.schreiben(f"UStVA-{bericht.zeitraum}-Kennzahlen.csv", export.kennzahlen_csv(bericht))
     z.schreiben(f"UStVA-{bericht.zeitraum}-Belege.csv", export.belege_csv(bericht))
-    if fehlt:
-        z.schreiben("FEHLT.txt", "\r\n".join([f"Unterlagen {monat:02d}/{jahr}: Was fehlt", "", *fehlt, ""]))
+    abschnitte = [("Fehlende Unterlagen", fehlt),
+                  ("Fehlbuchungen / privat (nicht steuerrelevant)", fehlbuchungen),
+                  ("Kontoumsätze ohne Beleg, kein Beleg nötig", ohne_beleg)]
+    if fehlt or fehlbuchungen:
+        zeilen = [f"Unterlagen {monat:02d}/{jahr}", ""]
+        for titel, eintraege in abschnitte:
+            if eintraege:
+                zeilen += [titel, "-" * len(titel), *(f"- {e}" for e in eintraege), ""]
+        z.schreiben("INFO.txt", "\r\n".join(zeilen))
     return z.fertig()
+
+
+def _umsatz(u: Umsatz) -> str:
+    betrag = f"{u.betrag:.2f}".replace(".", ",")
+    return f"Kontoumsatz {u.buchungsdatum:%d.%m.%Y} {u.partner or u.verwendungszweck} {betrag} €"
 
 
 def _monatsdokumente(pl: PaperlessClient, tag: str, jahr: int, monat: int, bis: date,

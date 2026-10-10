@@ -163,7 +163,8 @@ deren Angaben haben dann Vorrang vor Feldern und OCR-Text (Korrespondent und Zah
   (anpassbar in den Einstellungen), deren Titel oder Text den Monat nennt, z. B. „09/2026“, „September 2026“ oder
   „UStVA_2026_-_September“. Ein Protokoll ohne erkennbaren Monat zählt zum Vormonat, wenn es bis zum 15. erstellt wurde.
   Der Kontoauszug muss bis zum 15. des Folgemonats datiert sein, das Protokoll bis Ende des übernächsten Monats.
-- die beiden CSV-Exporte und `FEHLT.txt` mit allem, was nicht gefunden wurde (auch Kontoumsätze ohne Beleg)
+- die beiden CSV-Exporte und, falls nötig, `INFO.txt`: was fehlt (auch Kontoumsätze ohne Beleg), als
+  „Fehlbuchung/privat“ markierte Kontoumsätze mit Notiz und die übrigen Umsätze, die keinen Beleg brauchen
 
 ## Einstellungen und Anmeldung
 

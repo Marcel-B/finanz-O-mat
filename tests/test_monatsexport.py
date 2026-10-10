@@ -62,6 +62,10 @@ def unterlagen(tmp_path, db, umrechner):
     umsaetze = [
         Umsatz(buchungsdatum=date(2026, 9, 4), betrag=D("-64.90"), partner="Telekom", beleg_id=belege[2].id),
         Umsatz(buchungsdatum=date(2026, 9, 30), betrag=D("-3.80"), partner="Kiosk"),
+        Umsatz(buchungsdatum=date(2026, 9, 15), betrag=D("-42.00"), partner="Rewe", ignoriert=True,
+               ignoriert_grund="Fehlbuchung/privat: privater Einkauf, Karte verwechselt"),
+        Umsatz(buchungsdatum=date(2026, 9, 29), betrag=D("-812.40"), partner="Finanzamt", ignoriert=True,
+               ignoriert_grund="Stichwort „Finanzamt“"),
     ]
     bericht = berechnen(belege, 2026, 9, umrechner)
     inhalt = monatsexport.monats_zip(cfg, bericht, umsaetze, {b.id: b for b in belege},
@@ -74,8 +78,8 @@ def test_zip_enthaelt_belege_auszug_und_protokoll(unterlagen):
     assert namen == [
         "Belege/2026-09-06_Eingang_STRATO_10,00EUR.pdf",
         "Belege/2026-09-21_Eingang_Hetzner-Online-GmbH_16,89EUR.pdf",
-        "FEHLT.txt",
         "Finanzamt/2026-10-09_Übertragungsprotokoll.pdf",
+        "INFO.txt",
         "Kontoauszug/2026-09-30_Kontoauszug-N26.pdf",
         "UStVA-2026-09-Belege.csv",
         "UStVA-2026-09-Kennzahlen.csv",
@@ -84,11 +88,15 @@ def test_zip_enthaelt_belege_auszug_und_protokoll(unterlagen):
     assert unterlagen.read("Finanzamt/2026-10-09_Übertragungsprotokoll.pdf") == b"PDF 40"
 
 
-def test_fehlt_liste(unterlagen):
-    fehlt = unterlagen.read("FEHLT.txt").decode()
+def test_info_datei(unterlagen):
+    info = unterlagen.read("INFO.txt").decode()
+    fehlt, rest = info.split("Fehlbuchungen / privat", 1)
     assert "Bäckerei-Café" in fehlt and "manuell angelegt" in fehlt
     assert "Telekom" in fehlt and "nicht mehr vorhanden" in fehlt  # Vormonat, über den Kontoumsatz dabei
-    assert "Kontoumsatz 30.09.2026 Kiosk -3,80 € ohne Beleg" in fehlt
+    assert "- Kontoumsatz 30.09.2026 Kiosk -3,80 € ohne Beleg" in fehlt
+    fehlbuchungen, ohne_beleg = rest.split("kein Beleg nötig", 1)
+    assert "- Kontoumsatz 15.09.2026 Rewe -42,00 €: privater Einkauf, Karte verwechselt" in fehlbuchungen
+    assert "- Kontoumsatz 29.09.2026 Finanzamt -812,40 € (Stichwort „Finanzamt“)" in ohne_beleg
 
 
 @pytest.mark.parametrize(("text", "erwartet"), [
@@ -113,7 +121,7 @@ def test_endpunkt_ohne_paperless(db, umrechner):
     r = client.get("/api/export/2026-09/unterlagen.zip")
     assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
     assert 'filename="Unterlagen-2026-09.zip"' in r.headers["content-disposition"]
-    fehlt = zipfile.ZipFile(io.BytesIO(r.content)).read("FEHLT.txt").decode()
+    fehlt = zipfile.ZipFile(io.BytesIO(r.content)).read("INFO.txt").decode()
     assert "Kontoauszug: Paperless ist nicht eingerichtet" in fehlt
     assert client.get("/api/export/2026-09/kennzahlen.csv").status_code == 200
 
