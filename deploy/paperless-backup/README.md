@@ -97,6 +97,7 @@ Ein Fehler steht immer im Journal. Damit er auch auffällt, eins oder beides in 
 - `HC_PING_URL`: eine Prüfung bei [healthchecks.io](https://healthchecks.io) (kostenlos) mit Zeitplan „täglich“.
   Das Skript meldet Start, Erfolg und Fehler (mit den letzten Zeilen des Protokolls). Vorteil: Es meldet sich auch,
   wenn die Sicherung gar nicht läuft, z. B. weil der Container aus ist. Healthchecks schickt dann eine Mail.
+  Statt healthchecks.io geht auch die Push-URL eines Uptime-Kuma-Monitors (`https://<kuma>/api/push/<token>…`).
 - `NTFY_URL`: ein [ntfy](https://ntfy.sh)-Thema, z. B. `https://ntfy.sh/<langer-zufälliger-name>`, für eine
   Push-Nachricht aufs Handy bei Fehlern (`NTFY_BEI_ERFOLG="ja"` auch bei Erfolg, `NTFY_TOKEN` für ein geschütztes Thema).
 

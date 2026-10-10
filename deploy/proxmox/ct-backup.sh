@@ -5,13 +5,15 @@
 #   finanz-o-mat-backup einrichten       Nextcloud-Zugang und Backup-Passwort festlegen, erstes Backup
 #   finanz-o-mat-backup [jetzt]          Backup erstellen, alte Stände aufräumen (läuft täglich per Timer)
 #   finanz-o-mat-backup liste            vorhandene Backups anzeigen
+#   finanz-o-mat-backup ueberwachung [URL|aus]
+#                                        Ping-URL (z. B. healthchecks.io) für die Überwachung setzen oder entfernen
 #   finanz-o-mat-backup wiederherstellen [ID] [--mit-konfig] [-y]
 #                                        Datenbank aus einem Backup zurückspielen (ohne ID: neuestes)
 #
 # Zugangsdaten liegen nur für root lesbar unter /etc/finanz-o-mat/ (backup.env, backup.passwort, rclone.conf).
 # Ohne das Backup-Passwort lassen sich die Backups nicht entschlüsseln: es gehört zusätzlich in den Passwortmanager.
-# Ohne Rückfragen einrichten: BACKUP_URL, BACKUP_BENUTZER, BACKUP_APP_PASSWORT, optional BACKUP_ORDNER und
-# BACKUP_PASSWORT (für ein vorhandenes Backup) als Umgebungsvariablen setzen.
+# Ohne Rückfragen einrichten: BACKUP_URL, BACKUP_BENUTZER, BACKUP_APP_PASSWORT, optional BACKUP_ORDNER,
+# BACKUP_PASSWORT (für ein vorhandenes Backup) und HC_PING_URL als Umgebungsvariablen setzen.
 
 set -Eeuo pipefail
 
@@ -38,6 +40,7 @@ abbruch() {
     if [[ -n ${BACKUP_LAEUFT:-} ]]; then
         unset BACKUP_LAEUFT
         status_schreiben fehler "$*" || true
+        melde fehler "$*"
     fi
     exit 1
 }
@@ -109,6 +112,42 @@ os.replace(ziel + ".neu", ziel)
 PY
 }
 
+melde() {
+    # melde start|ok|fehler|test [Text]: Ping-URL von healthchecks.io oder Push-Monitor von Uptime Kuma.
+    # Die Überwachung schlägt auch an, wenn gar kein Backup läuft (Container aus, Timer kaputt).
+    local art=$1 text=${2:-} url=${HC_PING_URL:-}
+    [[ -n $url ]] || return 0
+    if [[ $url == */api/push/* ]]; then
+        # Uptime Kuma kennt nur up/down, der Text geht als msg mit
+        [[ $art == start ]] && return 0
+        url="${url%%\?*}?status=$([[ $art == fehler ]] && echo down || echo up)"
+        curl -fsS -m 15 --retry 3 -o /dev/null -G --data-urlencode "msg=${text:0:200}" "$url" \
+            || warn "Ping an die Überwachung fehlgeschlagen"
+    else
+        case $art in
+            start) url=${url%/}/start ;;
+            fehler) url=${url%/}/fail ;;
+            test) url=${url%/}/log ;;
+            *) url=${url%/} ;;
+        esac
+        curl -fsS -m 15 --retry 3 -o /dev/null --data-raw "$text" "$url" \
+            || warn "Ping an die Überwachung fehlgeschlagen"
+    fi
+    return 0
+}
+
+backup_env_schreiben() {
+    umask 077
+    printf 'BACKUP_URL=%q\nBACKUP_ORDNER=%q\nHC_PING_URL=%q\n' "$BACKUP_URL" "$BACKUP_ORDNER" "${HC_PING_URL:-}" \
+        >"$BACKUP_ENV"
+    chmod 600 "$BACKUP_ENV"
+    umask 022
+}
+
+ping_url_pruefen() {
+    [[ -z ${HC_PING_URL:-} || $HC_PING_URL == http*://* ]] || abbruch "Ping-URL bitte mit https://… angeben"
+}
+
 pakete() {
     command -v restic >/dev/null && command -v rclone >/dev/null && return 0
     info "Installiere restic und rclone"
@@ -134,9 +173,11 @@ frage() {
 einrichten() {
     root_pruefen
     pakete
-    local webdav kodiert neues_passwort="" geschrieben="" repo_da=""
+    local webdav kodiert neues_passwort="" geschrieben="" repo_da="" alter_ping=""
     if [[ -f $BACKUP_ENV ]]; then
         info "Backup ist schon eingerichtet ($(sed -n 's/^BACKUP_URL=//p' "$BACKUP_ENV")), Werte werden überschrieben"
+        # shellcheck source=/dev/null
+        alter_ping=$(. "$BACKUP_ENV"; echo "${HC_PING_URL:-}")
     fi
     BACKUP_URL=${BACKUP_URL:-}
     BACKUP_BENUTZER=${BACKUP_BENUTZER:-}
@@ -150,6 +191,14 @@ einrichten() {
         fi
         BACKUP_ORDNER=${BACKUP_ORDNER:-Backups/finanz-o-mat}
     fi
+    if [[ -z ${HC_PING_URL+x} ]]; then
+        HC_PING_URL=$alter_ping
+        if [[ -t 0 ]]; then
+            read -r -p "Ping-URL für Überwachung, z. B. https://hc-ping.com/… [${alter_ping:-leer = keine}]: " HC_PING_URL
+            HC_PING_URL=${HC_PING_URL:-$alter_ping}
+        fi
+    fi
+    ping_url_pruefen
     BACKUP_URL=${BACKUP_URL%/}
     [[ $BACKUP_URL == http*://* ]] || BACKUP_URL="https://$BACKUP_URL"
     # Nextcloud-WebDAV liegt unter /remote.php/dav/files/<Benutzer>; eine komplette WebDAV-Adresse bleibt, wie sie ist
@@ -195,8 +244,7 @@ einrichten() {
         neues_passwort=1
     fi
     chmod 600 "$PASSWORT_DATEI"
-    printf 'BACKUP_URL=%q\nBACKUP_ORDNER=%q\n' "$BACKUP_URL" "$BACKUP_ORDNER" >"$BACKUP_ENV"
-    umask 022
+    backup_env_schreiben
 
     repo_umgebung
     if restic cat config >/dev/null 2>&1; then
@@ -255,6 +303,7 @@ jetzt() {
     repo_umgebung
     export BACKUP_LAEUFT=1
     status_schreiben laeuft
+    melde start
     info "Erstelle Backup nach $BACKUP_ORDNER"
     inhalt_vorbereiten
     local zusammenfassung
@@ -268,7 +317,30 @@ jetzt() {
     rm -rf "${INHALT:?}"/*
     unset BACKUP_LAEUFT
     status_schreiben ok
+    melde ok "Backup nach $BACKUP_ORDNER fertig, $(python3 -c 'import json, sys; print(len(json.loads(sys.argv[1])))' \
+        "$STAENDE" 2>/dev/null || echo ?) Stände"
     ok "Backup fertig"
+}
+
+ueberwachung() {
+    root_pruefen
+    repo_umgebung
+    case ${1:-} in
+        "")
+            HC_PING_URL=""
+            frage HC_PING_URL "Ping-URL für Überwachung, z. B. https://hc-ping.com/… (leer = aus)"
+            ;;
+        aus) HC_PING_URL="" ;;
+        *) HC_PING_URL=$1 ;;
+    esac
+    ping_url_pruefen
+    backup_env_schreiben
+    if [[ -z $HC_PING_URL ]]; then
+        ok "Überwachung aus"
+        return 0
+    fi
+    melde test "Überwachung eingerichtet"
+    ok "Überwachung an: jedes Backup meldet sich bei $HC_PING_URL (sofort testen: finanz-o-mat-backup)"
 }
 
 liste() {
@@ -325,8 +397,9 @@ main() {
         einrichten) einrichten ;;
         jetzt) jetzt ;;
         liste) liste ;;
+        ueberwachung) ueberwachung "${2:-}" ;;
         wiederherstellen) shift; wiederherstellen "$@" ;;
-        *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+        *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
     esac
 }
 

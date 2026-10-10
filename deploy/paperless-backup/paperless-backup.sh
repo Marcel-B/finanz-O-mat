@@ -186,14 +186,20 @@ exportieren() {
 # --- Benachrichtigung -------------------------------------------------------------------------------------------
 
 melde() {
-    # melde start|ok|fehler [Text]: healthchecks.io-artige Ping-URL und/oder ntfy
-    local art=$1 text=${2:-} pfad=""
+    # melde start|ok|fehler [Text]: Ping-URL (healthchecks.io oder Push-Monitor von Uptime Kuma) und/oder ntfy
+    local art=$1 text=${2:-} url=${HC_PING_URL:-}
     # shellcheck disable=SC2001 # Farbcodes per Regex entfernen
     text=$(sed 's/\x1b\[[0-9;]*m//g' <<<"$text")
-    case $art in start) pfad=/start ;; fehler) pfad=/fail ;; esac
-    if [[ -n ${HC_PING_URL:-} ]]; then
-        curl -fsS -m 15 --retry 3 -o /dev/null --data-raw "$text" "${HC_PING_URL%/}$pfad" \
-            || warn "Ping an HC_PING_URL fehlgeschlagen"
+    if [[ $url == */api/push/* ]]; then
+        # Uptime Kuma kennt nur up/down, der Text geht als msg mit
+        if [[ $art != start ]]; then
+            url="${url%%\?*}?status=$([[ $art == fehler ]] && echo down || echo up)"
+            curl -fsS -m 15 --retry 3 -o /dev/null -G --data-urlencode "msg=$(tail -n 1 <<<"$text" | cut -c1-200)" \
+                "$url" || warn "Ping an HC_PING_URL fehlgeschlagen"
+        fi
+    elif [[ -n $url ]]; then
+        case $art in start) url=${url%/}/start ;; fehler) url=${url%/}/fail ;; *) url=${url%/} ;; esac
+        curl -fsS -m 15 --retry 3 -o /dev/null --data-raw "$text" "$url" || warn "Ping an HC_PING_URL fehlgeschlagen"
     fi
     if [[ -n ${NTFY_URL:-} ]] && { [[ $art == fehler ]] || { [[ $art == ok && ${NTFY_BEI_ERFOLG:-nein} == ja ]]; }; }; then
         local kopf=(-H "Title: Paperless-Backup $([[ $art == ok ]] && echo erfolgreich || echo fehlgeschlagen) ($(hostname))")
