@@ -58,6 +58,10 @@ def unterlagen(tmp_path, db, umrechner):
               quelle_link="eingang/fehlt.pdf"),
         Beleg(art=Art.EINGANG, steuerfall=Steuerfall.VORSTEUER_INLAND, rechnungsdatum=date(2026, 9, 2),
               netto=D("10"), steuer=D("1.90"), partner="Bäckerei / Café"),
+        # Zählt in der Voranmeldung 09/2026, abgebucht wird erst im Oktober
+        Beleg(art=Art.EINGANG, steuerfall=Steuerfall.VORSTEUER_INLAND, rechnungsdatum=date(2026, 9, 22),
+              netto=D("52.85"), steuer=D("10.04"), partner="Telekom Deutschland GmbH", quelle="paperless",
+              quelle_ref="22"),
     ]
     belege = [db.beleg_anlegen(b) for b in neu]
     umsaetze = [
@@ -68,9 +72,12 @@ def unterlagen(tmp_path, db, umrechner):
         Umsatz(buchungsdatum=date(2026, 9, 29), betrag=D("-812.40"), partner="Finanzamt", ignoriert=True,
                ignoriert_grund="Stichwort „Finanzamt“"),
     ]
+    oktober = [Umsatz(buchungsdatum=date(2026, 10, 1), betrag=D("-62.89"), partner="Telekom",
+                      beleg_id=belege[4].id)]
     bericht = berechnen(belege, 2026, 9, umrechner)
+    assert belege[4].id in {z.beleg.id for z in bericht.zeilen}
     inhalt = monatsexport.monats_zip(cfg, bericht, umsaetze, {b.id: b for b in belege},
-                                     httpx.Client(transport=httpx.MockTransport(handler)))
+                                     httpx.Client(transport=httpx.MockTransport(handler)), andere_umsaetze=oktober)
     return zipfile.ZipFile(io.BytesIO(inhalt))
 
 
@@ -79,6 +86,7 @@ def test_zip_enthaelt_belege_auszug_und_protokoll(unterlagen):
     assert namen == [
         "Belege/2026-09-06_Eingang_STRATO_10,00EUR.pdf",
         "Belege/2026-09-21_Eingang_Hetzner-Online-GmbH_16,89EUR.pdf",
+        "Belege/2026-09-22_Eingang_Telekom-Deutschland-GmbH_62,89EUR.pdf",
         "Finanzamt/2026-10-09_Übertragungsprotokoll.pdf",
         "INFO.txt",
         "Kontoauszug/2026-09-30_Kontoauszug-N26.pdf",
@@ -95,6 +103,8 @@ def test_info_datei(unterlagen):
     assert "Bäckerei-Café" in fehlt and "manuell angelegt" in fehlt
     assert "Telekom" in fehlt and "nicht mehr vorhanden" in fehlt  # Vormonat, über den Kontoumsatz dabei
     assert "- Kontoumsatz 30.09.2026 Kiosk -3,80 € ohne Beleg" in fehlt
+    assert ("In der Voranmeldung enthalten, aber in einem anderen Monat abgebucht" in fehlt
+            and "- 2026-09-22_Eingang_Telekom-Deutschland-GmbH_62,89EUR: abgebucht am 01.10.2026" in fehlt)
     fehlbuchungen, ohne_beleg = rest.split("kein Beleg nötig", 1)
     assert "- Kontoumsatz 15.09.2026 Rewe -42,00 €: privater Einkauf, Karte verwechselt" in fehlbuchungen
     assert "- Kontoumsatz 29.09.2026 Finanzamt -812,40 € (Stichwort „Finanzamt“)" in ohne_beleg

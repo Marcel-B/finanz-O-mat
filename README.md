@@ -166,7 +166,8 @@ Paperless selbst nächtlich verschlüsselt in eine Nextcloud sichern: [deploy/pa
   „UStVA_2026_-_September“. Ein Protokoll ohne erkennbaren Monat zählt zum Vormonat, wenn es bis zum 15. erstellt wurde.
   Der Kontoauszug muss bis zum 15. des Folgemonats datiert sein, das Protokoll bis Ende des übernächsten Monats.
 - die beiden CSV-Exporte und, falls nötig, `INFO.txt`: was fehlt (auch Kontoumsätze ohne Beleg), als
-  „Fehlbuchung/privat“ markierte Kontoumsätze mit Notiz und die übrigen Umsätze, die keinen Beleg brauchen
+  Belege der Voranmeldung, die in einem anderen Monat abgebucht wurden, als „Fehlbuchung/privat“ markierte
+  Kontoumsätze mit Notiz und die übrigen Umsätze, die keinen Beleg brauchen
 
 ## Einstellungen und Anmeldung
 
