@@ -37,6 +37,28 @@ interface Formular {
 const form = reactive<Formular>(leer());
 const fehler = ref("");
 const speichert = ref(false);
+const liestNeu = ref(false);
+const neuLesbar = computed(() => !!props.beleg?.pruefen && ["verzeichnis", "paperless"].includes(props.beleg.quelle));
+
+async function neuEinlesen() {
+  const b = props.beleg;
+  if (!b) return;
+  liestNeu.value = true;
+  fehler.value = "";
+  try {
+    const r = await api.belegeNeuEinlesen([b.id]);
+    if (r.fehler.length) {
+      fehler.value = r.fehler.join(" ");
+      return;
+    }
+    sichtbar.value = false;
+    emit("gespeichert");
+  } catch (e) {
+    fehler.value = (e as Error).message;
+  } finally {
+    liestNeu.value = false;
+  }
+}
 
 function leer(): Formular {
   return {
@@ -205,6 +227,16 @@ function loeschen() {
     </form>
     <template #footer>
       <Button v-if="beleg" label="Löschen" icon="pi pi-trash" severity="danger" text @click="loeschen" />
+      <Button
+        v-if="neuLesbar"
+        label="Neu einlesen"
+        icon="pi pi-refresh"
+        severity="secondary"
+        text
+        :loading="liestNeu"
+        v-tooltip.top="'Liest den Beleg erneut aus der Quelle. Änderungen in diesem Dialog gehen dabei verloren.'"
+        @click="neuEinlesen"
+      />
       <span class="flex-1" />
       <Button label="Abbrechen" severity="secondary" text @click="sichtbar = false" />
       <Button label="Speichern und als geprüft markieren" icon="pi pi-check" :loading="speichert" @click="speichern" />

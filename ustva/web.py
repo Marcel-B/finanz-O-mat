@@ -19,7 +19,7 @@ from .config import Config
 from .db import Datenbank
 from .fristen import naechste_frist
 from .models import Beleg
-from .quellen import ImportErgebnis, paperless, verzeichnis
+from .quellen import ImportErgebnis, neu_einlesen, paperless, verzeichnis
 from .steuerfaelle import KENNZAHLEN, STEUERFAELLE, Art, Steuerfall
 from .waehrung import Umrechner
 
@@ -112,6 +112,10 @@ class PasswortEingabe(BaseModel):
 class ImportAnfrage(BaseModel):
     quelle: str = "alle"  # alle | verzeichnis | paperless | konto
     zeitraum: str
+
+
+class NeuEinlesenAnfrage(BaseModel):
+    ids: list[int] | None = None  # None: alle ungeprüften Belege aus Verzeichnis und Paperless
 
 
 def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner: Umrechner | None = None,
@@ -262,6 +266,13 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
                     quelle_link=alt.quelle_link, hinweise=alt.hinweise, erechnung=alt.erechnung,
                     id=beleg_id)
         return db.beleg_aktualisieren(neu).to_dict()
+
+    @app.post("/api/belege/neu-einlesen")
+    def belege_neu_einlesen(anfrage: NeuEinlesenAnfrage):
+        ergebnis = neu_einlesen.neu_einlesen(db, aktuell(), anfrage.ids)
+        if ergebnis.aktualisiert or ergebnis.neu:
+            bank.abgleich_ausfuehren(db)  # geänderte Beträge können jetzt zu Umsätzen passen
+        return ergebnis.to_dict()
 
     @app.post("/api/belege/{beleg_id}/geprueft")
     def beleg_geprueft(beleg_id: int):

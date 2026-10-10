@@ -80,3 +80,32 @@ A1 = Umsatzsteuer 19 %
 Der Rechnungsbetrag wird am 10. September von Ihrem Konto abgebucht.
 USt-IdNr. DE 814645262
 """
+
+# Hetzner, Text wie ihn Paperless oder pdftotext liefern kann: in Zeilen, jede Zelle für sich
+# oder spaltenweise. Der Fußtext enthält eine ganze Zahl, die kein Betrag ist.
+_HETZNER_KOPF = """Hetzner Online GmbH
+Industriestr. 25
+91710 Gunzenhausen
+Rechnungsdatum: 21.09.2026
+Rechnung 087001217350
+Gesamtübersicht
+"""
+_HETZNER_FUSS = """Der Betrag wird innerhalb von 10 Tagen per Lastschrift eingezogen.
+Hetzner Online GmbH Registergericht Ansbach HRB 6089 USt-IdNr. DE812871812
+"""
+HETZNER = {
+    "zeilen": _HETZNER_KOPF + """Service Leistungs-
+zeitraum Netto Steuer Brutto
+Storage 08/2026 14,19 € 2,70 €A1 16,89 €
+Summe 14,19 € 2,70 € 16,89 €
+Steuerkennzeichen Steuersatz Netto Steuer Brutto
+A1 19 % 14,19 € 2,70 € 16,89 €
+Summe 14,19 € 2,70 € 16,89 €
+""" + _HETZNER_FUSS,
+    "zellen": _HETZNER_KOPF + "\n".join(
+        "Service|Leistungs-|zeitraum|Netto|Steuer|Brutto|Storage|08/2026|14,19 €|2,70 €A1|16,89 €|Summe|14,19 €|"
+        "2,70 €|16,89 €|Steuerkennzeichen|Steuersatz|Netto|Steuer|Brutto|A1|19 %|14,19 €|2,70 €|16,89 €|Summe|"
+        "14,19 €|2,70 €|16,89 €".split("|")) + "\n" + _HETZNER_FUSS,
+    "spalten": _HETZNER_KOPF + "Netto\n14,19 €\n14,19 €\nSteuer\n2,70 €A1\n2,70 €\nBrutto\n16,89 €\n16,89 €\n19 %\n"
+    + _HETZNER_FUSS,
+}

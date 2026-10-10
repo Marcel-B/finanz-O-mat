@@ -25,6 +25,7 @@ const bericht = ref<Bericht | null>(null);
 const offen = ref<Beleg[]>([]);
 const laedt = ref(false);
 const liestEin = ref(false);
+const liestNeu = ref(false);
 const dialogBeleg = ref<Beleg | null>(null);
 const dialogOffen = ref(false);
 
@@ -78,6 +79,24 @@ async function einlesen() {
     meldeFehler(e);
   } finally {
     liestEin.value = false;
+  }
+}
+
+const ausQuelle = (b: Beleg) => b.pruefen && (b.quelle === "verzeichnis" || b.quelle === "paperless");
+const neuLesbar = computed(() => [...(bericht.value?.belege ?? []), ...offen.value].filter(ausQuelle).length);
+
+async function neuEinlesen() {
+  liestNeu.value = true;
+  try {
+    const r = await api.belegeNeuEinlesen();
+    const teile = [`${r.aktualisiert} aktualisiert`, r.neu ? `${r.neu} neu` : ""].filter(Boolean);
+    toast.add({ severity: "success", summary: "Neu eingelesen", detail: teile.join(" · "), life: 4000 });
+    for (const f of r.fehler) toast.add({ severity: "warn", summary: "Hinweis", detail: f, life: 8000 });
+    await laden();
+  } catch (e) {
+    meldeFehler(e);
+  } finally {
+    liestNeu.value = false;
   }
 }
 
@@ -209,6 +228,18 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
   </div>
 
   <KarteBox v-if="bericht" titel="Belege im Zeitraum">
+    <template v-if="neuLesbar" #aktionen>
+      <Button
+        label="Ungeprüfte neu einlesen"
+        icon="pi pi-refresh"
+        severity="secondary"
+        size="small"
+        outlined
+        :loading="liestNeu"
+        v-tooltip.left="'Liest alle noch nicht geprüften Belege erneut aus Verzeichnis und Paperless, z. B. nach einem Update der Texterkennung.'"
+        @click="neuEinlesen"
+      />
+    </template>
     <DataTable
       :value="bericht.belege"
       :loading="laedt"
