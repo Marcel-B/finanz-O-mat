@@ -142,7 +142,8 @@ werden automatisch übergangen (`BANK_IGNORIEREN`).
 
 ## Paperless-ngx
 
-1. In Paperless unter „Profil“ ein API-Token erzeugen und mit der URL in `PAPERLESS_URL` und `PAPERLESS_TOKEN` eintragen.
+1. In Paperless unter „Profil“ ein API-Token erzeugen und in der App unter „Einstellungen“ mit der URL eintragen
+   (oder in `PAPERLESS_URL` und `PAPERLESS_TOKEN`). „Verbindung testen“ prüft beides.
 2. Rechnungen mit dem Tag oder Dokumenttyp `Ausgangsrechnung` bzw. `Eingangsrechnung` versehen
    (Namen anpassbar über `PAPERLESS_TAGS_AUSGANG` und `PAPERLESS_TAGS_EINGANG`, mehrere mit Komma).
 3. Optional benutzerdefinierte Felder anlegen; sie haben Vorrang vor dem OCR-Text:
@@ -151,6 +152,27 @@ werden automatisch übergangen (`BANK_IGNORIEREN`).
 Eingelesen werden Dokumente, deren Datum im gewählten Monat oder in den beiden Vormonaten liegt.
 Bei PDF-Dokumenten lädt die App die Originaldatei und liest eine eingebettete ZUGFeRD-/Factur-X-Rechnung aus;
 deren Angaben haben dann Vorrang vor Feldern und OCR-Text (Korrespondent und Zahlungsdatum aus Paperless bleiben).
+
+## Einstellungen und Anmeldung
+
+Im Reiter „Einstellungen“ lassen sich Paperless (URL, API-Token, Tags), die eigene USt-IdNr. und das Bundesland
+ändern. Diese Werte liegen in der Datenbank und haben Vorrang vor der `.env`-Datei; ein geleertes Feld lässt wieder
+den Wert aus der `.env` gelten. Das Paperless-Token wird nach dem Speichern nicht mehr angezeigt.
+
+Dort lässt sich auch das Passwort ändern oder, falls noch keins gesetzt ist, ein erstes festlegen. Gespeichert wird
+nur ein PBKDF2-Hash; er gilt statt `APP_BENUTZER`/`APP_PASSWORT`. Passwort vergessen:
+
+```sh
+python -m ustva passwort                  # neues Passwort setzen (fragt zweimal)
+python -m ustva passwort --zuruecksetzen  # wieder APP_BENUTZER/APP_PASSWORT aus der .env verwenden
+```
+
+Der laufende Dienst übernimmt die Änderung sofort. Im Proxmox-Container:
+
+```sh
+runuser -u finanzomat -- env DATENBANK=/var/lib/finanz-o-mat/finanzomat.sqlite \
+  /opt/finanz-o-mat/.venv/bin/python -m ustva passwort
+```
 
 ## Annahmen und Grenzen
 
