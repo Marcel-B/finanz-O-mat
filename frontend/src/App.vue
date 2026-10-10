@@ -10,6 +10,7 @@ import Toast from "primevue/toast";
 import { onMounted, ref } from "vue";
 
 import { api, type Status, type Steuerfall } from "./api";
+import AdressbuchAnsicht from "./components/AdressbuchAnsicht.vue";
 import BackupHinweis from "./components/BackupHinweis.vue";
 import EinstellungenAnsicht from "./components/EinstellungenAnsicht.vue";
 import UebersichtAnsicht from "./components/UebersichtAnsicht.vue";
@@ -75,6 +76,7 @@ onMounted(async () => {
       <TabList>
         <Tab value="voranmeldung"><i class="pi pi-file-check mr-2" />Voranmeldung</Tab>
         <Tab value="uebersicht"><i class="pi pi-chart-bar mr-2" />Übersicht</Tab>
+        <Tab value="adressbuch"><i class="pi pi-address-book mr-2" />Adressbuch</Tab>
         <Tab value="einstellungen"><i class="pi pi-cog mr-2" />Einstellungen</Tab>
       </TabList>
       <TabPanels class="!bg-transparent !px-0">
@@ -83,6 +85,9 @@ onMounted(async () => {
         </TabPanel>
         <TabPanel value="uebersicht">
           <UebersichtAnsicht v-if="tab === 'uebersicht'" :status="status" />
+        </TabPanel>
+        <TabPanel value="adressbuch">
+          <AdressbuchAnsicht v-if="tab === 'adressbuch'" />
         </TabPanel>
         <TabPanel value="einstellungen">
           <EinstellungenAnsicht v-if="tab === 'einstellungen'" @geaendert="statusLaden" />

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import httpx
 
+from ..adressbuch import anschriften_uebernehmen
 from ..config import Config
 from ..db import Datenbank
 from ..models import Beleg
@@ -91,6 +92,7 @@ def _aus_verzeichnis(cfg: Config, alt: Beleg, ref: str) -> list[Beleg]:
 def _uebernehmen(db: Datenbank, alte: list[Beleg], neue: list[Beleg], ergebnis: NeuEingelesen,
                  nur_vorhandene: bool) -> None:
     nach_ref = {b.quelle_ref: b for b in alte}
+    anschriften_uebernehmen(db, neue)
     for neu in neue:
         alt = nach_ref.get(neu.quelle_ref)
         if alt is None:

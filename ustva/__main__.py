@@ -220,6 +220,15 @@ def sevdesk_befehl(args, cfg: Config) -> int:
     if not args.trocken and not args.ohne_paperless:
         print(f"Paperless: {erg.hochgeladen} Dateien hochgeladen"
               + (f", {erg.wartet} noch in Verarbeitung (später einfach erneut starten)" if erg.wartet else ""))
+    if isinstance(s, Export):
+        from . import adressbuch
+
+        kontakte = s.adressbuch()
+        if args.trocken:
+            print(f"Adressbuch: {len(kontakte)} Kontakte aus sevDesk würden übernommen bzw. ergänzt")
+        else:
+            a = adressbuch.uebernehmen(db, kontakte)
+            print(f"Adressbuch: {a.neu} Kontakte neu, {a.ergaenzt} ergänzt")
     for grund, anzahl in sorted(erg.uebersprungen.items()):
         print(f"Nicht übernommen: {anzahl} × {grund}")
     print()

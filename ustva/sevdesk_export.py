@@ -25,7 +25,9 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+from .adressbuch import land_code
 from .extraktion import betrag_parsen
+from .models import Kontakt
 from .sevdesk import EU_LAENDER, STEUERREGELN, Kandidat, Regel, SevdeskFehler, _belege, _datum
 from .steuerfaelle import Art, Steuerfall
 
@@ -142,6 +144,7 @@ class Export:
     beleg_dateien: dict[tuple[str, str], list[tuple[Path, str]]]  # (Datum, Nummer) -> [(Datei, Richtung)]
     rechnung_dateien: dict[str, list[Path]]
     erstellt: str = ""
+    kontakt_zeilen: list[dict[str, str]] = field(default_factory=list)
 
     @classmethod
     def ist_export(cls, ordner: Path) -> bool:
@@ -154,8 +157,9 @@ class Export:
         belege = belege_lesen(ordner / "voucher.csv") if (ordner / "voucher.csv").exists() else []
         rechnungen = _csv(ordner / "invoices.csv") if (ordner / "invoices.csv").exists() else []
         kontakte: dict[str, dict[str, str]] = {}
-        if (ordner / "contacts.csv").exists():
-            for k in _csv(ordner / "contacts.csv"):
+        zeilen = _csv(ordner / "contacts.csv") if (ordner / "contacts.csv").exists() else []
+        if zeilen:
+            for k in zeilen:
                 name = k.get("Organisation") or " ".join(t for t in (k.get("Vorname"), k.get("Nachname")) if t)
                 if name:
                     kontakte.setdefault(name.lower(), k)
@@ -172,7 +176,7 @@ class Export:
                 rechnung_dateien.setdefault(_norm(m[2]), []).append(pfad)
         quellen = [p for p in (ordner / "voucher.csv", ordner / "invoices.csv") if p.exists()]
         erstellt = max(datetime.fromtimestamp(p.stat().st_mtime) for p in quellen).strftime("%d.%m.%Y")
-        return cls(ordner, belege, rechnungen, kontakte, beleg_dateien, rechnung_dateien, erstellt)
+        return cls(ordner, belege, rechnungen, kontakte, beleg_dateien, rechnung_dateien, erstellt, zeilen)
 
     # --- Belege ---------------------------------------------------------------------------------
 
@@ -311,6 +315,48 @@ class Export:
             if not k.grund and not k.belege:
                 k.grund = "Ohne Beträge"
         return ergebnis
+
+    # --- Adressbuch -----------------------------------------------------------------------------
+
+    def adressbuch(self) -> list[Kontakt]:
+        """Kunden und Lieferanten aus contacts.csv, dazu Empfänger der Rechnungen, die dort fehlen.
+
+        Ansprechpartner einer Firma stehen in sevDesk als eigene Zeile mit derselben Organisation.
+        """
+        ergebnis: dict[str, Kontakt] = {}
+        for z in self.kontakt_zeilen:
+            person = " ".join(t for t in (z.get("Vorname"), z.get("Nachname")) if t)
+            name = z.get("Organisation") or person
+            if not name:
+                continue
+            k = ergebnis.setdefault(name.lower(), Kontakt(name=name, quellen=["sevDesk"]))
+            if z.get("Organisation") and person and not k.ansprechpartner:
+                k.ansprechpartner = person
+            rolle = {"kunde": "kunde", "lieferant": "lieferant"}.get(z.get("Kategorie", "").lower(), "")
+            k.rolle = k.rolle or rolle
+            k.kundennummer = k.kundennummer or z.get("Kunden-Nr.", "")
+            k.ustid = k.ustid or z.get("UmSt.-ID", "").replace(" ", "").upper()
+            k.email = k.email or z.get("E-Mail", "")
+            k.telefon = k.telefon or z.get("Telefon", "") or z.get("Mobil", "")
+            if not k.strasse and (z.get("Strasse") or z.get("Ort")):
+                k.strasse, k.plz, k.ort = z.get("Strasse", ""), z.get("PLZ", ""), z.get("Ort", "")
+                # Ohne Anschrift setzt sevDesk „Deutschland“ auch bei ausländischen Anbietern
+                k.land = land_code(z.get("Land", ""))
+        for r in self.rechnungen:
+            adresse = r.get("Empfänger-Adresse", "").strip()
+            kontakt = self.kontakte.get(f"#{r.get('Empfänger-KdNr', '')}", {})
+            name = kontakt.get("Organisation", "")
+            if not adresse or (name and name.lower() in ergebnis and ergebnis[name.lower()].strasse):
+                continue
+            # „Firma Straße 1 12345 Ort“ in einer Zeile; ohne bekannten Namen ist die Grenze nicht sicher
+            m = re.match(rf"^{re.escape(name)}\s+(.+?)\s+(\d{{5}})\s+(.+)$", adresse) if name else None
+            if not m:
+                continue
+            k = ergebnis.setdefault(name.lower(), Kontakt(name=name, rolle="kunde", quellen=["sevDesk"]))
+            k.strasse, k.plz, k.ort = m[1], m[2], m[3]
+            k.land = land_code(r.get("Empfänger-Land", "") or "Deutschland")
+            k.kundennummer = k.kundennummer or r.get("Empfänger-KdNr", "")
+        return list(ergebnis.values())
 
     # --- Abgegebene Zahllast --------------------------------------------------------------------
 
