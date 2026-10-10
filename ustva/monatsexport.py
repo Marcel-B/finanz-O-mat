@@ -50,11 +50,29 @@ def beleg_dateiname(b: Beleg, endung: str) -> str:
     return "_".join(teile) + endung
 
 
+def _monatsnamen(monat: int) -> list[str]:
+    namen = {MONATE[monat - 1], MONTHS[monat - 1], MONATE[monat - 1][:3], MONTHS[monat - 1][:3]}
+    namen |= {"Maerz"} if monat == 3 else {"Sept"} if monat == 9 else set()
+    return sorted((n.lower() for n in namen), key=len, reverse=True)
+
+
 def monat_genannt(text: str, jahr: int, monat: int) -> bool:
-    text = text.lower()
-    muster = [f"{monat:02d}/{jahr}", f"{monat:02d}.{jahr}", f"{jahr}-{monat:02d}", f"{monat}/{jahr}",
-              f"{MONATE[monat - 1]} {jahr}", f"{MONTHS[monat - 1]} {jahr}"]
-    return any(re.search(rf"(?<!\d){re.escape(m.lower())}", text) for m in muster)
+    """Nennt der Text den Monat, als Zahl ("09/2026", "01.09.2026") oder als Name nahe beim Jahr?
+
+    "Name nahe beim Jahr" deckt "September 2026", Dateinamen wie "UStVA_2026_-_September" und
+    Formulare wie "Jahr 2026 / Zeitraum September" ab.
+    """
+    text = re.sub(r"[_\s]+", " ", text.lower())
+    zahlen = [f"{monat:02d}/{jahr}", f"{monat:02d}.{jahr}", f"{jahr}-{monat:02d}", f"{monat}/{jahr}"]
+    if any(re.search(rf"(?<!\d){re.escape(m)}", text) for m in zahlen):
+        return True
+    jahre = [m.start() for m in re.finditer(rf"(?<!\d){jahr}(?!\d)", text)]
+    namen = [m.start() for m in re.finditer(rf"\b(?:{'|'.join(map(re.escape, _monatsnamen(monat)))})\b", text)]
+    return any(abs(j - n) <= 40 for j in jahre for n in namen)
+
+
+def _anderer_monat(text: str, jahr: int, monat: int) -> bool:
+    return any(monat_genannt(text, jahr, m) for m in range(1, 13) if m != monat)
 
 
 def _endung(antwort: httpx.Response, standard: str = ".pdf") -> str:
@@ -121,15 +139,15 @@ def monats_zip(cfg: Config, bericht: Bericht, umsaetze: list[Umsatz], belege_nac
     # Fenster hält den Auszug des Folgemonats heraus, der den Schlusssaldo vom Monatsletzten nennt.
     nj, nm = monat_plus(jahr, monat, 1)
     pj, pm = monat_plus(jahr, monat, 3)
-    for tag, ordner, bezeichnung, bis in (
-        (cfg.paperless_tag_kontoauszug, "Kontoauszug", "Kontoauszug", date(nj, nm, 16)),
-        (cfg.paperless_tag_protokoll, "Finanzamt", "ELSTER-Protokoll", date(pj, pm, 1)),
+    for tag, ordner, bezeichnung, bis, mit_folgemonat in (
+        (cfg.paperless_tag_kontoauszug, "Kontoauszug", "Kontoauszug", date(nj, nm, 16), False),
+        (cfg.paperless_tag_protokoll, "Finanzamt", "ELSTER-Protokoll", date(pj, pm, 1), True),
     ):
         if pl is None or not tag:
             fehlt.append(f"{bezeichnung}: Paperless ist nicht eingerichtet, bitte selbst beilegen")
             continue
         try:
-            treffer = _monatsdokumente(pl, tag, jahr, monat, bis)
+            treffer = _monatsdokumente(pl, tag, jahr, monat, bis, mit_folgemonat)
             for dok in treffer:
                 antwort = pl.herunterladen(dok["id"])
                 tag_datum = str(dok.get("created") or "")[:10]
@@ -154,10 +172,18 @@ def monats_zip(cfg: Config, bericht: Bericht, umsaetze: list[Umsatz], belege_nac
     return z.fertig()
 
 
-def _monatsdokumente(pl: PaperlessClient, tag: str, jahr: int, monat: int, bis: date) -> list[dict]:
+def _monatsdokumente(pl: PaperlessClient, tag: str, jahr: int, monat: int, bis: date,
+                     mit_folgemonat: bool = False) -> list[dict]:
     tags = {name.lower(): tid for tid, name in pl.namen("/api/tags/").items()}
     if tag.lower() not in tags:
         return []
     kandidaten = pl.dokumente(date(jahr, monat, 1), bis, tag_id=tags[tag.lower()])
-    return [d for d in kandidaten
-            if monat_genannt(f"{d.get('title', '')}\n{d.get('content', '')}", jahr, monat)]
+    text = {d["id"]: f"{d.get('title', '')}\n{d.get('content', '')}" for d in kandidaten}
+    treffer = [d for d in kandidaten if monat_genannt(text[d["id"]], jahr, monat)]
+    if treffer or not mit_folgemonat:
+        return treffer
+    # Sonst: in der ersten Monatshälfte danach erstellt (die Abgabe bis zum 10.) und kein anderer Monat genannt
+    nj, nm = monat_plus(jahr, monat, 1)
+    von, bis_folgemonat = date(nj, nm, 1).isoformat(), date(nj, nm, 16).isoformat()
+    return [d for d in kandidaten if von <= str(d.get("created") or "")[:10] < bis_folgemonat
+            and not _anderer_monat(text[d["id"]], jahr, monat)]

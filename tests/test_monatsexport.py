@@ -94,6 +94,11 @@ def test_fehlt_liste(unterlagen):
 @pytest.mark.parametrize(("text", "erwartet"), [
     ("Zeitraum: September 2026", True), ("01.09.2026 - 30.09.2026", True), ("UStVA 09/2026", True),
     ("2026-09", True), ("Zeitraum: August 2026", False), ("19/2026", False), ("10.2026", False),
+    # ELSTER-Protokoll, wie Paperless es ablegt
+    ("117_5020_4819_Uebertragungsprotokoll_UStVA_2026_-_September", True),
+    ("Umsatzsteuer-Voranmeldung\nAllgemein\nJahr 2026\nZeitraum September\nSteuernummer 117/5020/4819", True),
+    ("Jahr 2026 Zeitraum Oktober Erstellungsdatum 10.11.2026", False),
+    ("statement_Sep_2026.pdf", True), ("Septembermond 2026", False),
 ])
 def test_monat_genannt(text, erwartet):
     assert monatsexport.monat_genannt(text, 2026, 9) is erwartet
@@ -111,3 +116,19 @@ def test_endpunkt_ohne_paperless(db, umrechner):
     fehlt = zipfile.ZipFile(io.BytesIO(r.content)).read("FEHLT.txt").decode()
     assert "Kontoauszug: Paperless ist nicht eingerichtet" in fehlt
     assert client.get("/api/export/2026-09/kennzahlen.csv").status_code == 200
+
+
+def test_protokoll_ohne_monat_im_text_aus_dem_folgemonat(db, umrechner):
+    alt = list(DOKUMENTE)
+    DOKUMENTE[:] = [
+        {"id": 50, "title": "Scan Finanzamt", "created": "2026-10-10", "tags": [3], "content": "Übertragungsprotokoll"},
+        {"id": 51, "title": "Scan Finanzamt", "created": "2026-10-11", "tags": [3], "content": "Zeitraum August 2026"},
+    ]
+    try:
+        cfg = Config(paperless_url="http://paperless.local", paperless_token="t")
+        inhalt = monatsexport.monats_zip(cfg, berechnen([], 2026, 9, umrechner), [], {},
+                                         httpx.Client(transport=httpx.MockTransport(handler)))
+    finally:
+        DOKUMENTE[:] = alt
+    namen = zipfile.ZipFile(io.BytesIO(inhalt)).namelist()
+    assert [n for n in namen if n.startswith("Finanzamt/")] == ["Finanzamt/2026-10-10_Scan-Finanzamt.pdf"]
