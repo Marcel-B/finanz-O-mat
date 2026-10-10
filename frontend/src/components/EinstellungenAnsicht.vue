@@ -12,6 +12,7 @@ import { api, type Einstellungen, type Herkunft } from "@/api";
 
 import BackupKarte from "./BackupKarte.vue";
 import KarteBox from "./KarteBox.vue";
+import TaetigkeitVorlage from "./TaetigkeitVorlage.vue";
 import VersionKarte from "./VersionKarte.vue";
 
 const emit = defineEmits<{ geaendert: [] }>();
@@ -282,6 +283,10 @@ async function passwortSpeichern() {
           <Button type="submit" label="Speichern" icon="pi pi-save" :loading="speichert" />
         </div>
       </form>
+    </KarteBox>
+
+    <KarteBox titel="Tätigkeitsnachweis" class="lg:col-span-2">
+      <TaetigkeitVorlage />
     </KarteBox>
 
     <VersionKarte />

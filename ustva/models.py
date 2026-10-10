@@ -104,6 +104,31 @@ class Umsatz:
         return d
 
 
+@dataclass
+class Taetigkeit:
+    """Ein Eintrag im Tätigkeitsnachweis: was an einem Tag für welchen Auftrag gemacht wurde."""
+
+    datum: date
+    stunden: Decimal
+    taetigkeit: str = ""
+    auftrag: str = ""
+    referenz: str = ""  # z. B. Ticketnummer
+    satz: Decimal | None = None  # Stundensatz netto; None -> Stundensatz aus der Vorlage
+    rolle: str = ""
+    ort: str = ""
+    leistungsart: str = ""
+    id: int | None = None
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        for key, value in d.items():
+            if isinstance(value, Decimal):
+                d[key] = str(value)
+            elif isinstance(value, date):
+                d[key] = value.isoformat()
+        return d
+
+
 def schluessel(name: str) -> str:
     """Name zum Wiedererkennen: ohne Groß-/Kleinschreibung und Satzzeichen."""
     return re.sub(r"[^0-9a-zäöüß]+", " ", name.lower()).strip()
