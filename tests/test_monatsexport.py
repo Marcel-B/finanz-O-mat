@@ -86,6 +86,7 @@ def test_zip_enthaelt_belege_auszug_und_protokoll(unterlagen):
     assert namen == [
         "Belege/2026-09-06_Eingang_STRATO_10,00EUR.pdf",
         "Belege/2026-09-21_Eingang_Hetzner-Online-GmbH_16,89EUR.pdf",
+        "Belege/2026-09-22_Eingang_Telekom-Deutschland-GmbH_62,89EUR.pdf",
         "Finanzamt/2026-10-09_Übertragungsprotokoll.pdf",
         "INFO.txt",
         "Kontoauszug/2026-09-30_Kontoauszug-N26.pdf",
@@ -102,9 +103,8 @@ def test_info_datei(unterlagen):
     assert "Bäckerei-Café" in fehlt and "manuell angelegt" in fehlt
     assert "Telekom" in fehlt and "nicht mehr vorhanden" in fehlt  # Vormonat, über den Kontoumsatz dabei
     assert "- Kontoumsatz 30.09.2026 Kiosk -3,80 € ohne Beleg" in fehlt
-    assert ("In der Voranmeldung enthalten, aber in einem anderen Monat bezahlt" in fehlt
-            and "- 2026-09-22_Eingang_Telekom-Deutschland-GmbH_62,89EUR: bezahlt am 01.10.2026, "
-                "Beleg in den Unterlagen für 10/2026" in fehlt)
+    assert ("In der Voranmeldung enthalten, aber in einem anderen Monat abgebucht" in fehlt
+            and "- 2026-09-22_Eingang_Telekom-Deutschland-GmbH_62,89EUR: abgebucht am 01.10.2026" in fehlt)
     fehlbuchungen, ohne_beleg = rest.split("kein Beleg nötig", 1)
     assert "- Kontoumsatz 15.09.2026 Rewe -42,00 €: privater Einkauf, Karte verwechselt" in fehlbuchungen
     assert "- Kontoumsatz 29.09.2026 Finanzamt -812,40 € (Stichwort „Finanzamt“)" in ohne_beleg

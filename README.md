@@ -159,15 +159,14 @@ Paperless selbst nächtlich verschlüsselt in eine Nextcloud sichern: [deploy/pa
 
 „ZIP für Steuerberatung“ in der Monatsansicht packt alles für den Monat zusammen:
 
-- `Belege/`: jeder Beleg, der einem Kontoumsatz des Monats zugeordnet ist oder in der Voranmeldung zählt, als Datei
-  aus dem Rechnungsverzeichnis bzw. als PDF aus Paperless (Name: Datum, Art, Partner, Betrag). Wird ein Beleg der
-  Voranmeldung erst in einem anderen Monat abgebucht, liegt er dem ZIP dieses Monats bei.
+- `Belege/`: jeder Beleg, der in der Voranmeldung zählt oder einem Kontoumsatz des Monats zugeordnet ist, als Datei
+  aus dem Rechnungsverzeichnis bzw. als PDF aus Paperless (Name: Datum, Art, Partner, Betrag)
 - `Kontoauszug/` und `Finanzamt/`: Dokumente aus Paperless mit dem Tag `Kontoauszug` bzw. `UStVA-Protokoll`
   (anpassbar in den Einstellungen), deren Titel oder Text den Monat nennt, z. B. „09/2026“, „September 2026“ oder
   „UStVA_2026_-_September“. Ein Protokoll ohne erkennbaren Monat zählt zum Vormonat, wenn es bis zum 15. erstellt wurde.
   Der Kontoauszug muss bis zum 15. des Folgemonats datiert sein, das Protokoll bis Ende des übernächsten Monats.
 - die beiden CSV-Exporte und, falls nötig, `INFO.txt`: was fehlt (auch Kontoumsätze ohne Beleg), als
-  Belege der Voranmeldung, die in einem anderen Monat bezahlt wurden, als „Fehlbuchung/privat“ markierte
+  Belege der Voranmeldung, die in einem anderen Monat abgebucht wurden, als „Fehlbuchung/privat“ markierte
   Kontoumsätze mit Notiz und die übrigen Umsätze, die keinen Beleg brauchen
 
 ## Einstellungen und Anmeldung

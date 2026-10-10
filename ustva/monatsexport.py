@@ -1,10 +1,10 @@
 """ZIP mit allen Unterlagen eines Monats für die Steuerberatung.
 
-Enthalten sind die Belege, die einem Kontoumsatz des Monats zugeordnet sind oder in
-der Voranmeldung des Monats zählen (als Originaldatei aus dem Rechnungsverzeichnis
-bzw. als PDF aus Paperless). Ein Beleg der Voranmeldung, der erst in einem anderen
-Monat abgebucht wurde (z. B. Rechnung vom 22.09., Abbuchung am 01.10.), liegt dem
-ZIP jenes Monats bei und steht hier nur in der INFO.txt. Dazu kommen Kontoauszug und
+Enthalten sind die Belege, die in der Voranmeldung des Monats zählen oder einem
+Kontoumsatz des Monats zugeordnet sind (als Originaldatei aus dem
+Rechnungsverzeichnis bzw. als PDF aus Paperless). Wurde ein Beleg der Voranmeldung
+in einem anderen Monat abgebucht (z. B. Rechnung vom 22.09., Abbuchung am 01.10.),
+vermerkt die INFO.txt das, weil er dann auf dem Kontoauszug fehlt. Dazu kommen Kontoauszug und
 ELSTER-Übertragungsprotokoll aus Paperless, die CSV-Exporte und eine Liste,
 was fehlt.
 
@@ -117,20 +117,15 @@ def monats_zip(cfg: Config, bericht: Bericht, umsaetze: list[Umsatz], belege_nac
     z = _Zip()
     fehlt: list[str] = []
 
-    # Über Kontoumsätze des Monats zugeordnete Belege, dann die übrigen der Voranmeldung, sofern nicht
-    # in einem anderen Monat abgebucht
-    belege: dict[int, Beleg] = {u.beleg_id: belege_nach_id[u.beleg_id] for u in umsaetze
-                                if u.beleg_id in belege_nach_id}
+    # Belege der Voranmeldung, dann die über Kontoumsätze zugeordneten aus anderen Monaten
+    belege: dict[int, Beleg] = {zeile.beleg.id: zeile.beleg for zeile in bericht.zeilen if zeile.beleg.id}
+    im_monat = {u.beleg_id for u in umsaetze if u.beleg_id}
     abgebucht = {u.beleg_id: u for u in andere_umsaetze if u.beleg_id}
-    anderswo: list[str] = []
-    for b in {zeile.beleg.id: zeile.beleg for zeile in bericht.zeilen if zeile.beleg.id}.values():
-        if b.id in belege:
-            continue
-        if u := abgebucht.get(b.id):
-            anderswo.append(f"{beleg_dateiname(b, '')}: bezahlt am {u.buchungsdatum:%d.%m.%Y}, "
-                            f"Beleg in den Unterlagen für {u.buchungsdatum:%m/%Y}")
-        else:
-            belege[b.id] = b
+    anderswo = [f"{beleg_dateiname(b, '')}: abgebucht am {abgebucht[i].buchungsdatum:%d.%m.%Y}"
+                for i, b in belege.items() if i in abgebucht and i not in im_monat]
+    for u in umsaetze:
+        if u.beleg_id in belege_nach_id:
+            belege.setdefault(u.beleg_id, belege_nach_id[u.beleg_id])
 
     pl = PaperlessClient(cfg.paperless_url, cfg.paperless_token, client) if cfg.paperless_aktiv else None
     for b in belege.values():
@@ -189,7 +184,7 @@ def monats_zip(cfg: Config, bericht: Bericht, umsaetze: list[Umsatz], belege_nac
     z.schreiben(f"UStVA-{bericht.zeitraum}-Kennzahlen.csv", export.kennzahlen_csv(bericht))
     z.schreiben(f"UStVA-{bericht.zeitraum}-Belege.csv", export.belege_csv(bericht))
     abschnitte = [("Fehlende Unterlagen", fehlt),
-                  ("In der Voranmeldung enthalten, aber in einem anderen Monat bezahlt", anderswo),
+                  ("In der Voranmeldung enthalten, aber in einem anderen Monat abgebucht", anderswo),
                   ("Fehlbuchungen / privat (nicht steuerrelevant)", fehlbuchungen),
                   ("Kontoumsätze ohne Beleg, kein Beleg nötig", ohne_beleg)]
     if fehlt or anderswo or fehlbuchungen:
