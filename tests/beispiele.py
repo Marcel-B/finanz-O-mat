@@ -61,3 +61,22 @@ VAT reverse charge – Article 196 Council Directive 2006/112/EC
 VAT 0% 0.00 EUR
 Total 100.00 EUR
 """
+
+# Aufbau wie bei Telekom: Tabelle Netto/Steuer/Brutto mit Fußnote, Abbuchungstag im Fließtext
+TELEKOM = """Telekom Deutschland GmbH
+Rechnung
+Datum 04.09.2026
+Rechnungsnummer 123 456 7890
+Kundennummer 1234567890
+Rechnungsbetrag 16,89 €
+Monatliche Beträge
+Leistungszeitraum Netto Steuer Brutto
+MagentaMobil 08/2026 14,19 € 2,70 €A1 16,89 €
+Summe 14,19 € 2,70 € 16,89 €
+Steuersatz Netto Steuer Brutto
+19 % 14,19 € 2,70 € 16,89 €
+14,19 € 2,70 € 16,89 €
+A1 = Umsatzsteuer 19 %
+Der Rechnungsbetrag wird am 10. September von Ihrem Konto abgebucht.
+USt-IdNr. DE 814645262
+"""

@@ -62,11 +62,22 @@ class BelegZeile:
     kursquelle: str = ""
     fehler: str = ""
 
+    @property
+    def brutto_eur(self) -> Decimal | None:
+        """Rechnungsbetrag in EUR; selbst geschuldete Steuer (§ 13b) gehört nicht dazu."""
+        if self.netto_eur is None:
+            return None
+        if self.beleg.steuer_auf_rechnung() and self.steuer_eur is not None:
+            return self.netto_eur + self.steuer_eur
+        return self.netto_eur
+
     def to_dict(self) -> dict:
         return {
             **self.beleg.to_dict(),
             "netto_eur": _s(self.netto_eur),
             "steuer_eur": _s(self.steuer_eur),
+            "brutto_eur": _s(self.brutto_eur),
+            "steuer_auf_rechnung": self.beleg.steuer_auf_rechnung(),
             "kurs_verwendet": _s(self.kurs),
             "kursquelle": self.kursquelle,
             "fehler": self.fehler,

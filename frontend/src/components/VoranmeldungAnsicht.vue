@@ -33,6 +33,7 @@ const quellen = computed(() =>
 );
 const kennzahlen = computed(() => bericht.value?.kennzahlen.filter((k) => k.kz !== "83") ?? []);
 const zahllast = computed(() => Number(bericht.value?.zahllast ?? 0));
+const euro = (wert: string | null | undefined) => (wert == null ? "–" : `${betrag(wert)} €`);
 
 const stufen: Record<string, "warn" | "info" | "success" | "secondary"> = {
   warnung: "warn",
@@ -254,20 +255,26 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
       </Column>
       <Column header="Netto" class="text-right">
         <template #body="{ data }">
-          <span class="zahl">{{ betrag(data.netto) }} {{ data.waehrung }}</span>
-          <div class="text-xs text-muted-color">{{ betrag(data.steuersatz) }} %</div>
+          <span class="zahl">{{ euro(data.netto_eur) }}</span>
+          <div v-if="data.waehrung !== 'EUR'" class="text-xs whitespace-nowrap text-muted-color">
+            {{ betrag(data.netto) }} {{ data.waehrung }}<template v-if="data.kurs_verwendet"> · Kurs {{ data.kurs_verwendet }}</template>
+          </div>
         </template>
       </Column>
       <Column header="Steuer" class="text-right">
-        <template #body="{ data }"><span class="zahl">{{ betrag(data.steuer_eur ?? data.steuer) }}</span></template>
-      </Column>
-      <Column header="Netto EUR" class="text-right">
         <template #body="{ data }">
-          <span class="zahl">{{ data.netto_eur != null ? `${betrag(data.netto_eur)} €` : "–" }}</span>
-          <div v-if="data.waehrung !== 'EUR' && data.kurs_verwendet" class="text-xs text-muted-color">
-            Kurs {{ data.kurs_verwendet }}
+          <span class="zahl">{{ euro(data.steuer_eur) }}</span>
+          <div class="text-xs whitespace-nowrap text-muted-color">
+            {{ betrag(data.steuersatz) }} %
+            <span
+              v-if="data.steuer_auf_rechnung === false && Number(data.steuer_eur) > 0"
+              v-tooltip.top="'Steuer schuldest du selbst (Reverse Charge); sie steht nicht auf der Rechnung und ist nicht im Brutto enthalten.'"
+            >· selbst geschuldet</span>
           </div>
         </template>
+      </Column>
+      <Column header="Brutto" class="text-right">
+        <template #body="{ data }"><span class="zahl">{{ euro(data.brutto_eur) }}</span></template>
       </Column>
       <Column>
         <template #body="{ data }">

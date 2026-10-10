@@ -153,14 +153,48 @@ def daten_finden(zeile: str) -> list[date]:
     return [d for _, d in sorted(gefunden, key=lambda x: x[0])]
 
 
+RE_TAG_MONAT = re.compile(r"\b\d{1,2}\.\s*(?:" + "|".join(sorted(MONATE, key=len, reverse=True)) + r")\b",
+                          re.IGNORECASE)
+RE_WAEHRUNG_NAH = re.compile(r"^\s?(?:€|EUR\b|USD\b|US\$|\$|£|GBP\b|CHF\b)|(?:€|EUR|USD|\$|£|GBP|CHF)\s?$",
+                             re.IGNORECASE)
+
+
 def _betraege(zeile: str) -> list[Decimal]:
+    """Geldbeträge einer Zeile.
+
+    Ganze Zahlen ohne Währungszeichen (Tage, Mengen, Kundennummern) zählen nicht,
+    sonst wird aus "am 10. September abgebucht" ein Rechnungsbetrag von 10 €.
+    """
     ohne_daten = RE_DATUM_DE.sub(" ", RE_DATUM_ISO.sub(" ", zeile))
+    ohne_daten = RE_DATUM_TEXT_EN.sub(" ", RE_DATUM_TEXT_DE.sub(" ", ohne_daten))
+    ohne_daten = RE_TAG_MONAT.sub(" ", ohne_daten)
     ohne_saetze = re.sub(r"\d+(?:[.,]\d+)?\s?%", " ", ohne_daten)
     werte = []
     for m in RE_BETRAG.finditer(ohne_saetze):
-        if (w := betrag_parsen(m.group(1))) is not None:
+        text = m.group(1)
+        mit_cent = re.search(r"[.,]\d{2}$", text)
+        umfeld = ohne_saetze[max(0, m.start() - 4):m.start()], ohne_saetze[m.end():m.end() + 4]
+        mit_waehrung = RE_WAEHRUNG_NAH.search(umfeld[0]) or RE_WAEHRUNG_NAH.search(umfeld[1])
+        if not (mit_cent or mit_waehrung):
+            continue
+        if (w := betrag_parsen(text)) is not None:
             werte.append(w)
     return werte
+
+
+def _tabellenzeile(werte: list[Decimal]) -> tuple[Decimal, Decimal, Decimal] | None:
+    """Drei aufeinanderfolgende Beträge Netto, Steuer, Brutto mit Netto + Steuer = Brutto."""
+    for i in range(len(werte) - 2):
+        netto, steuer, brutto = werte[i:i + 3]
+        if netto > 0 and steuer > 0 and netto + steuer == brutto and steuer <= netto * Decimal("0.2"):
+            return netto, steuer, brutto
+    return None
+
+
+def steuer_passt(netto: Decimal, steuer: Decimal, satz: Decimal) -> bool:
+    """Steuer ≈ Netto × Satz (Rundung je Position erlaubt ein paar Cent Abweichung)."""
+    erwartet = netto * satz / 100
+    return abs(steuer - erwartet) <= max(Decimal("0.05"), abs(erwartet) * Decimal("0.01"))
 
 
 @dataclass
@@ -232,6 +266,12 @@ def erkennen(text: str, art: Art | None = None, eigene_ustid: str = "") -> Erken
                 e.steuersatz = Decimal(s.group(1))
         elif SCHLUESSEL_SUMME.search(z):
             e.brutto = letzter
+
+    # Tabellen wie "Summe 14,19 € 2,70 € 16,89 €" sind eindeutiger als einzelne Schlüsselwörter;
+    # die Zeile mit dem größten Bruttobetrag ist die Gesamtsumme.
+    tabelle = max((t for z in zeilen if (t := _tabellenzeile(_betraege(z)))), key=lambda t: t[2], default=None)
+    if tabelle:
+        e.netto, e.steuer, e.brutto = tabelle
 
     if e.steuersatz is None:
         saetze = {Decimal(m.group(1)) for m in RE_SATZ.finditer(text)}

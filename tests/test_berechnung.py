@@ -124,3 +124,16 @@ def test_innergemeinschaftlicher_erwerb(umrechner):
     assert b.wert("89-steuer") == D("57.00")
     assert b.wert("61") == D("57.00")
     assert b.zahllast == 0
+
+
+
+def test_brutto_eur_je_steuerfall(umrechner):
+    belege = [ausgang("100.00"), eingang("50.00", Steuerfall.AUSLAND_13B)]
+    zeilen = {z.beleg.steuerfall: z for z in berechnen(belege, 2026, 9, umrechner).zeilen}
+    assert zeilen[Steuerfall.INLAND].brutto_eur == D("119.00")
+    # § 13b: Die Steuer schuldet der Empfänger, auf der Rechnung steht nur der Nettobetrag.
+    rc = zeilen[Steuerfall.AUSLAND_13B]
+    assert rc.steuer_eur == D("9.50")
+    assert rc.brutto_eur == D("50.00")
+    assert rc.to_dict()["brutto_eur"] == "50.00"
+    assert rc.to_dict()["steuer_auf_rechnung"] is False

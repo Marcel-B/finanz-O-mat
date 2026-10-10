@@ -3,7 +3,8 @@ from decimal import Decimal as D
 
 import pytest
 
-from ustva.extraktion import betrag_parsen, daten_finden, erkennen, ustids_finden
+from ustva.extraktion import Erkennung, betrag_parsen, daten_finden, erkennen, ustids_finden
+from ustva.quellen import beleg_aus_erkennung
 from ustva.steuerfaelle import Art, Steuerfall
 
 from . import beispiele
@@ -75,3 +76,33 @@ def test_leerer_text():
     e = erkennen("   ", Art.EINGANG)
     assert e.netto is None
     assert "Kein Text" in e.hinweise[0]
+
+
+def test_tabelle_netto_steuer_brutto():
+    e = erkennen(beispiele.TELEKOM, Art.EINGANG, "DE123456789")
+    assert (e.netto, e.steuer, e.brutto) == (D("14.19"), D("2.70"), D("16.89"))
+    assert e.steuersatz == D("19")
+    assert e.steuerfall == Steuerfall.VORSTEUER_INLAND
+
+
+def test_tag_im_text_ist_kein_betrag():
+    e = erkennen("Rechnung\nDatum 01.09.2026\nSumme netto 100,00 €\n"
+                 "Der Rechnungsbetrag wird am 10. September abgebucht.", Art.EINGANG)
+    assert e.brutto is None
+    assert e.netto == D("100.00")
+
+
+def test_unplausible_steuer_wird_aus_satz_berechnet():
+    e = Erkennung(netto=D("14.19"), steuer=D("-4.19"), steuersatz=D("19"))
+    b = beleg_aus_erkennung(e, Art.EINGANG)
+    assert b.steuer is None
+    assert b.steuer_in_belegwaehrung() == D("2.6961")
+    assert any("passt nicht" in h for h in b.hinweise)
+
+
+def test_mehrere_steuersaetze_bleiben_erhalten():
+    # 50 € zu 19 % und 50 € zu 7 %: 13 € Steuer sind richtig, auch wenn sie nicht zu 19 % passen.
+    e = Erkennung(netto=D("100.00"), steuer=D("13.00"), steuersatz=D("19"))
+    b = beleg_aus_erkennung(e, Art.EINGANG)
+    assert b.steuer == D("13.00")
+    assert any("Mehrere Steuersätze" in h for h in b.hinweise)

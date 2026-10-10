@@ -87,12 +87,14 @@ export interface Beleg {
   hinweise: string[];
   netto_eur?: string | null;
   steuer_eur?: string | null;
+  brutto_eur?: string | null;
+  steuer_auf_rechnung?: boolean;
   kurs_verwendet?: string | null;
   fehler?: string;
 }
 
 export type BelegEingabe = Omit<Beleg, "id" | "quelle" | "quelle_link" | "erechnung" | "hinweise" | "netto_eur" | "steuer_eur" |
-  "kurs_verwendet" | "fehler">;
+  "brutto_eur" | "steuer_auf_rechnung" | "kurs_verwendet" | "fehler">;
 
 export interface BelegKurz {
   id: number;
