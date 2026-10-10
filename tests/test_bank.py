@@ -233,3 +233,47 @@ def test_beleg_einzeln_lesen(client):
     beleg_id = client.post("/api/belege", json={**ANTHROPIC, "rechnungsdatum": "2026-09-17"}).json()["id"]
     assert client.get(f"/api/belege/{beleg_id}").json()["rechnungsnummer"] == ANTHROPIC["rechnungsnummer"]
     assert client.get("/api/belege/999").status_code == 404
+
+
+N26_OPENAI = N26_NEU.splitlines()[0] + """
+"2026-08-22","2026-08-22","OPENAI *CHATGPT SUBSCR","","Presentment","","Hauptkonto","-19.33","","",""
+"2026-09-22","2026-09-22","OPENAI *CHATGPT SUBSCR","","Presentment","","Hauptkonto","-19.33","","",""
+"""
+
+
+def _openai(db, tag: date) -> Beleg:
+    return db.beleg_anlegen(Beleg(art=Art.EINGANG, steuerfall=Steuerfall.EU_LEISTUNG_13B, rechnungsdatum=tag,
+                                  netto=D("19.33"), steuersatz=D(19), partner="OpenAI Ireland Limited"))
+
+
+def _nur(text: str, monat: str) -> str:
+    kopf, *zeilen = text.strip().splitlines()
+    return "\n".join([kopf, *(z for z in zeilen if z.startswith(f'"{monat}'))]) + "\n"
+
+
+def test_abo_bekommt_nicht_die_rechnung_des_vormonats(db, umrechner):
+    aug = _openai(db, date(2026, 8, 22))
+    bank.importieren(db, Config(), _nur(N26_OPENAI, "2026-09"), umrechner)  # August-Auszug fehlt noch
+    [sept_umsatz] = db.alle_umsaetze()
+    assert sept_umsatz.beleg_id is None  # 31 Tage nach der August-Rechnung: nicht automatisch
+
+    sept = _openai(db, date(2026, 9, 22))
+    bank.importieren(db, Config(), _nur(N26_OPENAI, "2026-08"), umrechner)
+    zuordnung = {u.buchungsdatum.month: u.beleg_id for u in db.alle_umsaetze()}
+    assert zuordnung == {8: aug.id, 9: sept.id}
+
+
+def test_rechnung_geht_an_die_naechste_abbuchung(db, umrechner):
+    rechnung = _openai(db, date(2026, 9, 5))
+    text = N26_OPENAI.replace("2026-08-22", "2026-08-28").replace("2026-09-22", "2026-09-06")
+    bank.importieren(db, Config(), text, umrechner)
+    # Die Abbuchung vom 28.08. läge noch im Vorkasse-Fenster, die vom 06.09. ist aber näher dran.
+    zuordnung = {u.buchungsdatum: u.beleg_id for u in db.alle_umsaetze()}
+    assert zuordnung == {date(2026, 8, 28): None, date(2026, 9, 6): rechnung.id}
+
+
+def test_spaete_ueberweisung_mit_rechnungsnummer(db, umrechner):
+    b = db.beleg_anlegen(Beleg(art=Art.EINGANG, steuerfall=Steuerfall.VORSTEUER_INLAND, rechnungsdatum=date(2026, 7, 1),
+                               netto=D("50.00"), steuer=D("9.50"), partner="Hosting GmbH", rechnungsnummer="R-2026-0912"))
+    bank.importieren(db, Config(), _nur(N26_NEU, "2026-09-12"), umrechner)
+    assert db.alle_umsaetze()[0].beleg_id == b.id  # 73 Tage, aber Nummer im Verwendungszweck
