@@ -26,7 +26,7 @@ def test_nicht_eingerichtet(db, umrechner, tmp_path):
 
 def test_stand_und_jetzt_sichern(db, umrechner, tmp_path):
     (tmp_path / "status.json").write_text(json.dumps({
-        "zustand": "ok", "ziel": "nx1.your-storageshare.de / finanz-o-mat-backup",
+        "zustand": "ok", "ziel": "nx1.your-storageshare.de / Backups/finanz-o-mat",
         "letzte_sicherung": "2026-10-10T02:41:07+02:00", "anzahl": 3, "groesse": 245760,
     }))
     client = _client(db, umrechner, tmp_path)

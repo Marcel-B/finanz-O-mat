@@ -146,9 +146,9 @@ einrichten() {
     frage BACKUP_APP_PASSWORT "App-Passwort (Nextcloud: Persönliche Einstellungen > Sicherheit > Neues App-Passwort)" geheim
     if [[ -z ${BACKUP_ORDNER:-} ]]; then
         if [[ -t 0 ]]; then
-            read -r -p "Ordner in der Nextcloud [finanz-o-mat-backup]: " BACKUP_ORDNER
+            read -r -p "Ordner in der Nextcloud [Backups/finanz-o-mat]: " BACKUP_ORDNER
         fi
-        BACKUP_ORDNER=${BACKUP_ORDNER:-finanz-o-mat-backup}
+        BACKUP_ORDNER=${BACKUP_ORDNER:-Backups/finanz-o-mat}
     fi
     BACKUP_URL=${BACKUP_URL%/}
     [[ $BACKUP_URL == http*://* ]] || BACKUP_URL="https://$BACKUP_URL"

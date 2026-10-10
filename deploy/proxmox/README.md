@@ -121,8 +121,9 @@ finanz-o-mat-backup einrichten
 
 Das fragt nach der Nextcloud-Adresse (`https://nx12345.your-storageshare.de`), dem Benutzer und einem App-Passwort
 (in der Nextcloud unter Persönliche Einstellungen > Sicherheit > „Neues App-Passwort erstellen“), legt den Ordner
-`finanz-o-mat-backup` an und macht das erste Backup. Am Ende zeigt es das **Backup-Passwort**: das in den
-Passwortmanager. Ohne es lassen sich die Backups nicht entschlüsseln, auch nicht von Hetzner.
+`Backups/finanz-o-mat` an (neben `Backups/paperless` vom Paperless-Backup) und macht das erste Backup. Am Ende
+zeigt es das **Backup-Passwort**: das in den Passwortmanager. Ohne es lassen sich die Backups nicht entschlüsseln,
+auch nicht von Hetzner.
 
 In der App steht unter „Einstellungen“ → „Backup“, wann das letzte Backup lief und wie viele Stände es gibt;
 „Jetzt sichern“ startet eins sofort. Schlägt ein Backup fehl oder ist das letzte drei Tage oder älter, zeigt die App
