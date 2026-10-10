@@ -153,6 +153,8 @@ Eingelesen werden Dokumente, deren Datum im gewählten Monat oder in den beiden 
 Bei PDF-Dokumenten lädt die App die Originaldatei und liest eine eingebettete ZUGFeRD-/Factur-X-Rechnung aus;
 deren Angaben haben dann Vorrang vor Feldern und OCR-Text (Korrespondent und Zahlungsdatum aus Paperless bleiben).
 
+Paperless selbst nächtlich verschlüsselt in eine Nextcloud sichern: [deploy/paperless-backup](deploy/paperless-backup/README.md).
+
 ## Unterlagen für die Steuerberatung
 
 „ZIP für Steuerberatung“ in der Monatsansicht packt alles für den Monat zusammen:
