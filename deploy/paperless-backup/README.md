@@ -17,6 +17,9 @@ Ablauf eines Laufs:
    Stichprobe von 2 % der Daten wird heruntergeladen und geprüft.
 4. Bei einem Fehler kommt eine Nachricht (ntfy) und/oder die Überwachung (healthchecks.io) schlägt an.
 
+Finanz-O-Mat sichert sich nach demselben Schema (restic über rclone, Ordner `Backups/finanz-o-mat`), siehe
+[deploy/proxmox/README.md](../proxmox/README.md#backup-auf-die-nextcloud). Beide können dasselbe App-Passwort nutzen.
+
 ## Einrichten
 
 Vorher in der Nextcloud ein App-Passwort anlegen: Profilbild > Persönliche Einstellungen > Sicherheit >
