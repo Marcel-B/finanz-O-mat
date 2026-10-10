@@ -41,6 +41,9 @@ bash finanz-o-mat-lxc.sh -y
 | `VERSTEUERUNG` | `ist` | `ist` oder `soll` |
 | `BUNDESLAND`, `EIGENE_USTID` | `NW`, – | wie in `.env.example` |
 | `PORT` | 8000 | Port im Container |
+| `TAILSCALE` | `ja` | Tailscale im Container einrichten |
+| `TAILSCALE_AUTHKEY` | – | Auth-Key; ohne Key zeigt das Skript einen Anmeldelink |
+| `TAILSCALE_SERVE` | `nein` | zusätzlich HTTPS über `tailscale serve` |
 | `REPO_URL`, `REPO_BRANCH` | dieses Repo, `main` | Quelle der App |
 
 ## Was wo liegt (im Container)
@@ -110,8 +113,28 @@ pct reboot <CTID>
 
 Liegen die Rechnungen auf einem NAS, die Freigabe (SMB/NFS) auf dem Host einhängen und diesen Pfad einbinden.
 
+## Tailscale
+
+Standardmäßig kommt Tailscale mit in den Container, damit die App im eigenen Tailnet erreichbar ist, z. B. unter
+`http://finanz-o-mat:8000` (mit MagicDNS) oder der 100.x-Adresse, die das Skript am Ende anzeigt.
+
+- Anmeldung: Mit `TAILSCALE_AUTHKEY` (in der Admin-Konsole unter Settings > Keys erzeugen) läuft sie ohne Zutun.
+  Ohne Key gibt das Skript einen Link aus; den im Browser öffnen und das Gerät freigeben.
+- Das Skript gibt dem Container `/dev/net/tun` frei (zwei `lxc.`-Zeilen in `/etc/pve/lxc/<CTID>.conf`) und
+  installiert Tailscale aus der offiziellen Paketquelle. Updates der App aktualisieren Tailscale mit.
+- Mit `TAILSCALE_SERVE=ja` ist die App zusätzlich unter `https://finanz-o-mat.<tailnet>.ts.net` mit gültigem
+  Zertifikat erreichbar. Dafür müssen in der Admin-Konsole unter DNS MagicDNS und HTTPS-Zertifikate aktiv sein.
+- In einem schon angelegten Container nachrüsten (startet ihn einmal neu):
+
+  ```sh
+  bash finanz-o-mat-lxc.sh tailscale <CTID>
+  ```
+
+Den Key-Ablauf für den Container in der Admin-Konsole abschalten, sonst muss er sich nach 180 Tagen neu anmelden.
+
 ## Erreichbarkeit
 
-Die App lauscht im Container auf allen Adressen. Sie ist für das Heimnetz gedacht; nicht ohne Weiteres ins Internet
-freigeben. Für HTTPS einen Reverse Proxy davorsetzen (z. B. Nginx Proxy Manager oder Caddy). Die Anmeldung
-(`APP_BENUTZER`/`APP_PASSWORT`) ist HTTP Basic Auth und ohne HTTPS im Netz mitlesbar.
+Die App lauscht im Container auf allen Adressen, also im Heimnetz und im Tailnet. Nicht ins Internet freigeben.
+Die Anmeldung (`APP_BENUTZER`/`APP_PASSWORT`) ist HTTP Basic Auth; im Tailnet ist die Verbindung ohnehin
+verschlüsselt, im Heimnetz ohne HTTPS mitlesbar. Wer HTTPS auch dort will, nimmt `TAILSCALE_SERVE=ja` oder einen
+Reverse Proxy.

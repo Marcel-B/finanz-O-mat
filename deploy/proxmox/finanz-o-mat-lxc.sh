@@ -32,16 +32,17 @@ hilfe() {
     cat <<EOF
 Finanz-O-Mat in einem Proxmox-LXC-Container installieren oder aktualisieren (auf dem PVE-Host als root).
 
-Aufruf: $AUFRUF [-y | update <CTID>]
+Aufruf: $AUFRUF [-y | update <CTID> | tailscale <CTID>]
 
-  (ohne)          neuen Container anlegen, fragt die wichtigsten Werte ab
-  -y              ohne Rückfragen, Werte aus Umgebungsvariablen
-  update <CTID>   App im Container aktualisieren (Datenbank wird vorher gesichert)
+  (ohne)            neuen Container anlegen, fragt die wichtigsten Werte ab
+  -y                ohne Rückfragen, Werte aus Umgebungsvariablen
+  update <CTID>     App im Container aktualisieren (Datenbank wird vorher gesichert)
+  tailscale <CTID>  Tailscale in einem bestehenden Container nachrüsten
 
 Variablen (Vorgabe): CTID (nächste freie), CT_HOSTNAME (finanz-o-mat), CORES (1), MEMORY (1024), DISK (4),
 BRIDGE (vmbr0), IP (dhcp), GATEWAY, CT_STORAGE, TEMPLATE_STORAGE, BELEG_HOST_PATH, PAPERLESS_URL,
 PAPERLESS_TOKEN, APP_BENUTZER (admin), APP_PASSWORT (zufällig), VERSTEUERUNG (ist), BUNDESLAND (NW),
-EIGENE_USTID, PORT (8000), REPO_URL, REPO_BRANCH (main). Details: deploy/proxmox/README.md
+EIGENE_USTID, PORT (8000), TAILSCALE (ja), TAILSCALE_AUTHKEY, TAILSCALE_SERVE (nein), REPO_URL, REPO_BRANCH (main). Details: deploy/proxmox/README.md
 EOF
 }
 
@@ -158,6 +159,42 @@ PORT="$PORT"
 EOF
 }
 
+tun_freigeben() {
+    # Tailscale braucht /dev/net/tun; unprivilegierte Container bekommen es nur über die LXC-Konfiguration
+    local conf=${PVE_LXC_DIR:-/etc/pve/lxc}/$CTID.conf
+    [[ -f $conf ]] || abbruch "$conf nicht gefunden."
+    grep -q 'dev/net/tun' "$conf" && return 0
+    cat >>"$conf" <<EOF
+lxc.cgroup2.devices.allow: c 10:200 rwm
+lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
+EOF
+}
+
+tailscale_einrichten() {
+    info "Installiere Tailscale"
+    im_ct bash "$APP_DIR/deploy/proxmox/ct-setup.sh" tailscale
+    if im_ct tailscale status >/dev/null 2>&1; then
+        ok "Tailscale ist schon angemeldet"
+    elif [[ -n ${TAILSCALE_AUTHKEY:-} ]]; then
+        im_ct tailscale up --auth-key "$TAILSCALE_AUTHKEY" --hostname "$CT_HOSTNAME"
+    elif [[ $NICHT_FRAGEN != 1 ]]; then
+        info "Tailscale-Anmeldung: den folgenden Link im Browser öffnen und das Gerät freigeben"
+        im_ct tailscale up --hostname "$CT_HOSTNAME"
+    else
+        warn "Tailscale ist installiert, aber nicht angemeldet: pct exec $CTID -- tailscale up"
+        return 0
+    fi
+    ok "Tailscale verbunden: $(im_ct tailscale ip -4 2>/dev/null | head -n1)"
+    if [[ ${TAILSCALE_SERVE:-nein} == ja ]]; then
+        # HTTPS mit gültigem Zertifikat unter https://<name>.<tailnet>.ts.net
+        if im_ct timeout 60 tailscale serve --bg "$PORT" >/dev/null; then
+            ok "HTTPS im Tailnet: $(im_ct tailscale serve status 2>/dev/null | grep -o 'https://[^ ]*' | head -n1)"
+        else
+            warn "tailscale serve fehlgeschlagen. In der Tailscale-Admin-Konsole unter DNS MagicDNS und HTTPS-Zertifikate aktivieren, dann: pct exec $CTID -- tailscale serve --bg $PORT"
+        fi
+    fi
+}
+
 installieren() {
     pruefe_host
 
@@ -183,6 +220,9 @@ installieren() {
     BUNDESLAND="${BUNDESLAND:-NW}"
     EIGENE_USTID="${EIGENE_USTID:-}"
     PORT="${PORT:-8000}"
+    TAILSCALE="${TAILSCALE:-ja}"
+    TAILSCALE_AUTHKEY="${TAILSCALE_AUTHKEY:-}"
+    TAILSCALE_SERVE="${TAILSCALE_SERVE:-nein}"
 
     [[ -n $CT_STORAGE ]] || abbruch "Kein Speicher für Container gefunden (CT_STORAGE setzen)."
     [[ -n $TEMPLATE_STORAGE ]] || abbruch "Kein Speicher für Vorlagen gefunden (TEMPLATE_STORAGE setzen)."
@@ -205,12 +245,19 @@ installieren() {
     frage VERSTEUERUNG "Versteuerung (ist/soll)"
     frage APP_BENUTZER "Benutzername für die Weboberfläche"
     frage APP_PASSWORT "Passwort für die Weboberfläche" geheim
+    frage TAILSCALE "Tailscale einrichten (ja/nein)"
+    if [[ $TAILSCALE == ja ]]; then
+        frage TAILSCALE_AUTHKEY "Tailscale-Auth-Key (leer = Anmeldung über einen Link im Browser)" geheim
+        frage TAILSCALE_SERVE "Zusätzlich HTTPS über tailscale serve (ja/nein)"
+    fi
 
     [[ $CTID =~ ^[0-9]+$ ]] || abbruch "Container-ID muss eine Zahl sein."
     if pct status "$CTID" >/dev/null 2>&1; then
         abbruch "Container $CTID existiert schon. Für ein Update: $AUFRUF update $CTID"
     fi
     [[ $VERSTEUERUNG == ist || $VERSTEUERUNG == soll ]] || abbruch "VERSTEUERUNG muss ist oder soll sein."
+    [[ $TAILSCALE == ja || $TAILSCALE == nein ]] || abbruch "TAILSCALE muss ja oder nein sein."
+    [[ $TAILSCALE_SERVE == ja || $TAILSCALE_SERVE == nein ]] || abbruch "TAILSCALE_SERVE muss ja oder nein sein."
     [[ $IP == dhcp || $IP =~ ^[0-9.]+/[0-9]+$ ]] || abbruch "IP muss dhcp oder Adresse/Präfix sein."
     if [[ -n $BELEG_HOST_PATH && ! -d $BELEG_HOST_PATH ]]; then
         abbruch "Belegordner $BELEG_HOST_PATH gibt es auf dem Host nicht."
@@ -233,6 +280,7 @@ installieren() {
     echo "  Netz:        $BRIDGE, $IP${GATEWAY:+, Gateway $GATEWAY}"
     echo "  Belegordner: ${BELEG_HOST_PATH:-keiner} -> $BELEG_CT_PATH (nur lesend)"
     echo "  Paperless:   ${PAPERLESS_URL:-nicht genutzt}"
+    echo "  Tailscale:   $TAILSCALE${TAILSCALE_AUTHKEY:+ (mit Auth-Key)}, HTTPS über tailscale serve: $TAILSCALE_SERVE"
     echo "  App:         $REPO_URL ($REPO_BRANCH), Port $PORT, $VERSTEUERUNG-Versteuerung"
     if [[ $NICHT_FRAGEN != 1 ]]; then
         read -rp "Container so anlegen? [J/n] " antwort
@@ -255,6 +303,7 @@ installieren() {
     if [[ -n $BELEG_HOST_PATH ]]; then
         pct set "$CTID" --mp0 "$BELEG_HOST_PATH,mp=$BELEG_CT_PATH,ro=1"
     fi
+    [[ $TAILSCALE == ja ]] && tun_freigeben
     ok "Container angelegt"
 
     info "Starte Container"
@@ -276,11 +325,18 @@ installieren() {
 
     info "Richte Python-Umgebung und Dienst ein (dauert ein paar Minuten)"
     im_ct bash "$APP_DIR/deploy/proxmox/ct-setup.sh" install
+    [[ $TAILSCALE == ja ]] && tailscale_einrichten
 
-    local adresse
+    local adresse ts_ip=""
     adresse=$(im_ct hostname -I 2>/dev/null | awk '{print $1}')
     echo
+    if [[ $TAILSCALE == ja ]]; then
+        ts_ip=$(im_ct tailscale ip -4 2>/dev/null | head -n1 || true)
+    fi
     ok "Fertig. Finanz-O-Mat läuft unter http://${adresse:-<IP des Containers>}:$PORT"
+    if [[ -n $ts_ip ]]; then
+        echo "  Im Tailnet:    http://$CT_HOSTNAME:$PORT (MagicDNS) bzw. http://$ts_ip:$PORT"
+    fi
     [[ -n $APP_BENUTZER ]] && echo "  Anmeldung: $APP_BENUTZER"
     if [[ $PASSWORT_ERZEUGT == 1 ]]; then
         echo "  Passwort:  $APP_PASSWORT   (erzeugt, bitte notieren)"
@@ -301,6 +357,28 @@ aktualisieren() {
     im_ct /usr/local/bin/finanz-o-mat-update
 }
 
+tailscale_nachruesten() {
+    # Tailscale in einem schon bestehenden Container einrichten
+    pruefe_host
+    CTID=${1:-}
+    [[ $CTID =~ ^[0-9]+$ ]] || abbruch "Aufruf: $AUFRUF tailscale <CTID>"
+    pct status "$CTID" >/dev/null 2>&1 || abbruch "Container $CTID gibt es nicht."
+    CT_HOSTNAME=$(pct config "$CTID" | awk '/^hostname:/ {print $2}')
+    CT_HOSTNAME=${CT_HOSTNAME:-finanz-o-mat}
+    TAILSCALE_AUTHKEY="${TAILSCALE_AUTHKEY:-}"
+    TAILSCALE_SERVE="${TAILSCALE_SERVE:-nein}"
+    if ! grep -q 'dev/net/tun' "${PVE_LXC_DIR:-/etc/pve/lxc}/$CTID.conf"; then
+        tun_freigeben
+        info "Starte Container $CTID neu, damit /dev/net/tun verfügbar ist"
+        pct reboot "$CTID"
+    fi
+    pct status "$CTID" | grep -q running || pct start "$CTID"
+    warte_auf_netz
+    PORT=$(im_ct sed -n 's/^PORT="\{0,1\}\([0-9]*\)"\{0,1\}$/\1/p' "$ENV_DATEI" 2>/dev/null || true)
+    PORT=${PORT:-8000}
+    tailscale_einrichten
+}
+
 main() {
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -308,6 +386,7 @@ main() {
             -h | --help) hilfe; exit 0 ;;
             install) ;;
             update) aktualisieren "${2:-}"; return ;;
+            tailscale) tailscale_nachruesten "${2:-}"; return ;;
             *) abbruch "Unbekannte Option: $1 (siehe --help)" ;;
         esac
         shift

@@ -2,6 +2,7 @@
 # Läuft im Container (Debian 12/13). Wird von finanz-o-mat-lxc.sh aufgerufen.
 #
 #   ct-setup.sh install   Pakete, Benutzer, Python-Umgebung und systemd-Dienst einrichten
+#   ct-setup.sh tailscale Tailscale aus der offiziellen Paketquelle installieren (braucht /dev/net/tun)
 #   ct-setup.sh update    Datenbank sichern, neuesten Stand holen, neu installieren, Dienst neu starten
 #                         (im Container auch als finanz-o-mat-update aufrufbar)
 #
@@ -219,6 +220,38 @@ PY
         | tail -n +$((SICHERUNGEN_BEHALTEN + 1)) | while read -r alt; do rm -f "$DATEN/sicherungen/$alt"; done
 }
 
+tailscale_installieren() {
+    [[ -c /dev/net/tun ]] || abbruch "/dev/net/tun fehlt im Container. Auf dem Host: finanz-o-mat-lxc.sh tailscale <CTID>"
+    if ! command -v tailscale >/dev/null; then
+        local codename
+        codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release)
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+        # offizielle Paketquelle von Tailscale, Updates kommen danach über apt
+        curl -fsSL "https://pkgs.tailscale.com/stable/debian/$codename.noarmor.gpg" \
+            -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+        curl -fsSL "https://pkgs.tailscale.com/stable/debian/$codename.tailscale-keyring.list" \
+            -o /etc/apt/sources.list.d/tailscale.list
+        apt-get update -qq
+        apt-get install -y -qq tailscale >/dev/null
+    fi
+    if hat_systemd; then
+        systemctl enable --now --quiet tailscaled
+    fi
+    ok "$(tailscale version | head -n1 | sed 's/^/Tailscale /')"
+}
+
+tailscale_aktualisieren() {
+    command -v tailscale >/dev/null || return 0
+    # Ein Problem mit der Tailscale-Paketquelle soll das App-Update nicht abbrechen
+    if DEBIAN_FRONTEND=noninteractive apt-get update -qq \
+        && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --only-upgrade tailscale >/dev/null; then
+        ok "$(tailscale version | head -n1 | sed 's/^/Tailscale /')"
+    else
+        warn "Tailscale-Update fehlgeschlagen, später mit apt-get upgrade nachholen"
+    fi
+}
+
 installieren() {
     [[ $EUID -eq 0 ]] || abbruch "Bitte als root ausführen."
     [[ -d $APP_DIR/.git ]] || abbruch "$APP_DIR ist kein Git-Checkout der App."
@@ -256,6 +289,7 @@ nach_update() {
     python_umgebung
     dienst_dateien
     dienst_starten
+    tailscale_aktualisieren
     ok "Update fertig"
 }
 
@@ -264,6 +298,7 @@ main() {
         install) installieren ;;
         update) aktualisieren "${2:-}" ;;
         nach-update) nach_update ;;
+        tailscale) tailscale_installieren ;;
         *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
     esac
 }
