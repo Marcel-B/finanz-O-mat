@@ -8,7 +8,9 @@ was fehlt.
 
 Kontoauszug und Protokoll werden über je einen Tag gefunden. Weil das Protokoll
 erst im Folgemonat entsteht, zählt nicht das Dokumentdatum, sondern dass Titel
-oder Text den Monat nennen (z. B. "09/2026", "September 2026").
+oder Text den Monat nennen (z. B. "09/2026", "September 2026"). Nennt ein
+Protokoll mehrere Monate, gehört es zum frühesten: Das Übermittlungsdatum
+("09.10.2026") liegt immer nach dem Zeitraum.
 """
 
 from __future__ import annotations
@@ -139,7 +141,7 @@ def monats_zip(cfg: Config, bericht: Bericht, umsaetze: list[Umsatz], belege_nac
     # Fenster hält den Auszug des Folgemonats heraus, der den Schlusssaldo vom Monatsletzten nennt.
     nj, nm = monat_plus(jahr, monat, 1)
     pj, pm = monat_plus(jahr, monat, 3)
-    for tag, ordner, bezeichnung, bis, mit_folgemonat in (
+    for tag, ordner, bezeichnung, bis, protokoll in (
         (cfg.paperless_tag_kontoauszug, "Kontoauszug", "Kontoauszug", date(nj, nm, 16), False),
         (cfg.paperless_tag_protokoll, "Finanzamt", "ELSTER-Protokoll", date(pj, pm, 1), True),
     ):
@@ -147,7 +149,7 @@ def monats_zip(cfg: Config, bericht: Bericht, umsaetze: list[Umsatz], belege_nac
             fehlt.append(f"{bezeichnung}: Paperless ist nicht eingerichtet, bitte selbst beilegen")
             continue
         try:
-            treffer = _monatsdokumente(pl, tag, jahr, monat, bis, mit_folgemonat)
+            treffer = _monatsdokumente(pl, tag, jahr, monat, bis, protokoll)
             for dok in treffer:
                 antwort = pl.herunterladen(dok["id"])
                 tag_datum = str(dok.get("created") or "")[:10]
@@ -191,15 +193,26 @@ def _umsatz(u: Umsatz) -> str:
     return f"Kontoumsatz {u.buchungsdatum:%d.%m.%Y} {u.partner or u.verwendungszweck} {betrag} €"
 
 
+def protokoll_vorhanden(pl: PaperlessClient, tag: str, jahr: int, monat: int) -> bool:
+    """Liegt in Paperless das ELSTER-Protokoll des Monats, ist die Voranmeldung abgegeben."""
+    pj, pm = monat_plus(jahr, monat, 3)
+    return bool(_monatsdokumente(pl, tag, jahr, monat, date(pj, pm, 1), protokoll=True))
+
+
 def _monatsdokumente(pl: PaperlessClient, tag: str, jahr: int, monat: int, bis: date,
-                     mit_folgemonat: bool = False) -> list[dict]:
+                     protokoll: bool = False) -> list[dict]:
     tags = {name.lower(): tid for tid, name in pl.namen("/api/tags/").items()}
     if tag.lower() not in tags:
         return []
     kandidaten = pl.dokumente(date(jahr, monat, 1), bis, tag_id=tags[tag.lower()])
     text = {d["id"]: f"{d.get('title', '')}\n{d.get('content', '')}" for d in kandidaten}
     treffer = [d for d in kandidaten if monat_genannt(text[d["id"]], jahr, monat)]
-    if treffer or not mit_folgemonat:
+    if not protokoll:
+        return treffer
+    # Das Protokoll des Vormonats nennt mit dem Übermittlungsdatum auch diesen Monat
+    frueher = [monat_plus(jahr, monat, -n) for n in (1, 2, 3)]
+    treffer = [d for d in treffer if not any(monat_genannt(text[d["id"]], j, m) for j, m in frueher)]
+    if treffer:
         return treffer
     # Sonst: in der ersten Monatshälfte danach erstellt (die Abgabe bis zum 10.) und kein anderer Monat genannt
     nj, nm = monat_plus(jahr, monat, 1)

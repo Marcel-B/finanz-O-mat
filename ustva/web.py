@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -142,10 +143,34 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
             return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Finanz-O-Mat"'})
         return await call_next(request)
 
+    # Gefundene Protokolle ändern sich nicht mehr; "noch keins" wird nach ein paar Minuten neu gefragt
+    protokolle: dict[tuple, tuple[bool, float]] = {}
+
+    def abgegeben_pruefer(c: Config, client: httpx.Client):
+        pl = paperless.PaperlessClient(c.paperless_url, c.paperless_token, client)
+
+        def abgegeben(jahr: int, monat: int) -> bool:
+            schluessel = (c.paperless_url, c.paperless_tag_protokoll.lower(), jahr, monat)
+            if (alt := protokolle.get(schluessel)) and (alt[0] or time.monotonic() - alt[1] < 300):
+                return alt[0]
+            try:
+                ergebnis = monatsexport.protokoll_vorhanden(pl, c.paperless_tag_protokoll, jahr, monat)
+            except (paperless.PaperlessFehler, httpx.HTTPError, ValueError):
+                ergebnis = False  # ohne Paperless gilt die Frist wie bisher
+            protokolle[schluessel] = (ergebnis, time.monotonic())
+            return ergebnis
+
+        return abgegeben
+
     @app.get("/api/status")
     def status():
         c = aktuell()
-        frist = naechste_frist(_heute(), c.bundesland, c.dauerfristverlaengerung)
+        if c.paperless_aktiv and c.paperless_tag_protokoll:
+            with httpx.Client(timeout=5) as client:
+                frist = naechste_frist(_heute(), c.bundesland, c.dauerfristverlaengerung,
+                                       abgegeben_pruefer(c, client))
+        else:
+            frist = naechste_frist(_heute(), c.bundesland, c.dauerfristverlaengerung)
         return {
             "frist": frist.to_dict(),
             "versteuerung": cfg.versteuerung,

@@ -39,3 +39,17 @@ def test_naechste_frist():
 
 def test_naechste_frist_mit_dauerfrist():
     assert naechste_frist(date(2026, 10, 10), dauerfrist=True).zeitraum == "2026-08"
+
+
+def test_naechste_frist_ueberspringt_abgegebene_monate():
+    gefragt = []
+
+    def abgegeben(jahr, monat):
+        gefragt.append((jahr, monat))
+        return (jahr, monat) == (2026, 9)
+
+    f = naechste_frist(date(2026, 10, 10), abgegeben=abgegeben)
+    assert f.zeitraum == "2026-10" and f.faellig == date(2026, 11, 10)
+    assert f.to_dict()["abgegeben"] == ["September 2026"]
+    assert gefragt == [(2026, 9), (2026, 10)]  # abgelaufene Fristen werden gar nicht erst gefragt
+    assert naechste_frist(date(2026, 10, 10)).to_dict()["abgegeben"] == []

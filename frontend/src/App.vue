@@ -56,6 +56,13 @@ onMounted(async () => {
         bis {{ status.frist.faellig_text }} ·
         {{ status.frist.tage_bis === 0 ? "heute" : `noch ${status.frist.tage_bis} Tag${status.frist.tage_bis === 1 ? "" : "e"}` }}
       </div>
+      <div
+        v-if="status.frist.abgegeben.length"
+        v-tooltip.bottom="'ELSTER-Protokoll liegt in Paperless'"
+        class="mt-1 text-xs text-muted-color"
+      >
+        <i class="pi pi-check-circle mr-1 text-xs text-green-500" />{{ status.frist.abgegeben.join(", ") }} abgegeben
+      </div>
     </div>
   </header>
 

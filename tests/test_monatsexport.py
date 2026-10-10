@@ -10,6 +10,7 @@ from ustva import monatsexport
 from ustva.berechnung import berechnen
 from ustva.config import Config
 from ustva.models import Beleg, Umsatz
+from ustva.quellen.paperless import PaperlessClient
 from ustva.steuerfaelle import Art, Steuerfall
 
 TAGS = [{"id": 1, "name": "Eingangsrechnung"}, {"id": 2, "name": "Kontoauszug"}, {"id": 3, "name": "UStVA-Protokoll"}]
@@ -140,3 +141,52 @@ def test_protokoll_ohne_monat_im_text_aus_dem_folgemonat(db, umrechner):
         DOKUMENTE[:] = alt
     namen = zipfile.ZipFile(io.BytesIO(inhalt)).namelist()
     assert [n for n in namen if n.startswith("Finanzamt/")] == ["Finanzamt/2026-10-10_Scan-Finanzamt.pdf"]
+
+
+def test_protokoll_vorhanden():
+    pl = PaperlessClient("http://paperless.local", "t", httpx.Client(transport=httpx.MockTransport(handler)))
+    assert monatsexport.protokoll_vorhanden(pl, "UStVA-Protokoll", 2026, 9)
+    assert monatsexport.protokoll_vorhanden(pl, "UStVA-Protokoll", 2026, 8)
+    assert not monatsexport.protokoll_vorhanden(pl, "UStVA-Protokoll", 2026, 10)
+    assert not monatsexport.protokoll_vorhanden(pl, "Gibt-es-nicht", 2026, 9)
+
+
+def test_uebermittlungsdatum_macht_kein_protokoll_fuer_den_folgemonat():
+    # Das Protokoll für September nennt mit "09.10.2026" auch den Oktober
+    alt = list(DOKUMENTE)
+    DOKUMENTE[:] = [{"id": 60, "title": "117_5020_4819_Uebertragungsprotokoll_UStVA_2026_-_September",
+                     "created": "2026-10-09", "tags": [3], "content": "Übermittelt am 09.10.2026 um 18:02"}]
+    try:
+        pl = PaperlessClient("http://paperless.local", "t", httpx.Client(transport=httpx.MockTransport(handler)))
+        assert monatsexport.protokoll_vorhanden(pl, "UStVA-Protokoll", 2026, 9)
+        assert not monatsexport.protokoll_vorhanden(pl, "UStVA-Protokoll", 2026, 10)
+    finally:
+        DOKUMENTE[:] = alt
+
+
+def test_status_zeigt_naechsten_monat_wenn_protokoll_da(db, umrechner, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from ustva.web import create_app
+
+    echt = httpx.Client
+    monkeypatch.setattr("ustva.web.httpx.Client", lambda **kw: echt(transport=httpx.MockTransport(handler)))
+    cfg = Config(paperless_url="http://paperless.local", paperless_token="t")
+    frist = TestClient(create_app(cfg, db, umrechner, heute=date(2026, 10, 10))).get("/api/status").json()["frist"]
+    assert frist["zeitraum"] == "2026-10" and frist["faellig_text"] == "Dienstag, 10.11.2026"
+    assert frist["abgegeben"] == ["September 2026"]
+
+
+def test_status_ohne_erreichbares_paperless_wie_bisher(db, umrechner, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from ustva.web import create_app
+
+    def kaputt(request):
+        raise httpx.ConnectError("nicht erreichbar")
+
+    echt = httpx.Client
+    monkeypatch.setattr("ustva.web.httpx.Client", lambda **kw: echt(transport=httpx.MockTransport(kaputt)))
+    cfg = Config(paperless_url="http://paperless.local", paperless_token="t")
+    frist = TestClient(create_app(cfg, db, umrechner, heute=date(2026, 10, 10))).get("/api/status").json()["frist"]
+    assert frist["zeitraum"] == "2026-09" and frist["abgegeben"] == []

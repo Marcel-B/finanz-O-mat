@@ -8,7 +8,8 @@ verlängert sich die Frist um einen Monat.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 MONATSNAMEN = [
@@ -93,6 +94,7 @@ class Frist:
     monat: int
     faellig: date
     heute: date
+    abgegeben: list[tuple[int, int]] = field(default_factory=list)  # übersprungene, schon abgegebene Monate
 
     @property
     def zeitraum(self) -> str:
@@ -109,15 +111,26 @@ class Frist:
             "faellig": self.faellig.isoformat(),
             "faellig_text": f"{WOCHENTAGE[self.faellig.weekday()]}, {self.faellig:%d.%m.%Y}",
             "tage_bis": self.tage_bis,
+            "abgegeben": [f"{MONATSNAMEN[m - 1]} {j}" for j, m in self.abgegeben],
         }
 
 
-def naechste_frist(heute: date, bundesland: str = "", dauerfrist: bool = False) -> Frist:
-    """Die nächste noch offene Frist: der älteste Zeitraum, dessen Frist heute oder später endet."""
-    start = 2 if dauerfrist else 1
-    for zurueck in range(start, -1, -1):
-        j, m = monat_plus(heute.year, heute.month, -zurueck)
+def naechste_frist(heute: date, bundesland: str = "", dauerfrist: bool = False,
+                   abgegeben: Callable[[int, int], bool] | None = None) -> Frist:
+    """Die nächste noch offene Frist: der älteste Zeitraum, dessen Frist heute oder später endet.
+
+    ``abgegeben(jahr, monat)`` meldet Monate, die schon abgegeben sind (z. B. weil das
+    ELSTER-Protokoll vorliegt); sie werden übersprungen. Gefragt wird nur nach Monaten mit
+    offener Frist, vom ältesten an, und nur bis zum ersten nicht abgegebenen.
+    """
+    erledigt: list[tuple[int, int]] = []
+    for versatz in range(-(2 if dauerfrist else 1), 12):
+        j, m = monat_plus(heute.year, heute.month, versatz)
         faellig = abgabefrist(j, m, bundesland, dauerfrist)
-        if faellig >= heute:
-            return Frist(j, m, faellig, heute)
-    raise AssertionError("Die Frist des laufenden Monats liegt immer in der Zukunft")
+        if faellig < heute:
+            continue
+        if abgegeben is not None and abgegeben(j, m):
+            erledigt.append((j, m))
+            continue
+        return Frist(j, m, faellig, heute, erledigt)
+    raise AssertionError("Ein Jahr im Voraus kann noch nichts abgegeben sein")

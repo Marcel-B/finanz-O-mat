@@ -8,6 +8,7 @@ export interface Frist {
   faellig: string;
   faellig_text: string;
   tage_bis: number;
+  abgegeben: string[]; // übersprungen, weil das ELSTER-Protokoll in Paperless liegt
 }
 
 export interface Status {
