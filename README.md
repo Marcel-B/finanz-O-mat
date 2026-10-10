@@ -1,0 +1,129 @@
+# Finanz-O-Mat
+
+Kleine Webanwendung für die monatliche Umsatzsteuer-Voranmeldung (UStVA). Sie liest Rechnungen aus einem
+Verzeichnis oder aus Paperless-ngx ein, berechnet die Kennzahlen für das Formular USt 1 A und zeigt die nächste
+Abgabefrist. Die Werte tippst du anschließend selbst in [Mein ELSTER](https://www.elster.de) ab.
+
+Die App übermittelt nichts ans Finanzamt und ist keine Steuerberatung. Bei Sonderfällen beim Finanzamt oder
+Steuerberater nachfragen.
+
+## Was die App kann
+
+- Ausgangs- und Eingangsrechnungen aus einem Verzeichnis (PDF mit Textebene, .txt) oder aus Paperless-ngx einlesen.
+  Beträge, Datum, Steuersatz, Währung, USt-IdNr. und Steuerfall werden vorgeschlagen und müssen einmal bestätigt werden.
+- Belege manuell anlegen und korrigieren.
+- Kennzahlen berechnen, auch mit Auslandsbezug:
+
+  | Kz | Inhalt | Steuerfall in der App |
+  |---|---|---|
+  | 81 | Umsätze zu 19 % (netto, volle Euro) | Ausgang: Inland, steuerpflichtig |
+  | 86 | Umsätze zu 7 % | Ausgang: Inland, steuerpflichtig |
+  | 21 | Sonstige Leistungen an Unternehmer im EU-Ausland | Ausgang: Leistung an EU-Unternehmer |
+  | 41 | Innergemeinschaftliche Lieferungen | Ausgang: Innergemeinschaftliche Lieferung |
+  | 45 | Übrige nicht steuerbare Umsätze (z. B. Kunde im Drittland) | Ausgang: Leistung an Kunden im Drittland |
+  | 43 | Steuerfreie Ausfuhrlieferungen | Ausgang: Ausfuhrlieferung |
+  | 66 | Vorsteuer aus Rechnungen mit deutscher USt | Eingang: Rechnung mit deutscher Umsatzsteuer |
+  | 46 / 47 | Leistungen von EU-Unternehmern (Reverse Charge, § 13b Abs. 1) | Eingang: Leistung eines EU-Unternehmers |
+  | 84 / 85 | Leistungen von Drittland-Unternehmern, z. B. OpenAI (§ 13b Abs. 2) | Eingang: Leistung eines Drittland-Unternehmers |
+  | 89 / 93 | Innergemeinschaftlicher Erwerb von Waren | Eingang: Innergemeinschaftlicher Erwerb |
+  | 61 / 67 | Vorsteuer aus Erwerb bzw. Reverse Charge | ergibt sich aus 89/93 bzw. 47/85 |
+  | 83 | Zahllast bzw. Überschuss | berechnet |
+
+  Kennzahl 500 (ergänzende Angaben, seit 2026 statt Kz 23) bleibt im Normalfall leer.
+- Fremdwährungen umrechnen: Maßgeblich ist der monatliche Umsatzsteuer-Umrechnungskurs des BMF (§ 16 Abs. 6 UStG).
+  Den trägst du unter „Umrechnungskurse“ ein; ohne Eintrag nimmt die App das Monatsmittel der EZB-Referenzkurse und
+  weist darauf hin. Ein Kurs direkt am Beleg hat Vorrang.
+- Angaben für die Zusammenfassende Meldung (ZM) an das BZSt auflisten, wenn Kz 21 oder 41 vorkommen.
+- Nächste Frist anzeigen: 10. des Folgemonats, bei Wochenende oder Feiertag der nächste Werktag
+  (Landesfeiertage über `BUNDESLAND`), optional mit Dauerfristverlängerung.
+- CSV-Export der Kennzahlen und Belege (Semikolon, Dezimalkomma, öffnet direkt in Excel).
+
+## Starten
+
+Mit Docker:
+
+```sh
+cp .env.example .env        # anpassen
+mkdir -p rechnungen/ausgang rechnungen/eingang
+docker compose up -d
+```
+
+Danach läuft die App auf <http://localhost:8000>.
+
+Ohne Docker (Python 3.11 oder neuer):
+
+```sh
+pip install -e .
+export RECHNUNGS_VERZEICHNIS=~/Rechnungen
+python -m ustva serve          # Weboberfläche auf http://127.0.0.1:8000
+```
+
+## Monatlicher Ablauf
+
+1. App öffnen. Ausgewählt ist automatisch der Monat, dessen Voranmeldung als Nächstes fällig ist.
+2. „Rechnungen einlesen“ holt neue Belege aus Verzeichnis und Paperless. Schon eingelesene werden übersprungen.
+3. Gelb markierte Belege anklicken, mit der Rechnung vergleichen, ggf. korrigieren und speichern (oder „OK“).
+4. Hinweise lesen. Bei Fremdwährungen den BMF-Kurs des Monats eintragen.
+5. In Mein ELSTER das Formular „Umsatzsteuer-Voranmeldung“ öffnen und die Kennzahlen eintragen. Werte mit
+   „berechnet ELSTER“ rechnet ELSTER selbst aus; sie dienen zum Abgleich.
+6. Übertragungsprotokoll speichern, Zahlung veranlassen, CSV für die eigene Ablage exportieren.
+
+Für die Kommandozeile oder einen Cronjob am Monatsanfang:
+
+```sh
+python -m ustva bericht --einlesen            # nächste fällige Voranmeldung
+python -m ustva bericht --zeitraum 2026-09
+```
+
+Der Befehl endet mit Status 2, wenn Belege nicht berücksichtigt werden konnten (z. B. fehlender Kurs).
+
+## Rechnungsverzeichnis
+
+```
+rechnungen/
+  ausgang/            eigene Rechnungen (Unterordner beliebig, z. B. ausgang/2026/)
+  eingang/            Rechnungen von Lieferanten
+```
+
+Erkannt werden auch `ausgangsrechnungen`/`einnahmen` und `eingangsrechnungen`/`ausgaben`
+(anpassbar über `ORDNER_AUSGANG` und `ORDNER_EINGANG`). Gescannte PDFs ohne Textebene lassen sich nicht auslesen;
+dafür Paperless nutzen oder die Werte manuell eintragen.
+
+Optional kann neben einer Rechnung eine JSON-Datei mit festen Werten liegen, die die Erkennung überschreiben,
+z. B. `openai-2026-09.pdf.json`:
+
+```json
+{"steuerfall": "ausland_13b", "netto": "20.00", "waehrung": "USD", "partner": "OpenAI", "geprueft": true}
+```
+
+## Paperless-ngx
+
+1. In Paperless unter „Profil“ ein API-Token erzeugen und mit der URL in `PAPERLESS_URL` und `PAPERLESS_TOKEN` eintragen.
+2. Rechnungen mit dem Tag oder Dokumenttyp `Ausgangsrechnung` bzw. `Eingangsrechnung` versehen
+   (Namen anpassbar über `PAPERLESS_TAGS_AUSGANG` und `PAPERLESS_TAGS_EINGANG`, mehrere mit Komma).
+3. Optional benutzerdefinierte Felder anlegen; sie haben Vorrang vor dem OCR-Text:
+   `Netto` oder `Brutto` (Geldfeld, Währung wird übernommen), `Umsatzsteuer`, `Steuersatz`, `Zahlungsdatum`.
+
+Eingelesen werden Dokumente, deren Datum im gewählten Monat oder in den beiden Vormonaten liegt.
+
+## Annahmen und Grenzen
+
+- Standard ist Soll-Versteuerung (Rechnungsdatum zählt). Mit `VERSTEUERUNG=ist` zählen steuerpflichtige
+  Inlandsumsätze erst mit dem Zahlungsdatum; Vorsteuer und Reverse Charge richten sich weiter nach der Rechnung.
+- Standard ist keine Dauerfristverlängerung (`DAUERFRISTVERLAENGERUNG=true` schaltet sie ein).
+- Das Rechnungsdatum gilt als Leistungsdatum. Weicht der Leistungsmonat ab, das Datum am Beleg anpassen.
+- Bei Reverse Charge nimmt die App 19 % an und geht von vollem Vorsteuerabzug aus (Kz 67 = Kz 47 + Kz 85).
+- Bemessungsgrundlagen werden auf volle Euro abgerundet, die Steuer für Kz 81/86/89/93 daraus berechnet, wie ELSTER es tut.
+- Nicht abgedeckt: Kleinunternehmer, Differenzbesteuerung, Einfuhrumsatzsteuer (Kz 62), Vorsteuerberichtigung,
+  Steuersatz 0 % (Kz 87), Bauleistungen (Kz 73/74), Sondervorauszahlung (Kz 39), die ZM-Übermittlung selbst.
+- Die automatische Erkennung ist eine Heuristik. Jeder eingelesene Beleg bleibt als „prüfen“ markiert, bis du ihn bestätigst.
+
+## Entwicklung
+
+```sh
+pip install -e ".[dev]"
+pytest
+ruff check .
+```
+
+Die API-Dokumentation liegt unter `/api/docs`.
