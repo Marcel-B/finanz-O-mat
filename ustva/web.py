@@ -15,12 +15,12 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from . import aktualisierung, backup, bank, einstellungen, export, monatsexport, taetigkeit, uebersicht
+from . import adressbuch, aktualisierung, backup, bank, einstellungen, export, monatsexport, taetigkeit, uebersicht
 from .berechnung import berechnen, zeitraum
 from .config import Config
 from .db import Datenbank
 from .fristen import naechste_frist
-from .models import Beleg, Taetigkeit
+from .models import Beleg, Kontakt, Taetigkeit
 from .quellen import ImportErgebnis, neu_einlesen, paperless, verzeichnis
 from .steuerfaelle import KENNZAHLEN, STEUERFAELLE, Art, Steuerfall
 from .waehrung import Umrechner
@@ -71,6 +71,49 @@ class BelegEingabe(BaseModel):
         if v is not None and v <= 0:
             raise ValueError("Kurs muss größer als 0 sein")
         return v
+
+
+class KontaktEingabe(BaseModel):
+    name: str
+    rolle: str = ""
+    kundennummer: str = ""
+    ustid: str = ""
+    strasse: str = ""
+    plz: str = ""
+    ort: str = ""
+    land: str = ""
+    email: str = ""
+    telefon: str = ""
+    ansprechpartner: str = ""
+    notiz: str = ""
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Name fehlt")
+        return v.strip()
+
+    @field_validator("rolle")
+    @classmethod
+    def _rolle(cls, v: str) -> str:
+        if v not in ("", "kunde", "lieferant", "beides"):
+            raise ValueError("Rolle: kunde, lieferant oder beides")
+        return v
+
+    @field_validator("ustid")
+    @classmethod
+    def _ustid(cls, v: str) -> str:
+        return v.replace(" ", "").upper()
+
+    @field_validator("land")
+    @classmethod
+    def _land(cls, v: str) -> str:
+        return adressbuch.land_code(v)
+
+
+class ZusammenfuehrenEingabe(BaseModel):
+    mit: int  # dieser Kontakt geht im aufgerufenen auf
 
 
 class KursEingabe(BaseModel):
@@ -399,6 +442,44 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
             leer = ImportErgebnis(fehler=["Keine Quelle konfiguriert (RECHNUNGS_VERZEICHNIS oder PAPERLESS_URL)"])
             ergebnisse["keine"] = leer.to_dict()
         return ergebnisse
+
+    @app.get("/api/kontakte")
+    def kontakte():
+        return adressbuch.liste(db)
+
+    @app.get("/api/kontakte/csv")
+    def kontakte_csv():
+        return Response("\ufeff" + adressbuch.csv_text(db), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="adressbuch.csv"'})
+
+    def _kontakt(kontakt_id: int) -> Kontakt:
+        k = db.kontakt(kontakt_id)
+        if k is None:
+            raise HTTPException(404, "Kontakt nicht gefunden")
+        return k
+
+    @app.post("/api/kontakte", status_code=201)
+    def kontakt_anlegen(eingabe: KontaktEingabe):
+        return db.kontakt_speichern(Kontakt(**eingabe.model_dump(), quellen=["manuell"])).to_dict()
+
+    @app.put("/api/kontakte/{kontakt_id}")
+    def kontakt_aendern(kontakt_id: int, eingabe: KontaktEingabe):
+        alt = _kontakt(kontakt_id)
+        aliase = alt.aliase if eingabe.name == alt.name else [*alt.aliase, alt.name]  # Belege weiter zuordnen
+        neu = Kontakt(**eingabe.model_dump(), quellen=alt.quellen, aliase=aliase, id=kontakt_id)
+        return db.kontakt_speichern(neu).to_dict()
+
+    @app.post("/api/kontakte/{kontakt_id}/zusammenfuehren")
+    def kontakt_zusammenfuehren(kontakt_id: int, eingabe: ZusammenfuehrenEingabe):
+        return adressbuch.zusammenfuehren(db, kontakt_id, eingabe.mit).to_dict()
+
+    @app.delete("/api/kontakte/{kontakt_id}", status_code=204)
+    def kontakt_ausblenden(kontakt_id: int):
+        """Blendet aus statt zu löschen, damit der Abgleich mit den Belegen ihn nicht neu anlegt."""
+        k = _kontakt(kontakt_id)
+        k.ausgeblendet = True
+        db.kontakt_speichern(k)
+        return Response(status_code=204)
 
     @app.get("/api/kurse")
     def kurse():

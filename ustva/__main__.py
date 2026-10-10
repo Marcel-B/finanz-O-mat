@@ -7,7 +7,7 @@
     python -m ustva passwort                  Passwort der Weboberfläche neu setzen
     python -m ustva passwort --zuruecksetzen  wieder APP_BENUTZER/APP_PASSWORT verwenden
     python -m ustva sevdesk sichern --ordner DIR        alles aus sevDesk sichern (Token in SEVDESK_TOKEN)
-    python -m ustva sevdesk importieren --ordner DIR    Sicherung übernehmen (erst mit --trocken)
+    python -m ustva sevdesk importieren --ordner DIR    Sicherung oder Export übernehmen (erst mit --trocken)
     python -m ustva sevdesk abgleich --erwartet CSV     Zahllast je Monat gegen abgegebene Werte
     python -m ustva paperless duplikate [--loeschen]    doppelte Rechnungen in Paperless finden/aufräumen
 """
@@ -181,30 +181,54 @@ def sevdesk_befehl(args, cfg: Config) -> int:
         _liste("Fehler", u["fehler"])
         return 1 if u["fehler"] else 0
 
+    from .sevdesk_export import Export
+
+    quelle: sevdesk.Quelle | None = None
+    abgegeben_aus_export: list[str] | None = None
+    if ordner is not None:
+        try:
+            quelle = Export.laden(ordner) if Export.ist_export(ordner) else sevdesk.Sicherung.laden(ordner)
+        except sevdesk.SevdeskFehler as e:
+            print(f"{e}. Erwartet wird ein Sicherungsordner (sicherung.json) oder die entpackten Export-Dateien "
+                  "(voucher.csv, invoices.csv).", file=sys.stderr)
+            return 1
     db = Datenbank(cfg.datenbank)
     umrechner = Umrechner(db, cfg.ezb_kurse)
     erwartet = sevdesk.erwartet_lesen(Path(args.erwartet)) if args.erwartet else {}
+    if not erwartet and isinstance(quelle, Export):
+        erwartet, abgegeben_aus_export = quelle.abgegeben()
     toleranz = Decimal(args.toleranz.replace(",", "."))
+    if abgegeben_aus_export is not None:
+        print(f"Abgegebene Zahllast aus den Umsatzsteuer-Zahlungen im Export ({len(erwartet)} Zeiträume).")
+        _liste("Zahlungen ohne erkennbaren Zeitraum (z. B. Jahreserklärung), nicht im Abgleich",
+               abgegeben_aus_export)
     if args.schritt == "abgleich":
         belege = db.alle_belege()
-        monate = sorted(erwartet) if erwartet and not (args.von or args.bis) else \
+        monate = sevdesk.monate_von(erwartet) if erwartet and not (args.von or args.bis) else \
             sevdesk.monate(belege, cfg.versteuerung, args.von, args.bis)
         zeilen = sevdesk.monatsvergleich(belege, umrechner, cfg.versteuerung, monate, erwartet, toleranz)
         return 2 if _vergleich_ausgeben(zeilen) else 0
 
-    try:
-        s = sevdesk.Sicherung.laden(ordner)
-    except sevdesk.SevdeskFehler as e:
-        print(e, file=sys.stderr)
-        return 1
+    s = quelle
+    assert s is not None
     erg = sevdesk.importieren(db, cfg, s, trocken=args.trocken, paperless_nutzen=not args.ohne_paperless,
                               von=args.von, bis=args.bis, warten=args.warten)
     print(("PROBELAUF – es wurde nichts geschrieben.\n" if args.trocken else "")
-          + f"Sicherung vom {s.erstellt or '?'}: {erg.neu} {'würden übernommen' if args.trocken else 'übernommen'}"
+          + f"{'Export' if isinstance(s, Export) else 'Sicherung'} vom {s.erstellt or '?'}: "
+          + f"{erg.neu} {'würden übernommen' if args.trocken else 'übernommen'}"
           + f" ({len(erg.belege)} Belege), {erg.vorhanden} schon übernommen, {erg.ausserhalb} außerhalb des Zeitraums")
     if not args.trocken and not args.ohne_paperless:
         print(f"Paperless: {erg.hochgeladen} Dateien hochgeladen"
               + (f", {erg.wartet} noch in Verarbeitung (später einfach erneut starten)" if erg.wartet else ""))
+    if isinstance(s, Export):
+        from . import adressbuch
+
+        kontakte = s.adressbuch()
+        if args.trocken:
+            print(f"Adressbuch: {len(kontakte)} Kontakte aus sevDesk würden übernommen bzw. ergänzt")
+        else:
+            a = adressbuch.uebernehmen(db, kontakte)
+            print(f"Adressbuch: {a.neu} Kontakte neu, {a.ergaenzt} ergänzt")
     for grund, anzahl in sorted(erg.uebersprungen.items()):
         print(f"Nicht übernommen: {anzahl} × {grund}")
     print()
@@ -237,11 +261,12 @@ def main(argv: list[str] | None = None) -> int:
     s1 = sd_sub.add_parser("sichern", help="alle Daten und Dateien aus sevDesk in einen Ordner sichern")
     s1.add_argument("--ordner", required=True, help="Zielordner der Sicherung")
     s2 = sd_sub.add_parser("importieren", help="Sicherung nach finanz-O-mat und Paperless übernehmen")
-    s2.add_argument("--ordner", required=True, help="Ordner der Sicherung")
+    s2.add_argument("--ordner", required=True, help="Ordner der Sicherung oder der entpackten Export-Dateien")
     s2.add_argument("--trocken", action="store_true", help="Probelauf: nichts schreiben, nur zeigen")
     s2.add_argument("--ohne-paperless", action="store_true", help="Dateien nicht nach Paperless laden")
     s2.add_argument("--warten", type=float, default=300, help="Sekunden auf Paperless warten (Standard 300)")
     s3 = sd_sub.add_parser("abgleich", help="Zahllast je Monat gegen die abgegebenen Werte prüfen")
+    s3.add_argument("--ordner", help="Export-Ordner: abgegebene Zahllast aus den Umsatzsteuer-Zahlungen nehmen")
     for p_ in (s2, s3):
         p_.add_argument("--von", help="erster Monat JJJJ-MM")
         p_.add_argument("--bis", help="letzter Monat JJJJ-MM")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -37,6 +38,9 @@ class Beleg:
     pruefen: bool = False  # automatisch erkannt, noch nicht bestätigt
     hinweise: list[str] = field(default_factory=list)
     id: int | None = None
+    # Anschrift des Partners aus einer E-Rechnung (strasse, plz, ort, land, email); nur beim Einlesen gefüllt,
+    # landet im Adressbuch, nicht am Beleg
+    anschrift: dict[str, str] = field(default_factory=dict)
 
     def steuer_in_belegwaehrung(self) -> Decimal:
         if self.steuer is not None:
@@ -123,3 +127,41 @@ class Taetigkeit:
             elif isinstance(value, date):
                 d[key] = value.isoformat()
         return d
+
+
+def schluessel(name: str) -> str:
+    """Name zum Wiedererkennen: ohne Groß-/Kleinschreibung und Satzzeichen."""
+    return re.sub(r"[^0-9a-zäöüß]+", " ", name.lower()).strip()
+
+
+@dataclass
+class Kontakt:
+    """Eintrag im Adressbuch (siehe ustva/adressbuch.py)."""
+
+    name: str
+    rolle: str = ""  # kunde | lieferant | beides | ""
+    kundennummer: str = ""
+    ustid: str = ""
+    strasse: str = ""
+    plz: str = ""
+    ort: str = ""
+    land: str = ""  # ISO-Code, wenn bekannt
+    email: str = ""
+    telefon: str = ""
+    ansprechpartner: str = ""
+    notiz: str = ""
+    quellen: list[str] = field(default_factory=list)
+    aliase: list[str] = field(default_factory=list)  # weitere Schreibweisen (nach dem Zusammenführen)
+    ausgeblendet: bool = False
+    id: int | None = None
+
+    @property
+    def schluessel(self) -> str:
+        return schluessel(self.name)
+
+    @property
+    def schluessel_alle(self) -> set[str]:
+        return {schluessel(n) for n in [self.name, *self.aliase]} - {""}
+
+    def to_dict(self) -> dict:
+        return asdict(self)

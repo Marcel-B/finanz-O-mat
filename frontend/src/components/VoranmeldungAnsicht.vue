@@ -9,12 +9,13 @@ import { useToast } from "primevue/usetoast";
 import { computed, ref, watch } from "vue";
 
 import { api, type Beleg, type Bericht, type Kennzahl, type Status, type Steuerfall } from "@/api";
-import { ausIso, betrag, datum, zeitraumVon } from "@/format";
+import { ausIso, betrag, datum, passtZurSuche, suchtext, zeitraumVon } from "@/format";
 
 import BelegDialog from "./BelegDialog.vue";
 import KarteBox from "./KarteBox.vue";
 import KontoUmsaetze from "./KontoUmsaetze.vue";
 import KursTabelle from "./KursTabelle.vue";
+import SuchFeld from "./SuchFeld.vue";
 
 const props = defineProps<{ status: Status; steuerfaelle: Steuerfall[] }>();
 const toast = useToast();
@@ -134,6 +135,21 @@ async function geprueft(b: Beleg) {
 }
 
 const steuerfallTitel = (wert: string) => props.steuerfaelle.find((s) => s.wert === wert)?.titel ?? wert;
+
+const belegSuche = ref("");
+const gefundeneBelege = computed(() =>
+  (bericht.value?.belege ?? []).filter((b) =>
+    passtZurSuche(
+      suchtext(
+        b.partner, b.beschreibung, b.rechnungsnummer, b.partner_ustid, b.rechnungsdatum, b.zahlungsdatum,
+        b.art === "ausgang" ? "Ausgang" : "Eingang", steuerfallTitel(b.steuerfall), `Kz ${steuerfallKz(b.steuerfall)}`,
+        b.netto, b.steuer, b.waehrung, b.netto_eur, b.steuer_eur, b.brutto_eur, b.erechnung, b.hinweise, b.fehler,
+        b.pruefen && "prüfen",
+      ),
+      belegSuche.value,
+    ),
+  ),
+);
 const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert === wert)?.kennzahlen ?? "";
 </script>
 
@@ -246,8 +262,10 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
   </div>
 
   <KarteBox v-if="bericht" titel="Belege im Zeitraum">
-    <template v-if="neuLesbar" #aktionen>
+    <template #aktionen>
+      <SuchFeld v-model="belegSuche" :treffer="gefundeneBelege.length" :gesamt="bericht.belege.length" />
       <Button
+        v-if="neuLesbar"
         label="Ungeprüfte neu einlesen"
         icon="pi pi-refresh"
         severity="secondary"
@@ -259,7 +277,7 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
       />
     </template>
     <DataTable
-      :value="bericht.belege"
+      :value="gefundeneBelege"
       :loading="laedt"
       size="small"
       data-key="id"
@@ -268,7 +286,9 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
       :row-class="(b: Beleg) => (b.pruefen ? '!bg-amber-50 dark:!bg-amber-950/40 cursor-pointer' : 'cursor-pointer')"
       @row-click="bearbeiten($event.data)"
     >
-      <template #empty><span class="text-muted-color">Keine Belege in diesem Zeitraum.</span></template>
+      <template #empty>
+        <span class="text-muted-color">{{ belegSuche.trim() ? "Keine Belege passen zur Suche." : "Keine Belege in diesem Zeitraum." }}</span>
+      </template>
       <Column header="Datum">
         <template #body="{ data }">
           {{ datum(data.rechnungsdatum) }}

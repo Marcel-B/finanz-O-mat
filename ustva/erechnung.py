@@ -43,6 +43,16 @@ class Partei:
     name: str = ""
     ustid: str = ""
     land: str = ""
+    strasse: str = ""
+    plz: str = ""
+    ort: str = ""
+    email: str = ""
+
+    @property
+    def anschrift(self) -> dict[str, str]:
+        """Für das Adressbuch; leer, wenn die Rechnung keine Anschrift enthält."""
+        werte = {"strasse": self.strasse, "plz": self.plz, "ort": self.ort, "land": self.land, "email": self.email}
+        return {k: v for k, v in werte.items() if v} if self.strasse or self.ort or self.email else {}
 
     @property
     def land_ustid(self) -> str:
@@ -157,7 +167,13 @@ def _cii_partei(p: ET.Element | None) -> Partei:
         if reg.get("schemeID", "VA") == "VA":
             ustid = (reg.text or "").strip().replace(" ", "").upper()
             break
-    return Partei(_text(p, "Name"), ustid, _text(p, "PostalTradeAddress/CountryID").upper())
+    adresse = p.find("PostalTradeAddress")
+    return Partei(
+        _text(p, "Name"), ustid, _text(adresse, "CountryID").upper(), strasse=_text(adresse, "LineOne"),
+        plz=_text(adresse, "PostcodeCode"), ort=_text(adresse, "CityName"),
+        email=_text(p, "URIUniversalCommunication/URIID")
+        or _text(p, "DefinedTradeContact/EmailURIUniversalCommunication/URIID"),
+    )
 
 
 def _cii(wurzel: ET.Element) -> ERechnung:
@@ -207,7 +223,11 @@ def _ubl_partei(p: ET.Element | None) -> Partei:
             ustid = _text(schema, "CompanyID").replace(" ", "").upper()
             break
     name = _text(p, "PartyLegalEntity/RegistrationName") or _text(p, "PartyName/Name")
-    return Partei(name, ustid, _text(p, "PostalAddress/Country/IdentificationCode").upper())
+    adresse = p.find("PostalAddress")
+    return Partei(
+        name, ustid, _text(adresse, "Country/IdentificationCode").upper(), strasse=_text(adresse, "StreetName"),
+        plz=_text(adresse, "PostalZone"), ort=_text(adresse, "CityName"), email=_text(p, "Contact/ElectronicMail"),
+    )
 
 
 def _ubl(wurzel: ET.Element) -> ERechnung:
@@ -411,5 +431,6 @@ def belege(r: ERechnung, art: Art, eigene_ustid: str = "") -> list[Beleg]:
             # Reine Annahmen (19 % bei Reverse Charge) und Abweichungen sollen angesehen werden.
             pruefen=bool(hinweise) or r.rechnungsdatum is None,
             hinweise=hinweise,
+            anschrift=partner.anschrift,
         ))
     return ergebnis

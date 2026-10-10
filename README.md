@@ -44,6 +44,10 @@ Steuerberater nachfragen.
 - Reiter „Übersicht“: grobe Jahresübersicht der Einnahmen und Ausgaben (netto) je Monat mit Diagramm, Ergebnis,
   USt-Zahllast und größten Kunden und Lieferanten. Nur zum eigenen Überblick, keine Gewinnermittlung (EÜR).
 - Reiter „Tätigkeiten“: Tätigkeitsnachweis für den Kunden, siehe unten.
+- Reiter „Adressbuch“: alle Kunden und Lieferanten mit Anschrift, USt-IdNr., Kundennummer und Anzahl der Belege.
+  Neue Partner aus Belegen kommen von selbst dazu; Anschriften stammen aus E-Rechnungen und dem sevDesk-Umzug oder
+  werden von Hand ergänzt. Doppelte Schreibweisen lassen sich zusammenführen, CSV-Export für Excel. Automatische
+  Quellen füllen nur leere Felder, eigene Einträge bleiben stehen.
 
 ## Starten
 
@@ -79,6 +83,8 @@ Ohne gebaute Oberfläche läuft nur die API; die Startseite zeigt dann den Build
    beide Dokumente. Schon erfasste Doppel zeigt die Monatsansicht als Warnung.
 3. Bezahlte Ausgangsrechnungen unter „Belege ohne Zeitraum“ anklicken und das Zahlungsdatum eintragen.
    Gelb markierte Belege anklicken, mit der Rechnung vergleichen, ggf. korrigieren und speichern (oder „OK“).
+   Über den Belegen und den Kontoumsätzen filtert je ein Suchfeld die Liste des Monats (Partner, Text,
+   Rechnungsnummer, Betrag wie „62,89“, Datum wie „22.09.2026“; mehrere Wörter müssen alle vorkommen).
 4. Hinweise lesen. Bei Fremdwährungen den BMF-Kurs des Monats eintragen.
 5. In Mein ELSTER das Formular „Umsatzsteuer-Voranmeldung“ öffnen und die Kennzahlen eintragen. Werte mit
    „berechnet ELSTER“ rechnet ELSTER selbst aus; sie dienen zum Abgleich.
@@ -225,9 +231,10 @@ erfassten Monate. Der Stundensatz wird am Eintrag gespeichert; ein neuer Satz ä
 
 ## Umzug aus sevDesk
 
-`python -m ustva sevdesk sichern|importieren|abgleich` sichert alle Daten und PDFs aus sevDesk, legt die Dateien in
-Paperless ab, übernimmt die Buchungen als geprüfte Belege und vergleicht die Zahllast je Monat mit den abgegebenen
-Voranmeldungen. Anleitung: [docs/sevdesk-migration.md](docs/sevdesk-migration.md).
+`finanz-o-mat sevdesk importieren|abgleich` übernimmt die Export-Dateien der sevDesk-Oberfläche (oder eine
+Sicherung über die API mit `sevdesk sichern`), legt die Dateien in Paperless ab, übernimmt die Buchungen als
+geprüfte Belege und vergleicht die Zahllast je Monat mit den abgegebenen Voranmeldungen.
+Anleitung: [docs/sevdesk-migration.md](docs/sevdesk-migration.md).
 
 ## Annahmen und Grenzen
 

@@ -251,6 +251,34 @@ export interface TaetigkeitImport {
   vorlage: string[];
 }
 
+export type Rolle = "" | "kunde" | "lieferant" | "beides";
+
+export interface KontaktEingabe {
+  name: string;
+  rolle: Rolle;
+  kundennummer: string;
+  ustid: string;
+  strasse: string;
+  plz: string;
+  ort: string;
+  land: string;
+  email: string;
+  telefon: string;
+  ansprechpartner: string;
+  notiz: string;
+}
+
+export interface Kontakt extends KontaktEingabe {
+  id: number;
+  quellen: string[];
+  aliase: string[];
+  ausgeblendet: boolean;
+  belege: number;
+  ausgang: number;
+  eingang: number;
+  letzter_beleg: string | null;
+}
+
 async function anfrage<T>(pfad: string, optionen: RequestInit = {}): Promise<T> {
   const antwort = await fetch(pfad, {
     ...optionen,
@@ -296,6 +324,13 @@ export const api = {
     post<Umsatz>(`/api/umsaetze/${umsatzId}/zuordnen`, { beleg_id: belegId }),
   ignorieren: (umsatzId: number, daten: { ignoriert?: boolean; grund?: string; regel?: boolean }) =>
     post<Umsatz>(`/api/umsaetze/${umsatzId}/ignorieren`, daten),
+  kontakte: () => anfrage<Kontakt[]>("/api/kontakte"),
+  kontaktAnlegen: (k: KontaktEingabe) => post<Kontakt>("/api/kontakte", k),
+  kontaktAendern: (id: number, k: KontaktEingabe) =>
+    anfrage<Kontakt>(`/api/kontakte/${id}`, { method: "PUT", body: JSON.stringify(k) }),
+  kontaktAusblenden: (id: number) => anfrage<null>(`/api/kontakte/${id}`, { method: "DELETE" }),
+  kontakteZusammenfuehren: (ziel: number, mit: number) =>
+    post<Kontakt>(`/api/kontakte/${ziel}/zusammenfuehren`, { mit }),
   kurse: () => anfrage<Kurs[]>("/api/kurse"),
   kursSpeichern: (k: { waehrung: string; zeitraum: string; kurs: string; quelle: string }) =>
     anfrage<Kurs[]>("/api/kurse", { method: "PUT", body: JSON.stringify(k) }),

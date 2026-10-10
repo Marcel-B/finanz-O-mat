@@ -9,7 +9,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from .models import Beleg, Taetigkeit, Umsatz
+from .models import Beleg, Kontakt, Taetigkeit, Umsatz
 from .steuerfaelle import Art, Steuerfall
 
 SCHEMA = """
@@ -82,6 +82,24 @@ CREATE TABLE IF NOT EXISTS taetigkeiten (
     leistungsart TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS taetigkeiten_datum ON taetigkeiten(datum);
+CREATE TABLE IF NOT EXISTS kontakte (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    rolle TEXT NOT NULL DEFAULT '',
+    kundennummer TEXT NOT NULL DEFAULT '',
+    ustid TEXT NOT NULL DEFAULT '',
+    strasse TEXT NOT NULL DEFAULT '',
+    plz TEXT NOT NULL DEFAULT '',
+    ort TEXT NOT NULL DEFAULT '',
+    land TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
+    telefon TEXT NOT NULL DEFAULT '',
+    ansprechpartner TEXT NOT NULL DEFAULT '',
+    notiz TEXT NOT NULL DEFAULT '',
+    quellen TEXT NOT NULL DEFAULT '[]',
+    aliase TEXT NOT NULL DEFAULT '[]',
+    ausgeblendet INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS kurse (
     waehrung TEXT NOT NULL,
     zeitraum TEXT NOT NULL,
@@ -147,6 +165,23 @@ def _beleg_zu_werten(b: Beleg) -> list:
         b.beschreibung, b.quelle, b.quelle_ref, b.quelle_link, int(b.pruefen), json.dumps(b.hinweise),
         b.erechnung,
     ]
+
+
+KONTAKT_FELDER = [
+    "name", "rolle", "kundennummer", "ustid", "strasse", "plz", "ort", "land", "email", "telefon",
+    "ansprechpartner", "notiz", "quellen", "aliase", "ausgeblendet",
+]
+JSON_FELDER = ("quellen", "aliase")
+
+
+def _kontakt_zu_werten(k: Kontakt) -> list:
+    return [json.dumps(getattr(k, f)) if f in JSON_FELDER else int(k.ausgeblendet) if f == "ausgeblendet"
+            else getattr(k, f) for f in KONTAKT_FELDER]
+
+
+def _zeile_zu_kontakt(z: sqlite3.Row) -> Kontakt:
+    werte = {f: json.loads(z[f]) if f in JSON_FELDER else z[f] for f in KONTAKT_FELDER}
+    return Kontakt(**{**werte, "ausgeblendet": bool(z["ausgeblendet"])}, id=z["id"])
 
 
 UMSATZ_FELDER = [
@@ -352,6 +387,35 @@ class Datenbank:
     def taetigkeit_loeschen(self, taetigkeit_id: int) -> None:
         with self._lock, self._con:
             self._con.execute("DELETE FROM taetigkeiten WHERE id = ?", (taetigkeit_id,))
+
+    # Adressbuch
+    def kontakte(self) -> list[Kontakt]:
+        with self._lock:
+            zeilen = self._con.execute("SELECT * FROM kontakte ORDER BY name COLLATE NOCASE, id").fetchall()
+        return [_zeile_zu_kontakt(z) for z in zeilen]
+
+    def kontakt(self, kontakt_id: int) -> Kontakt | None:
+        with self._lock:
+            z = self._con.execute("SELECT * FROM kontakte WHERE id = ?", (kontakt_id,)).fetchone()
+        return _zeile_zu_kontakt(z) if z else None
+
+    def kontakt_speichern(self, k: Kontakt) -> Kontakt:
+        """Legt den Kontakt an (ohne id) oder überschreibt ihn."""
+        with self._lock, self._con:
+            if k.id is None:
+                cur = self._con.execute(
+                    f"INSERT INTO kontakte ({', '.join(KONTAKT_FELDER)}) "
+                    f"VALUES ({', '.join('?' for _ in KONTAKT_FELDER)})", _kontakt_zu_werten(k),
+                )
+                k.id = cur.lastrowid
+            else:
+                zuweisung = ", ".join(f"{f} = ?" for f in KONTAKT_FELDER)
+                self._con.execute(f"UPDATE kontakte SET {zuweisung} WHERE id = ?", [*_kontakt_zu_werten(k), k.id])
+        return k
+
+    def kontakt_loeschen(self, kontakt_id: int) -> None:
+        with self._lock, self._con:
+            self._con.execute("DELETE FROM kontakte WHERE id = ?", (kontakt_id,))
 
     # Kurse
     def kurs_lesen(self, waehrung: str, zeitraum: str) -> tuple[Decimal, str] | None:
