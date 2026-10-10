@@ -192,9 +192,53 @@ mailabruf_skript() {
     echo "$LIB_DIR/mailabruf.py"
 }
 
+antwortet_paperless() {
+    # Die API antwortet ohne Token mit 401/403, mit Weiterleitung oder 200 je nach Version
+    local code
+    code=$(curl -s -o /dev/null -m 3 -w '%{http_code}' "$1/api/" 2>/dev/null || true)
+    [[ $code =~ ^(200|301|302|401|403)$ ]]
+}
+
+finde_paperless_url() {
+    # Setzt PAPERLESS_URL auf eine Adresse, unter der die Paperless-API auf diesem Rechner antwortet
+    [[ -n ${PAPERLESS_URL:-} ]] && { export PAPERLESS_URL; return 0; }
+    local ports=() port host url gesehen=" "
+    # Helper-Script: GRANIAN_PORT im Dienst; sonst PAPERLESS_PORT; dazu die Ports, auf denen der Webserver lauscht
+    port=$(systemctl show paperless-webserver.service -p Environment --value 2>/dev/null | tr ' ' '\n' \
+        | sed -n 's/^\(GRANIAN_PORT\|PAPERLESS_PORT\)=//p' | head -n 1 || true)
+    [[ -n $port ]] && ports+=("$port")
+    port=$(paperless_conf_wert PAPERLESS_PORT)
+    [[ -n $port ]] && ports+=("$port")
+    if [[ $PAPERLESS_ART == docker ]]; then
+        # z. B. "0.0.0.0:8000" -> 8000
+        while read -r port; do ports+=("${port##*:}"); done < <(docker port "$PAPERLESS_CONTAINER" 8000/tcp 2>/dev/null || true)
+    fi
+    if command -v ss >/dev/null; then
+        while read -r port; do ports+=("$port"); done < <(ss -Htlnp 2>/dev/null \
+            | awk '/granian|gunicorn|uvicorn|python|docker-proxy/ {n = split($4, a, ":"); print a[n]}' | sort -un || true)
+    fi
+    ports+=(8000)
+    for port in "${ports[@]}"; do
+        [[ $gesehen == *" $port "* ]] && continue
+        gesehen+="$port "
+        for host in 127.0.0.1 ::1 $(hostname -I 2>/dev/null || true); do
+            if [[ $host == *:* ]]; then url="http://[$host]:$port"; else url="http://$host:$port"; fi
+            if antwortet_paperless "$url"; then
+                PAPERLESS_URL=$url
+                export PAPERLESS_URL
+                ok "Paperless antwortet unter $url"
+                return 0
+            fi
+        done
+    done
+    warn "Paperless antwortet auf diesem Rechner unter keiner der üblichen Adressen (Ports:${gesehen% })."
+    warn "Läuft der Webserver? systemctl status paperless-webserver; offene Ports: ss -tlnp"
+}
+
 cmd_mail() {
     pruefe_root
     erkenne_paperless
+    finde_paperless_url
     local python skript
     python=$(python_fuer_paperless)
     skript=$(mailabruf_skript)
@@ -210,7 +254,8 @@ EOF
     if ja "Gleiche Dateien, die schon in Paperless liegen, verwerfen statt doppelt anzulegen?" J; then
         paperless_conf_anpassen PAPERLESS_CONSUMER_DELETE_DUPLICATES=true
     fi
-    "$python" -I "$skript"
+    # Fehler meldet das Python-Skript selbst
+    "$python" -I "$skript" || exit $?
 }
 
 # --- Teil 2: Nextcloud-Ordner -> Consume ------------------------------------------------------------------------
