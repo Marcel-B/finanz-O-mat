@@ -361,6 +361,7 @@ installieren() {
     fi
     echo "  Konfiguration: pct enter $CTID, dann $ENV_DATEI bearbeiten und systemctl restart finanz-o-mat"
     echo "  Update:        $AUFRUF update $CTID"
+    echo "  Backup:        pct enter $CTID, dann finanz-o-mat-backup einrichten (Nextcloud, täglich verschlüsselt)"
     if [[ -n $BELEG_HOST_PATH ]]; then
         echo "  Hinweis: Der Container ist unprivilegiert. Dateien im Belegordner müssen für alle lesbar sein (chmod -R o+rX)."
     fi

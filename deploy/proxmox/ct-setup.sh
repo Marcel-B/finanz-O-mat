@@ -11,6 +11,9 @@
 # dann finanz-o-mat-update.service (als root). Ebenso startet .../update/pruefen sofort eine Prüfung
 # („Nach Updates suchen“). Den Stand liest die App aus .../update/status.json.
 #
+# Backup auf eine Nextcloud: deploy/proxmox/ct-backup.sh (finanz-o-mat-backup), täglich per Timer, „Jetzt sichern“
+# in der App über .../backup/anfordern wie beim Update.
+#
 # Konfiguration und Datenbank liegen außerhalb des Programmverzeichnisses und bleiben bei Updates erhalten:
 #   /etc/finanz-o-mat/finanz-o-mat.env   Einstellungen (Paperless, Anmeldung, Versteuerung, ...)
 #   /var/lib/finanz-o-mat/               SQLite-Datenbank und Sicherungen
@@ -30,6 +33,7 @@ NODE_MIN=20.19
 NODE_LINIE=22
 NODE_DIR=/opt/node
 UPDATE_DIR=$DATEN/update
+BACKUP_DIR=$DATEN/backup
 SPERRE=/run/finanz-o-mat-update.lock
 
 info() { printf '\e[1;34m==>\e[0m %s\n' "$*"; }
@@ -136,7 +140,7 @@ benutzer_und_ordner() {
     if ! id "$BENUTZER" >/dev/null 2>&1; then
         useradd --system --home-dir "$DATEN" --shell /usr/sbin/nologin "$BENUTZER"
     fi
-    install -d -o "$BENUTZER" -g "$BENUTZER" -m 750 "$DATEN" "$DATEN/sicherungen" "$UPDATE_DIR"
+    install -d -o "$BENUTZER" -g "$BENUTZER" -m 750 "$DATEN" "$DATEN/sicherungen" "$UPDATE_DIR" "$BACKUP_DIR"
     install -d -m 755 /srv/rechnungen
     install -d -m 750 -g "$BENUTZER" "$(dirname "$ENV_DATEI")"
     if [[ ! -f $ENV_DATEI ]]; then
@@ -152,6 +156,9 @@ benutzer_und_ordner() {
     fi
     if ! grep -q '^AUTO_UPDATE=' "$ENV_DATEI"; then
         printf '# ja = neue Versionen automatisch installieren\nAUTO_UPDATE="nein"\n' >>"$ENV_DATEI"
+    fi
+    if ! grep -q '^BACKUP_VERZEICHNIS=' "$ENV_DATEI"; then
+        printf '\n# Backup-Stand in der App (finanz-o-mat-backup)\nBACKUP_VERZEICHNIS="%s"\n' "$BACKUP_DIR" >>"$ENV_DATEI"
     fi
     chown root:"$BENUTZER" "$ENV_DATEI"
     chmod 640 "$ENV_DATEI"
@@ -249,7 +256,11 @@ EOF
 #!/bin/sh
 exec bash $APP_DIR/deploy/proxmox/ct-setup.sh update "\$@"
 EOF
-    chmod 755 /usr/local/bin/finanz-o-mat /usr/local/bin/finanz-o-mat-update
+    cat >/usr/local/bin/finanz-o-mat-backup <<EOF
+#!/bin/sh
+exec bash $APP_DIR/deploy/proxmox/ct-backup.sh "\$@"
+EOF
+    chmod 755 /usr/local/bin/finanz-o-mat /usr/local/bin/finanz-o-mat-update /usr/local/bin/finanz-o-mat-backup
 
     # Regelmäßig nach neuen Versionen sehen
     cat >/etc/systemd/system/$DIENST-pruefen.service <<EOF
@@ -310,6 +321,44 @@ Unit=$DIENST-update.service
 [Install]
 WantedBy=multi-user.target
 EOF
+
+    # Tägliches Backup auf die Nextcloud (ohne Einrichtung meldet es nur „nicht eingerichtet“)
+    cat >/etc/systemd/system/$DIENST-backup.service <<EOF
+[Unit]
+Description=Finanz-O-Mat: Backup auf die Nextcloud
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/rm -f $BACKUP_DIR/anfordern
+ExecStart=/bin/bash $APP_DIR/deploy/proxmox/ct-backup.sh jetzt
+TimeoutStartSec=2h
+EOF
+    cat >/etc/systemd/system/$DIENST-backup.timer <<EOF
+[Unit]
+Description=Finanz-O-Mat: tägliches Backup
+
+[Timer]
+OnCalendar=*-*-* 02:30
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    # „Jetzt sichern“ aus der App (Datei anfordern)
+    cat >/etc/systemd/system/$DIENST-backup.path <<EOF
+[Unit]
+Description=Finanz-O-Mat: Backup auf Anforderung aus der App
+
+[Path]
+PathExists=$BACKUP_DIR/anfordern
+Unit=$DIENST-backup.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
 }
 
 dienst_starten() {
@@ -318,7 +367,8 @@ dienst_starten() {
         return 0
     fi
     systemctl daemon-reload
-    systemctl enable --quiet --now "$DIENST-pruefen.timer" "$DIENST-pruefen.path" "$DIENST-update.path"
+    systemctl enable --quiet --now "$DIENST-pruefen.timer" "$DIENST-pruefen.path" "$DIENST-update.path" \
+        "$DIENST-backup.timer" "$DIENST-backup.path"
     systemctl enable --quiet "$DIENST"
     systemctl restart "$DIENST"
     pruefe_erreichbar

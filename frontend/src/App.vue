@@ -10,6 +10,7 @@ import Toast from "primevue/toast";
 import { onMounted, ref } from "vue";
 
 import { api, type Status, type Steuerfall } from "./api";
+import BackupHinweis from "./components/BackupHinweis.vue";
 import EinstellungenAnsicht from "./components/EinstellungenAnsicht.vue";
 import UebersichtAnsicht from "./components/UebersichtAnsicht.vue";
 import UpdateHinweis from "./components/UpdateHinweis.vue";
@@ -61,6 +62,7 @@ onMounted(async () => {
 
   <main class="mx-auto max-w-7xl px-4 pb-8">
     <UpdateHinweis />
+    <BackupHinweis />
     <Message v-if="fehler" severity="error" class="mb-4">{{ fehler }}</Message>
     <Tabs v-if="status" v-model:value="tab">
       <TabList>
