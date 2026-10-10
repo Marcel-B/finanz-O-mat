@@ -9,7 +9,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from .models import Beleg
+from .models import Beleg, Umsatz
 from .steuerfaelle import Art, Steuerfall
 
 SCHEMA = """
@@ -35,6 +35,26 @@ CREATE TABLE IF NOT EXISTS belege (
     hinweise TEXT NOT NULL DEFAULT '[]'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS belege_quelle ON belege(quelle, quelle_ref) WHERE quelle_ref != '';
+CREATE TABLE IF NOT EXISTS umsaetze (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    konto TEXT NOT NULL,
+    buchungsdatum TEXT NOT NULL,
+    betrag TEXT NOT NULL,
+    partner TEXT NOT NULL DEFAULT '',
+    iban TEXT NOT NULL DEFAULT '',
+    verwendungszweck TEXT NOT NULL DEFAULT '',
+    typ TEXT NOT NULL DEFAULT '',
+    original_betrag TEXT,
+    original_waehrung TEXT NOT NULL DEFAULT '',
+    pruefsumme TEXT NOT NULL UNIQUE,
+    beleg_id INTEGER,
+    ignoriert INTEGER NOT NULL DEFAULT 0,
+    ignoriert_grund TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS bank_regeln (
+    partner TEXT PRIMARY KEY,
+    grund TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS kurse (
     waehrung TEXT NOT NULL,
     zeitraum TEXT NOT NULL,
@@ -100,6 +120,39 @@ def _beleg_zu_werten(b: Beleg) -> list:
     ]
 
 
+UMSATZ_FELDER = [
+    "konto", "buchungsdatum", "betrag", "partner", "iban", "verwendungszweck", "typ", "original_betrag",
+    "original_waehrung", "pruefsumme", "beleg_id", "ignoriert", "ignoriert_grund",
+]
+
+
+def _umsatz_zu_werten(u: Umsatz) -> list:
+    return [
+        u.konto, u.buchungsdatum.isoformat(), str(u.betrag), u.partner, u.iban, u.verwendungszweck, u.typ,
+        None if u.original_betrag is None else str(u.original_betrag), u.original_waehrung, u.pruefsumme,
+        u.beleg_id, int(u.ignoriert), u.ignoriert_grund,
+    ]
+
+
+def _zeile_zu_umsatz(z: sqlite3.Row) -> Umsatz:
+    return Umsatz(
+        id=z["id"],
+        konto=z["konto"],
+        buchungsdatum=date.fromisoformat(z["buchungsdatum"]),
+        betrag=Decimal(z["betrag"]),
+        partner=z["partner"],
+        iban=z["iban"],
+        verwendungszweck=z["verwendungszweck"],
+        typ=z["typ"],
+        original_betrag=_dec(z["original_betrag"]),
+        original_waehrung=z["original_waehrung"],
+        pruefsumme=z["pruefsumme"],
+        beleg_id=z["beleg_id"],
+        ignoriert=bool(z["ignoriert"]),
+        ignoriert_grund=z["ignoriert_grund"],
+    )
+
+
 class Datenbank:
     def __init__(self, pfad: Path | str):
         if str(pfad) != ":memory:":
@@ -146,6 +199,48 @@ class Datenbank:
     def beleg_loeschen(self, beleg_id: int) -> None:
         with self._lock, self._con:
             self._con.execute("DELETE FROM belege WHERE id = ?", (beleg_id,))
+            self._con.execute("UPDATE umsaetze SET beleg_id = NULL WHERE beleg_id = ?", (beleg_id,))
+
+    # Kontoumsätze
+    def umsatz_anlegen(self, u: Umsatz) -> bool:
+        """Legt den Umsatz an; False, wenn er (gleiche Prüfsumme) schon vorhanden ist."""
+        with self._lock, self._con:
+            cur = self._con.execute(
+                f"INSERT OR IGNORE INTO umsaetze ({', '.join(UMSATZ_FELDER)}) "
+                f"VALUES ({', '.join('?' for _ in UMSATZ_FELDER)})",
+                _umsatz_zu_werten(u),
+            )
+        if cur.rowcount:
+            u.id = cur.lastrowid
+        return bool(cur.rowcount)
+
+    def alle_umsaetze(self) -> list[Umsatz]:
+        with self._lock:
+            zeilen = self._con.execute("SELECT * FROM umsaetze ORDER BY buchungsdatum, id").fetchall()
+        return [_zeile_zu_umsatz(z) for z in zeilen]
+
+    def umsatz(self, umsatz_id: int) -> Umsatz | None:
+        with self._lock:
+            z = self._con.execute("SELECT * FROM umsaetze WHERE id = ?", (umsatz_id,)).fetchone()
+        return _zeile_zu_umsatz(z) if z else None
+
+    def umsatz_aktualisieren(self, u: Umsatz) -> Umsatz:
+        zuweisung = ", ".join(f"{f} = ?" for f in UMSATZ_FELDER)
+        with self._lock, self._con:
+            self._con.execute(f"UPDATE umsaetze SET {zuweisung} WHERE id = ?", [*_umsatz_zu_werten(u), u.id])
+        return u
+
+    def bank_regeln(self) -> dict[str, str]:
+        with self._lock:
+            return {z["partner"]: z["grund"] for z in self._con.execute("SELECT * FROM bank_regeln")}
+
+    def bank_regel_speichern(self, partner: str, grund: str) -> None:
+        with self._lock, self._con:
+            self._con.execute(
+                "INSERT INTO bank_regeln (partner, grund) VALUES (?, ?) "
+                "ON CONFLICT(partner) DO UPDATE SET grund = excluded.grund",
+                (partner.strip().lower(), grund),
+            )
 
     # Kurse
     def kurs_lesen(self, waehrung: str, zeitraum: str) -> tuple[Decimal, str] | None:

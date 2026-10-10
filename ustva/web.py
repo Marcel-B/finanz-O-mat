@@ -10,11 +10,11 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from . import export
+from . import bank, export, uebersicht
 from .berechnung import berechnen, zeitraum
 from .config import Config
 from .db import Datenbank
@@ -25,6 +25,10 @@ from .steuerfaelle import KENNZAHLEN, STEUERFAELLE, Art, Steuerfall
 from .waehrung import Umrechner
 
 STATIC = Path(__file__).parent / "static"
+OHNE_FRONTEND = """<!doctype html><html lang="de"><meta charset="utf-8"><title>Finanz-O-Mat</title>
+<body style="font-family:sans-serif;max-width:40rem;margin:3rem auto;line-height:1.5">
+<h1>Finanz-O-Mat</h1><p>Die API läuft, aber die Oberfläche ist noch nicht gebaut:</p>
+<pre>cd frontend &amp;&amp; npm ci &amp;&amp; npm run build</pre></body></html>"""
 RE_ZEITRAUM = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
 
 
@@ -74,8 +78,18 @@ class KursEingabe(BaseModel):
     quelle: str = "BMF"
 
 
+class ZuordnungEingabe(BaseModel):
+    beleg_id: int | None = None
+
+
+class IgnorierenEingabe(BaseModel):
+    ignoriert: bool = True
+    grund: str = ""
+    regel: bool = False  # künftig alle Umsätze mit diesem Partner ignorieren
+
+
 class ImportAnfrage(BaseModel):
-    quelle: str = "alle"  # alle | verzeichnis | paperless
+    quelle: str = "alle"  # alle | verzeichnis | paperless | konto
     zeitraum: str
 
 
@@ -126,7 +140,86 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     @app.get("/api/bericht/{zr}")
     def bericht(zr: str):
         jahr, monat = _zeitraum(zr)
-        return berechnen(db.alle_belege(), jahr, monat, umrechner, cfg.versteuerung).to_dict()
+        belege = db.alle_belege()
+        daten = berechnen(belege, jahr, monat, umrechner, cfg.versteuerung).to_dict()
+        umsaetze = db.alle_umsaetze()
+        if text := bank.hinweis_fehlende_belege(umsaetze, zr):
+            daten["hinweise"].insert(0, {"stufe": "warnung", "text": text})
+        belege_nach_id = {b.id: b for b in belege}
+        daten["umsaetze"] = [
+            {**u.to_dict(), "beleg": _beleg_kurz(belege_nach_id.get(u.beleg_id))}
+            for u in umsaetze if u.zeitraum == zr
+        ]
+        return daten
+
+    def _beleg_kurz(b: Beleg | None) -> dict | None:
+        if b is None:
+            return None
+        return {"id": b.id, "partner": b.partner, "beschreibung": b.beschreibung, "rechnungsnummer": b.rechnungsnummer,
+                "rechnungsdatum": b.rechnungsdatum.isoformat() if b.rechnungsdatum else None,
+                "zahlbetrag": str(b.zahlbetrag()), "waehrung": b.waehrung}
+
+    def _uebersicht(jahr: int) -> dict:
+        if not 2000 <= jahr <= 2100:
+            raise HTTPException(400, "Jahr ungültig")
+        return uebersicht.jahresuebersicht(db.alle_belege(), jahr, umrechner, cfg.versteuerung)
+
+    @app.get("/api/uebersicht/{jahr}")
+    def jahresuebersicht(jahr: int):
+        return _uebersicht(jahr)
+
+    @app.get("/api/uebersicht/{jahr}/csv")
+    def jahresuebersicht_csv(jahr: int):
+        return Response(uebersicht.uebersicht_csv(_uebersicht(jahr)), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="uebersicht-{jahr}.csv"'})
+
+    @app.post("/api/import/bank")
+    async def bank_import(request: Request):
+        roh = await request.body()
+        if len(roh) > 10_000_000:
+            raise HTTPException(413, "Datei zu groß")
+        return bank.importieren(db, cfg, roh.decode("utf-8-sig", errors="replace")).to_dict()
+
+    @app.post("/api/abgleich")
+    def abgleich():
+        return {"zugeordnet": bank.abgleich_ausfuehren(db)}
+
+    def _umsatz(umsatz_id: int):
+        u = db.umsatz(umsatz_id)
+        if u is None:
+            raise HTTPException(404, "Umsatz nicht gefunden")
+        return u
+
+    @app.get("/api/umsaetze/{umsatz_id}/kandidaten")
+    def umsatz_kandidaten(umsatz_id: int):
+        u = _umsatz(umsatz_id)
+        vergeben = {x.beleg_id for x in db.alle_umsaetze() if x.beleg_id is not None and x.id != u.id}
+        return [_beleg_kurz(b) for b in bank.kandidaten(u, db.alle_belege(), vergeben, nur_passende=False)[:30]]
+
+    @app.post("/api/umsaetze/{umsatz_id}/zuordnen")
+    def umsatz_zuordnen(umsatz_id: int, eingabe: ZuordnungEingabe):
+        u = _umsatz(umsatz_id)
+        b = _beleg(eingabe.beleg_id) if eingabe.beleg_id is not None else None
+        if b is not None and any(x.beleg_id == b.id and x.id != u.id for x in db.alle_umsaetze()):
+            raise HTTPException(409, "Der Beleg ist schon einem anderen Umsatz zugeordnet")
+        bank.zuordnen(db, u, b)
+        return u.to_dict()
+
+    @app.post("/api/umsaetze/{umsatz_id}/ignorieren")
+    def umsatz_ignorieren(umsatz_id: int, eingabe: IgnorierenEingabe):
+        u = _umsatz(umsatz_id)
+        u.ignoriert, u.ignoriert_grund = eingabe.ignoriert, eingabe.grund if eingabe.ignoriert else ""
+        if eingabe.ignoriert:
+            u.beleg_id = None
+        db.umsatz_aktualisieren(u)
+        if eingabe.ignoriert and eingabe.regel and u.partner:
+            grund = eingabe.grund or "Partner ohne Beleg"
+            db.bank_regel_speichern(u.partner, grund)
+            for x in db.alle_umsaetze():
+                if x.partner.strip().lower() == u.partner.strip().lower() and x.beleg_id is None and not x.ignoriert:
+                    x.ignoriert, x.ignoriert_grund = True, grund
+                    db.umsatz_aktualisieren(x)
+        return u.to_dict()
 
     @app.get("/api/offen")
     def offen():
@@ -181,6 +274,14 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
             ergebnisse["verzeichnis"] = verzeichnis.importieren(db, cfg).to_dict()
         if anfrage.quelle in ("alle", "paperless") and cfg.paperless_aktiv:
             ergebnisse["paperless"] = paperless.importieren(db, cfg, jahr, monat).to_dict()
+        if anfrage.quelle in ("alle", "konto"):
+            if konto := bank.verzeichnis_importieren(db, cfg):
+                ergebnisse["konto"] = konto.to_dict()
+        if ergebnisse:
+            # Neue Belege können zu bereits eingelesenen Umsätzen passen
+            zugeordnet = bank.abgleich_ausfuehren(db)
+            if zugeordnet:
+                ergebnisse.setdefault("konto", bank.BankImport().to_dict())["zugeordnet"] += zugeordnet
         if not ergebnisse:
             leer = ImportErgebnis(fehler=["Keine Quelle konfiguriert (RECHNUNGS_VERZEICHNIS oder PAPERLESS_URL)"])
             ergebnisse["keine"] = leer.to_dict()
@@ -221,5 +322,10 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     async def wertfehler(_request: Request, exc: ValueError):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
-    app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
+    if (STATIC / "index.html").exists():
+        app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
+    else:
+        @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+        def ohne_frontend():
+            return OHNE_FRONTEND
     return app

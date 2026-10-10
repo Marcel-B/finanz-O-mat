@@ -22,8 +22,8 @@ def _liste(value: str | None, default: list[str]) -> list[str]:
 @dataclass
 class Config:
     datenbank: Path = Path("data/finanzomat.sqlite")
-    # "soll": Rechnungsdatum zählt, "ist": Zahlungseingang zählt (nur Ausgangsrechnungen)
-    versteuerung: str = "soll"
+    # "ist": Zahlungseingang zählt (nur Ausgangsrechnungen), "soll": Rechnungsdatum zählt
+    versteuerung: str = "ist"
     dauerfristverlaengerung: bool = False
     bundesland: str = ""  # z. B. "NW"; für Feiertage, die die Frist verschieben
     eigene_ustid: str = ""
@@ -42,6 +42,9 @@ class Config:
     paperless_feld_steuersatz: str = "Steuersatz"
     paperless_feld_zahlungsdatum: str = "Zahlungsdatum"
 
+    # Kontoumsätze, die keinen Beleg brauchen (Teilwort in Partner oder Verwendungszweck)
+    bank_ignorieren: list[str] = field(default_factory=lambda: ["Finanzamt", "Bundeskasse", "Steuerverwaltung"])
+
     ezb_kurse: bool = True  # Monatsmittel der EZB-Referenzkurse abrufen, wenn kein Kurs hinterlegt ist
 
     app_benutzer: str = ""
@@ -53,7 +56,7 @@ class Config:
         verzeichnis = env.get("RECHNUNGS_VERZEICHNIS")
         cfg = cls(
             datenbank=Path(env.get("DATENBANK", "data/finanzomat.sqlite")),
-            versteuerung=env.get("VERSTEUERUNG", "soll").strip().lower(),
+            versteuerung=env.get("VERSTEUERUNG", "ist").strip().lower(),
             dauerfristverlaengerung=_bool(env.get("DAUERFRISTVERLAENGERUNG")),
             bundesland=env.get("BUNDESLAND", "").strip().upper(),
             eigene_ustid=env.get("EIGENE_USTID", "").replace(" ", "").upper(),
@@ -69,6 +72,7 @@ class Config:
             paperless_feld_steuer=env.get("PAPERLESS_FELD_STEUER", cls.paperless_feld_steuer),
             paperless_feld_steuersatz=env.get("PAPERLESS_FELD_STEUERSATZ", cls.paperless_feld_steuersatz),
             paperless_feld_zahlungsdatum=env.get("PAPERLESS_FELD_ZAHLUNGSDATUM", cls.paperless_feld_zahlungsdatum),
+            bank_ignorieren=_liste(env.get("BANK_IGNORIEREN"), cls().bank_ignorieren),
             ezb_kurse=_bool(env.get("EZB_KURSE"), True),
             app_benutzer=env.get("APP_BENUTZER", ""),
             app_passwort=env.get("APP_PASSWORT", ""),

@@ -36,7 +36,11 @@ Steuerberater nachfragen.
 - Angaben für die Zusammenfassende Meldung (ZM) an das BZSt auflisten, wenn Kz 21 oder 41 vorkommen.
 - Nächste Frist anzeigen: 10. des Folgemonats, bei Wochenende oder Feiertag der nächste Werktag
   (Landesfeiertage über `BUNDESLAND`), optional mit Dauerfristverlängerung.
+- Kontoumsätze aus dem N26-CSV-Export einlesen, automatisch den Rechnungen zuordnen und vor Umsätzen ohne Beleg
+  warnen. Bei Ausgangsrechnungen übernimmt die Zuordnung das Zahlungsdatum (wichtig für die Ist-Versteuerung).
 - CSV-Export der Kennzahlen und Belege (Semikolon, Dezimalkomma, öffnet direkt in Excel).
+- Reiter „Übersicht“: grobe Jahresübersicht der Einnahmen und Ausgaben (netto) je Monat mit Diagramm, Ergebnis,
+  USt-Zahllast und größten Kunden und Lieferanten. Nur zum eigenen Überblick, keine Gewinnermittlung (EÜR).
 
 ## Starten
 
@@ -50,19 +54,25 @@ docker compose up -d
 
 Danach läuft die App auf <http://localhost:8000>.
 
-Ohne Docker (Python 3.11 oder neuer):
+Das Docker-Image baut die Oberfläche selbst mit (Node-Stufe im `Dockerfile`).
+
+Ohne Docker (Python 3.11 oder neuer, Node 20 oder neuer für den Build der Oberfläche):
 
 ```sh
+(cd frontend && npm ci && npm run build)   # schreibt nach ustva/static
 pip install -e .
 export RECHNUNGS_VERZEICHNIS=~/Rechnungen
 python -m ustva serve          # Weboberfläche auf http://127.0.0.1:8000
 ```
 
+Ohne gebaute Oberfläche läuft nur die API; die Startseite zeigt dann den Build-Befehl an.
+
 ## Monatlicher Ablauf
 
 1. App öffnen. Ausgewählt ist automatisch der Monat, dessen Voranmeldung als Nächstes fällig ist.
 2. „Rechnungen einlesen“ holt neue Belege aus Verzeichnis und Paperless. Schon eingelesene werden übersprungen.
-3. Gelb markierte Belege anklicken, mit der Rechnung vergleichen, ggf. korrigieren und speichern (oder „OK“).
+3. Bezahlte Ausgangsrechnungen unter „Belege ohne Zeitraum“ anklicken und das Zahlungsdatum eintragen.
+   Gelb markierte Belege anklicken, mit der Rechnung vergleichen, ggf. korrigieren und speichern (oder „OK“).
 4. Hinweise lesen. Bei Fremdwährungen den BMF-Kurs des Monats eintragen.
 5. In Mein ELSTER das Formular „Umsatzsteuer-Voranmeldung“ öffnen und die Kennzahlen eintragen. Werte mit
    „berechnet ELSTER“ rechnet ELSTER selbst aus; sie dienen zum Abgleich.
@@ -96,6 +106,21 @@ z. B. `openai-2026-09.pdf.json`:
 {"steuerfall": "ausland_13b", "netto": "20.00", "waehrung": "USD", "partner": "OpenAI", "geprueft": true}
 ```
 
+## Kontoumsätze (N26)
+
+In der N26-App oder im Web unter Konto → Kontoauszüge den CSV-Export für den Monat herunterladen und in der App unter
+„Kontoumsätze“ hochladen. Alternativ die CSV-Dateien in den Unterordner `konto/` des Rechnungsverzeichnisses legen;
+„Rechnungen einlesen“ nimmt sie dann mit. Mehrfaches Einlesen derselben Umsätze ist unschädlich.
+
+Zugeordnet wird ein Umsatz einer Rechnung gleicher Richtung (Einnahme ↔ Ausgangsrechnung, Ausgabe ↔ Eingangsrechnung)
+mit gleichem Zahlbetrag, gebucht höchstens 10 Tage vor bis 120 Tage nach dem Rechnungsdatum. Bei Fremdwährung zählt der
+Originalbetrag aus dem Export (z. B. 20,00 USD bei OpenAI). Passt es nicht automatisch, lässt sich der Beleg in der
+Liste von Hand zuordnen.
+
+Umsätze ohne Beleg erscheinen als Warnung. Was keinen Beleg braucht (Steuerzahlung, Privates, Umbuchung), markierst du
+als „kein Beleg nötig“, mit „Partner immer“ auch für alle künftigen Umsätze dieses Partners. Zahlungen ans Finanzamt
+werden automatisch übergangen (`BANK_IGNORIEREN`).
+
 ## Paperless-ngx
 
 1. In Paperless unter „Profil“ ein API-Token erzeugen und mit der URL in `PAPERLESS_URL` und `PAPERLESS_TOKEN` eintragen.
@@ -108,8 +133,10 @@ Eingelesen werden Dokumente, deren Datum im gewählten Monat oder in den beiden 
 
 ## Annahmen und Grenzen
 
-- Standard ist Soll-Versteuerung (Rechnungsdatum zählt). Mit `VERSTEUERUNG=ist` zählen steuerpflichtige
-  Inlandsumsätze erst mit dem Zahlungsdatum; Vorsteuer und Reverse Charge richten sich weiter nach der Rechnung.
+- Standard ist Ist-Versteuerung: Steuerpflichtige Inlandsumsätze zählen erst im Monat des Zahlungseingangs.
+  Ausgangsrechnungen brauchen deshalb ein Zahlungsdatum (am Beleg, im Paperless-Feld `Zahlungsdatum` oder in der
+  JSON-Datei); bis dahin stehen sie unter „Belege ohne Zeitraum“. Vorsteuer und Reverse Charge richten sich weiter
+  nach der Rechnung. Mit `VERSTEUERUNG=soll` zählt stattdessen das Rechnungsdatum.
 - Standard ist keine Dauerfristverlängerung (`DAUERFRISTVERLAENGERUNG=true` schaltet sie ein).
 - Das Rechnungsdatum gilt als Leistungsdatum. Weicht der Leistungsmonat ab, das Datum am Beleg anpassen.
 - Bei Reverse Charge nimmt die App 19 % an und geht von vollem Vorsteuerabzug aus (Kz 67 = Kz 47 + Kz 85).
@@ -120,10 +147,21 @@ Eingelesen werden Dokumente, deren Datum im gewählten Monat oder in den beiden 
 
 ## Entwicklung
 
+Aufbau:
+
+- `ustva/`: Backend in Python mit FastAPI (Berechnung, Import, Datenbank, JSON-API unter `/api`).
+- `frontend/`: Oberfläche in Vue 3 mit TypeScript, Tailwind CSS 4 und PrimeVue 4 (Theme Aura, folgt dem Hell-/Dunkelmodus
+  des Systems), gebaut mit Vite. Das Build-Ergebnis landet in `ustva/static` und ist nicht eingecheckt.
+
 ```sh
 pip install -e ".[dev]"
 pytest
 ruff check .
+
+cd frontend
+npm ci
+npm run dev        # Vite auf http://localhost:5173, leitet /api an python -m ustva serve (Port 8000) weiter
+npm run build      # Typprüfung (vue-tsc) und Build nach ustva/static
 ```
 
 Die API-Dokumentation liegt unter `/api/docs`.
