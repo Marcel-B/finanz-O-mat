@@ -24,7 +24,7 @@ build-backend = "setuptools.build_meta"
 packages = ["ustva", "ustva.quellen"]
 
 [tool.setuptools.package-data]
-ustva = ["static/*"]
+ustva = ["static/*", "static/assets/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

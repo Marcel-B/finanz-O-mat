@@ -39,6 +39,8 @@ Steuerberater nachfragen.
 - Kontoumsätze aus dem N26-CSV-Export einlesen, automatisch den Rechnungen zuordnen und vor Umsätzen ohne Beleg
   warnen. Bei Ausgangsrechnungen übernimmt die Zuordnung das Zahlungsdatum (wichtig für die Ist-Versteuerung).
 - CSV-Export der Kennzahlen und Belege (Semikolon, Dezimalkomma, öffnet direkt in Excel).
+- Reiter „Übersicht“: grobe Jahresübersicht der Einnahmen und Ausgaben (netto) je Monat mit Diagramm, Ergebnis,
+  USt-Zahllast und größten Kunden und Lieferanten. Nur zum eigenen Überblick, keine Gewinnermittlung (EÜR).
 
 ## Starten
 
@@ -52,13 +54,18 @@ docker compose up -d
 
 Danach läuft die App auf <http://localhost:8000>.
 
-Ohne Docker (Python 3.11 oder neuer):
+Das Docker-Image baut die Oberfläche selbst mit (Node-Stufe im `Dockerfile`).
+
+Ohne Docker (Python 3.11 oder neuer, Node 20 oder neuer für den Build der Oberfläche):
 
 ```sh
+(cd frontend && npm ci && npm run build)   # schreibt nach ustva/static
 pip install -e .
 export RECHNUNGS_VERZEICHNIS=~/Rechnungen
 python -m ustva serve          # Weboberfläche auf http://127.0.0.1:8000
 ```
+
+Ohne gebaute Oberfläche läuft nur die API; die Startseite zeigt dann den Build-Befehl an.
 
 ## Monatlicher Ablauf
 
@@ -140,10 +147,21 @@ Eingelesen werden Dokumente, deren Datum im gewählten Monat oder in den beiden 
 
 ## Entwicklung
 
+Aufbau:
+
+- `ustva/`: Backend in Python mit FastAPI (Berechnung, Import, Datenbank, JSON-API unter `/api`).
+- `frontend/`: Oberfläche in Vue 3 mit TypeScript, Tailwind CSS 4 und PrimeVue 4 (Theme Aura, folgt dem Hell-/Dunkelmodus
+  des Systems), gebaut mit Vite. Das Build-Ergebnis landet in `ustva/static` und ist nicht eingecheckt.
+
 ```sh
 pip install -e ".[dev]"
 pytest
 ruff check .
+
+cd frontend
+npm ci
+npm run dev        # Vite auf http://localhost:5173, leitet /api an python -m ustva serve (Port 8000) weiter
+npm run build      # Typprüfung (vue-tsc) und Build nach ustva/static
 ```
 
 Die API-Dokumentation liegt unter `/api/docs`.

@@ -10,11 +10,11 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from . import bank, export
+from . import bank, export, uebersicht
 from .berechnung import berechnen, zeitraum
 from .config import Config
 from .db import Datenbank
@@ -25,6 +25,10 @@ from .steuerfaelle import KENNZAHLEN, STEUERFAELLE, Art, Steuerfall
 from .waehrung import Umrechner
 
 STATIC = Path(__file__).parent / "static"
+OHNE_FRONTEND = """<!doctype html><html lang="de"><meta charset="utf-8"><title>Finanz-O-Mat</title>
+<body style="font-family:sans-serif;max-width:40rem;margin:3rem auto;line-height:1.5">
+<h1>Finanz-O-Mat</h1><p>Die API läuft, aber die Oberfläche ist noch nicht gebaut:</p>
+<pre>cd frontend &amp;&amp; npm ci &amp;&amp; npm run build</pre></body></html>"""
 RE_ZEITRAUM = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
 
 
@@ -80,7 +84,7 @@ class ZuordnungEingabe(BaseModel):
 
 class IgnorierenEingabe(BaseModel):
     ignoriert: bool = True
-    grund: str = "kein Beleg nötig"
+    grund: str = ""
     regel: bool = False  # künftig alle Umsätze mit diesem Partner ignorieren
 
 
@@ -155,6 +159,20 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
                 "rechnungsdatum": b.rechnungsdatum.isoformat() if b.rechnungsdatum else None,
                 "zahlbetrag": str(b.zahlbetrag()), "waehrung": b.waehrung}
 
+    def _uebersicht(jahr: int) -> dict:
+        if not 2000 <= jahr <= 2100:
+            raise HTTPException(400, "Jahr ungültig")
+        return uebersicht.jahresuebersicht(db.alle_belege(), jahr, umrechner, cfg.versteuerung)
+
+    @app.get("/api/uebersicht/{jahr}")
+    def jahresuebersicht(jahr: int):
+        return _uebersicht(jahr)
+
+    @app.get("/api/uebersicht/{jahr}/csv")
+    def jahresuebersicht_csv(jahr: int):
+        return Response(uebersicht.uebersicht_csv(_uebersicht(jahr)), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="uebersicht-{jahr}.csv"'})
+
     @app.post("/api/import/bank")
     async def bank_import(request: Request):
         roh = await request.body()
@@ -195,10 +213,11 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
             u.beleg_id = None
         db.umsatz_aktualisieren(u)
         if eingabe.ignoriert and eingabe.regel and u.partner:
-            db.bank_regel_speichern(u.partner, eingabe.grund)
+            grund = eingabe.grund or "Partner ohne Beleg"
+            db.bank_regel_speichern(u.partner, grund)
             for x in db.alle_umsaetze():
                 if x.partner.strip().lower() == u.partner.strip().lower() and x.beleg_id is None and not x.ignoriert:
-                    x.ignoriert, x.ignoriert_grund = True, eingabe.grund
+                    x.ignoriert, x.ignoriert_grund = True, grund
                     db.umsatz_aktualisieren(x)
         return u.to_dict()
 
@@ -303,5 +322,10 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     async def wertfehler(_request: Request, exc: ValueError):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
-    app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
+    if (STATIC / "index.html").exists():
+        app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
+    else:
+        @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+        def ohne_frontend():
+            return OHNE_FRONTEND
     return app

@@ -105,3 +105,27 @@ def test_anmeldung(db, umrechner):
     c = TestClient(create_app(cfg, db, umrechner))
     assert c.get("/api/status").status_code == 401
     assert c.get("/api/status", auth=("marcel", "geheim")).status_code == 200
+
+
+def test_uebersicht_api(client):
+    client.post("/api/belege", json={
+        "art": "ausgang", "steuerfall": "inland", "rechnungsdatum": "2026-09-15", "netto": "1000.00",
+        "steuersatz": "19", "partner": "Kunde GmbH", "zahlungsdatum": "2026-09-20",
+    })
+    d = client.get("/api/uebersicht/2026").json()
+    assert d["versteuerung"] == "ist"
+    assert d["monate"][8]["einnahmen"] == "1000.00"
+    assert d["summe"]["zahllast"] == "190.00"
+
+    r = client.get("/api/uebersicht/2026/csv")
+    assert r.headers["content-disposition"] == 'attachment; filename="uebersicht-2026.csv"'
+    assert "2026-09;1000,00;0,00;1000,00;190,00;1" in r.text
+    assert client.get("/api/uebersicht/1999").status_code == 400
+
+
+def test_startseite_ohne_gebaute_oberflaeche(db, umrechner, monkeypatch, tmp_path):
+    monkeypatch.setattr("ustva.web.STATIC", tmp_path)
+    c = TestClient(create_app(Config(), db, umrechner, heute=date(2026, 10, 10)))
+    r = c.get("/")
+    assert r.status_code == 200
+    assert "npm run build" in r.text
