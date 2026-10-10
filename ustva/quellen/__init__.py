@@ -39,11 +39,12 @@ def beleg_aus_erkennung(e: Erkennung, art: Art, **felder) -> Beleg:
     steuer = e.steuer
 
     if steuerfall in REVERSE_CHARGE_EINGANG:
-        # Auf der Rechnung steht keine deutsche Steuer; die Steuer berechnet man selbst.
+        # Die Steuer berechnet man selbst. Hat der Anbieter trotzdem Steuer berechnet, bleibt sie als
+        # mitbezahlter Betrag stehen (für den Kontoabgleich), zählt aber nicht als Vorsteuer.
         if not steuersatz:
             steuersatz = Decimal(19)
             hinweise.append("Reverse Charge: Steuersatz 19 % angenommen.")
-        steuer = None
+        steuer = steuer if steuer and steuer > 0 else None
     elif steuerfall in OHNE_STEUER_AUSGANG or steuerfall == Steuerfall.OHNE_VORSTEUER:
         steuersatz = Decimal(0)
         steuer = Decimal(0)
@@ -51,7 +52,8 @@ def beleg_aus_erkennung(e: Erkennung, art: Art, **felder) -> Beleg:
         steuersatz = Decimal(19)
         hinweise.append("Kein Steuersatz erkannt, 19 % angenommen.")
 
-    if steuer is not None and e.netto and not steuer_passt(e.netto, steuer, steuersatz):
+    pruefbar = steuerfall not in REVERSE_CHARGE_EINGANG  # dort ist es fremde Steuer, kein Rechenwert
+    if pruefbar and steuer is not None and e.netto and not steuer_passt(e.netto, steuer, steuersatz):
         text = f"Erkannte Steuer {_euro(steuer)} passt nicht zu {steuersatz:g} % von {_euro(e.netto)}"
         if Decimal(0) < steuer / e.netto <= Decimal("0.1905"):
             # Kann eine Rechnung mit mehreren Steuersätzen sein; dann stimmt der Betrag.

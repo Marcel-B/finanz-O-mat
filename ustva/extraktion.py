@@ -229,6 +229,7 @@ class Erkennung:
     rechnungsnummer: str = ""
     reverse_charge: bool = False
     drittland: bool = False
+    partner_de_ustid: bool = False  # Anbieter nennt (auch) eine deutsche USt-IdNr.
     hinweise: list[str] = field(default_factory=list)
 
 
@@ -340,6 +341,7 @@ def erkennen(text: str, art: Art | None = None, eigene_ustid: str = "") -> Erken
     ids = ustids_finden(text, eigene_ustid)
     fremde = [i for i in ids if not i.startswith("DE")]
     e.partner_ustid = (fremde or ids or [""])[0]
+    e.partner_de_ustid = any(i.startswith("DE") for i in ids)
     e.reverse_charge = bool(RE_REVERSE_CHARGE.search(text))
     e.drittland = bool(RE_DRITTLAND.search(text)) and not fremde
     if RE_OSS.search(text):
@@ -355,6 +357,13 @@ HINWEIS_AUSL_STEUER = ("Ausländischer Anbieter mit ausgewiesener Steuer: Ist es
                        "Nur dann ist sie als Vorsteuer abziehbar.")
 
 
+def hinweis_eu_steuer(e: Erkennung) -> str:
+    betrag = f" ({e.steuer:.2f} {e.waehrung})".replace(".", ",") if e.steuer else ""
+    return (f"Anbieter aus dem EU-Ausland ({e.partner_ustid}) mit ausgewiesener Umsatzsteuer{betrag}, als "
+            "Vorsteuer (Kz 66) vorgeschlagen. Streng genommen gilt für Leistungen an Unternehmer § 13b; mit "
+            "deiner USt-IdNr. beim Anbieter kommen künftige Rechnungen ohne Steuer.")
+
+
 def steuerfall_vorschlagen(e: Erkennung) -> Steuerfall | None:
     hat_steuer = bool(e.steuer) and e.steuer != 0
     eu_fremd = bool(e.partner_ustid) and not e.partner_ustid.startswith("DE")
@@ -362,8 +371,16 @@ def steuerfall_vorschlagen(e: Erkennung) -> Steuerfall | None:
 
     if e.art == Art.EINGANG:
         if hat_steuer and not e.reverse_charge:
-            if (fremdwaehrung or e.drittland) and HINWEIS_AUSL_STEUER not in e.hinweise:
-                e.hinweise.append(HINWEIS_AUSL_STEUER)
+            # Marcels Entscheidung (10.10.2026): ausgewiesene Steuer eines EU-Anbieters wie bisher in sevDesk
+            # als Vorsteuer buchen, nur mit Hinweis. Typisch, wenn beim Anbieter keine USt-IdNr. hinterlegt ist.
+            if eu_fremd and not e.partner_de_ustid:
+                hinweis = hinweis_eu_steuer(e)
+            elif fremdwaehrung or e.drittland:
+                hinweis = HINWEIS_AUSL_STEUER
+            else:
+                hinweis = ""
+            if hinweis and hinweis not in e.hinweise:
+                e.hinweise.append(hinweis)
             return Steuerfall.VORSTEUER_INLAND
         if eu_fremd:
             return Steuerfall.EU_LEISTUNG_13B

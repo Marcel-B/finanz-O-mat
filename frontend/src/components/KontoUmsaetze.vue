@@ -19,6 +19,7 @@ const toast = useToast();
 const datei = ref<HTMLInputElement | null>(null);
 const laedtHoch = ref(false);
 const kandidaten = reactive<Record<number, BelegKurz[] | undefined>>({});
+const laedt = reactive<Record<number, boolean>>({});
 
 async function hochladen(event: Event) {
   const eingabe = event.target as HTMLInputElement;
@@ -46,12 +47,17 @@ function fehler(e: unknown) {
   toast.add({ severity: "error", summary: "Fehler", detail: (e as Error).message, life: 6000 });
 }
 
+// Erst beim Aufklappen laden. Das Select darf dabei nicht von Anfang an "loading" sein: PrimeVue lässt sich
+// dann nicht öffnen, und ohne Öffnen wird nie geladen.
 async function kandidatenLaden(u: Umsatz) {
-  if (kandidaten[u.id]) return;
+  if (kandidaten[u.id] || laedt[u.id]) return;
+  laedt[u.id] = true;
   try {
     kandidaten[u.id] = await api.kandidaten(u.id);
   } catch (e) {
     fehler(e);
+  } finally {
+    laedt[u.id] = false;
   }
 }
 
@@ -112,6 +118,15 @@ const rueckgaengig = (u: Umsatz) => aktion(() => api.ignorieren(u.id, { ignorier
             <i class="pi pi-check-circle mr-1 text-green-600 dark:text-green-400" />
             {{ data.beleg.partner || data.beleg.beschreibung || "Beleg" }}
             <span v-if="data.beleg.rechnungsnummer" class="text-muted-color">· {{ data.beleg.rechnungsnummer }}</span>
+            <div
+              v-if="data.kosten_geldverkehr"
+              class="text-xs text-muted-color"
+              v-tooltip.top="'Kursaufschlag oder Gebühren der Bank. Spielt für die Umsatzsteuer keine Rolle.'"
+            >
+              {{ Number(data.kosten_geldverkehr) > 0
+                ? `${betrag(data.kosten_geldverkehr)} € Kosten Geldverkehr`
+                : `${betrag(Math.abs(Number(data.kosten_geldverkehr)))} € Kursgewinn` }}
+            </div>
           </span>
           <span v-else-if="data.ignoriert" class="text-sm text-muted-color">
             kein Beleg nötig{{ data.ignoriert_grund ? ` (${data.ignoriert_grund})` : "" }}
@@ -144,8 +159,11 @@ const rueckgaengig = (u: Umsatz) => aktion(() => api.ignorieren(u.id, { ignorier
                 :options="kandidaten[data.id] ?? []"
                 :option-label="kandidatLabel"
                 option-value="id"
-                :loading="kandidaten[data.id] === undefined"
-                empty-message="Keine passenden Belege"
+                :loading="laedt[data.id]"
+                :empty-message="kandidaten[data.id] ? 'Keine offenen Belege' : 'Lade Belege …'"
+                filter
+                filter-placeholder="Suchen"
+                :empty-filter-message="'Kein Beleg gefunden'"
                 @show="kandidatenLaden(data)"
                 @update:model-value="(id: number) => zuordnen(data, id)"
               />

@@ -119,6 +119,7 @@ export interface Umsatz {
   ignoriert: boolean;
   ignoriert_grund: string;
   beleg: BelegKurz | null;
+  kosten_geldverkehr?: string | null;
 }
 
 export interface Bericht {

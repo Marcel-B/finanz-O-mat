@@ -7,6 +7,9 @@ das ältere (Date, Payee, …) und die deutsche Variante (Datum, Empfänger, …
 Der Abgleich ordnet jedem Umsatz höchstens einen Beleg zu: gleiche Richtung
 (Einnahme ↔ Ausgangsrechnung, Ausgabe ↔ Eingangsrechnung), passender Betrag und
 ein Buchungsdatum kurz vor bis einige Monate nach dem Rechnungsdatum. Bei
+Fremdwährung ohne Originalbetrag im Export reicht ein ungefähr passender
+Euro-Betrag, wenn auch der Name passt; die Differenz sind Kosten des
+Geldverkehrs (Kursaufschlag, Gebühren) und für die Umsatzsteuer egal. Bei
 Ausgangsrechnungen übernimmt er das Buchungsdatum als Zahlungsdatum, was bei der
 Ist-Versteuerung über den Voranmeldungszeitraum entscheidet.
 """
@@ -18,6 +21,7 @@ import hashlib
 import io
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
@@ -27,6 +31,9 @@ from .db import Datenbank
 from .extraktion import betrag_parsen
 from .models import Beleg, Umsatz
 from .steuerfaelle import Art, Steuerfall
+from .waehrung import KursFehlt, Umrechner
+
+Euro = Callable[[Beleg], "Decimal | None"]  # Zahlbetrag eines Belegs in EUR, falls bekannt
 
 SPALTEN = {
     "datum": ["booking date", "date", "datum", "buchungsdatum"],
@@ -41,6 +48,7 @@ SPALTEN = {
 
 KONTO_ORDNER = ["konto", "kontoauszuege", "kontoauszüge", "bank"]
 TOLERANZ = Decimal("0.01")
+KURS_TOLERANZ = Decimal("0.05")  # Kursaufschlag und Auslandsgebühren der Bank
 VOR_RECHNUNG = timedelta(days=10)  # Vorkasse
 NACH_RECHNUNG = timedelta(days=120)
 
@@ -138,7 +146,7 @@ def ignorier_grund(u: Umsatz, regeln: dict[str, str], stichworte: list[str]) -> 
     return ""
 
 
-def importieren(db: Datenbank, cfg: Config, text: str) -> BankImport:
+def importieren(db: Datenbank, cfg: Config, text: str, umrechner: Umrechner | None = None) -> BankImport:
     ergebnis = BankImport()
     try:
         umsaetze = n26_csv_lesen(text)
@@ -153,7 +161,7 @@ def importieren(db: Datenbank, cfg: Config, text: str) -> BankImport:
             ergebnis.neu += 1
         else:
             ergebnis.vorhanden += 1
-    ergebnis.zugeordnet = abgleich_ausfuehren(db)
+    ergebnis.zugeordnet = abgleich_ausfuehren(db, umrechner)
     return ergebnis
 
 
@@ -177,20 +185,46 @@ def verzeichnis_importieren(db: Datenbank, cfg: Config) -> BankImport | None:
     return gesamt
 
 
-def passt_betrag(u: Umsatz, b: Beleg) -> bool:
+def euro_schaetzer(umrechner: Umrechner) -> Euro:
+    def euro(b: Beleg) -> Decimal | None:
+        if b.waehrung.upper() == "EUR":
+            return b.zahlbetrag()
+        if b.rechnungsdatum is None:
+            return None
+        try:
+            return umrechner.in_euro(b.zahlbetrag(), b.waehrung, b.rechnungsdatum, b.kurs)[0]
+        except KursFehlt:
+            return None
+    return euro
+
+
+def passt_betrag(u: Umsatz, b: Beleg, euro: Euro | None = None) -> str | None:
+    """"genau", "ungefaehr" (Fremdwährung mit Kursdifferenz) oder None."""
     soll = abs(b.zahlbetrag())
     if b.waehrung.upper() == "EUR":
-        return abs(abs(u.betrag) - soll) <= TOLERANZ
+        return "genau" if abs(abs(u.betrag) - soll) <= TOLERANZ else None
     if u.original_betrag is not None and u.original_waehrung == b.waehrung.upper():
-        return abs(abs(u.original_betrag) - soll) <= TOLERANZ
-    return False
+        return "genau" if abs(abs(u.original_betrag) - soll) <= TOLERANZ else None
+    if euro and (geschaetzt := euro(b)):
+        geschaetzt = abs(geschaetzt)
+        if abs(abs(u.betrag) - geschaetzt) <= max(Decimal("0.50"), geschaetzt * KURS_TOLERANZ):
+            return "ungefaehr"
+    return None
+
+
+def kosten_geldverkehr(u: Umsatz, b: Beleg, euro: Euro) -> Decimal | None:
+    """Was die Bank mehr abgebucht (oder weniger gutgeschrieben) hat als der Beleg in EUR."""
+    if (geschaetzt := euro(b)) is None:
+        return None
+    return abs(u.betrag) - abs(geschaetzt) if u.betrag < 0 else abs(geschaetzt) - abs(u.betrag)
 
 
 def _woerter(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-zäöüß0-9]{3,}", text.lower()) if w not in {"gmbh", "inc", "llc", "ltd", "the"}}
 
 
-def kandidaten(u: Umsatz, belege: list[Beleg], vergeben: set[int], nur_passende: bool = True) -> list[Beleg]:
+def kandidaten(u: Umsatz, belege: list[Beleg], vergeben: set[int], nur_passende: bool = True,
+               euro: Euro | None = None) -> list[Beleg]:
     """Mögliche Belege für einen Umsatz, der beste zuerst."""
     art = Art.AUSGANG if u.betrag > 0 else Art.EINGANG
     treffer: list[tuple[tuple, Beleg]] = []
@@ -198,14 +232,17 @@ def kandidaten(u: Umsatz, belege: list[Beleg], vergeben: set[int], nur_passende:
         if b.id in vergeben or b.art != art or b.steuerfall == Steuerfall.IGNORIEREN or b.rechnungsdatum is None:
             continue
         im_fenster = b.rechnungsdatum - VOR_RECHNUNG <= u.buchungsdatum <= b.rechnungsdatum + NACH_RECHNUNG
-        betrag_ok = passt_betrag(u, b)
-        if nur_passende and not (im_fenster and betrag_ok):
-            continue
+        betrag = passt_betrag(u, b, euro)
         nummer = bool(b.rechnungsnummer) and len(b.rechnungsnummer) >= 4 and \
             b.rechnungsnummer.lower() in u.verwendungszweck.lower()
-        name = bool(_woerter(b.partner) & _woerter(f"{u.partner} {u.verwendungszweck}"))
+        name = bool(_woerter(f"{b.partner} {b.beschreibung}") & _woerter(f"{u.partner} {u.verwendungszweck}"))
+        # Ungefähr passende Beträge nur zusammen mit dem Namen, sonst trifft es zu leicht den falschen Beleg.
+        sicher = betrag == "genau" or (betrag == "ungefaehr" and name)
+        if nur_passende and not (im_fenster and sicher):
+            continue
         abstand = abs((u.buchungsdatum - b.rechnungsdatum).days)
-        treffer.append(((not betrag_ok, not im_fenster, not nummer, not name, abstand), b))
+        rang = {"genau": 0, "ungefaehr": 1}.get(betrag, 2)
+        treffer.append(((rang, not im_fenster, not nummer, not name, abstand), b))
     return [b for _, b in sorted(treffer, key=lambda t: t[0])]
 
 
@@ -220,8 +257,9 @@ def zuordnen(db: Datenbank, u: Umsatz, b: Beleg | None) -> None:
     db.umsatz_aktualisieren(u)
 
 
-def abgleich_ausfuehren(db: Datenbank) -> int:
+def abgleich_ausfuehren(db: Datenbank, umrechner: Umrechner | None = None) -> int:
     """Ordnet offenen Umsätzen automatisch passende Belege zu. Gibt die Anzahl neuer Zuordnungen zurück."""
+    euro = euro_schaetzer(umrechner or Umrechner(db, ezb_abrufen=False))
     belege = db.alle_belege()
     umsaetze = db.alle_umsaetze()
     vergeben = {u.beleg_id for u in umsaetze if u.beleg_id is not None}
@@ -229,7 +267,7 @@ def abgleich_ausfuehren(db: Datenbank) -> int:
     for u in umsaetze:
         if u.beleg_id is not None or u.ignoriert:
             continue
-        passend = kandidaten(u, belege, vergeben)
+        passend = kandidaten(u, belege, vergeben, euro=euro)
         if passend:
             zuordnen(db, u, passend[0])
             vergeben.add(passend[0].id)

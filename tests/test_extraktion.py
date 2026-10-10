@@ -113,3 +113,37 @@ def test_hetzner_tabelle_in_jedem_textlayout(layout):
     e = erkennen(beispiele.HETZNER[layout], Art.EINGANG, "DE123456789")
     assert (e.netto, e.steuer, e.brutto) == (D("14.19"), D("2.70"), D("16.89"))
     assert e.steuersatz == D("19")
+
+
+def test_eu_anbieter_mit_ausgewiesener_steuer_als_vorsteuer_mit_hinweis():
+    # Wie bisher in sevDesk: Vorsteuer, aber mit Hinweis auf § 13b
+    e = erkennen(beispiele.JETBRAINS, Art.EINGANG, "DE123456789")
+    assert e.steuerfall == Steuerfall.VORSTEUER_INLAND
+    assert e.partner_ustid == "CZ26502275"
+    assert any("§ 13b" in h for h in e.hinweise)
+    b = beleg_aus_erkennung(e, Art.EINGANG)
+    assert (b.netto, b.steuersatz, b.steuer) == (D("51.00"), D("19"), D("9.69"))
+    assert b.zahlbetrag() == D("60.69")
+
+
+def test_eu_anbieter_mit_deutscher_ustid_bleibt_inland():
+    # z. B. ein Händler mit Sitz in Luxemburg, der aus einem deutschen Lager liefert
+    text = beispiele.JETBRAINS.replace("VAT ID: CZ26502275", "VAT ID: LU26375245, USt-IdNr. DE814584193")
+    e = erkennen(text, Art.EINGANG, "DE123456789")
+    assert e.steuerfall == Steuerfall.VORSTEUER_INLAND
+    assert not any("§ 13b" in h for h in e.hinweise)
+
+
+@pytest.mark.parametrize("eigene", ["DE123456789", ""])
+@pytest.mark.parametrize("rc_text", ["", "VAT reverse charged\n"])
+def test_eu_anbieter_ohne_steuer_mit_eigener_ustid_ist_reverse_charge(eigene, rc_text):
+    # So kommen künftige Rechnungen, wenn die USt-IdNr. beim Anbieter hinterlegt ist
+    text = (beispiele.JETBRAINS.replace("Germany\n", "Germany\nVAT ID: DE123456789\n")
+            .replace("VAT Rate: 19.00%", "VAT Rate: 0.00%").replace("VAT Amount: 9.69 EUR", "VAT Amount: 0.00 EUR")
+            .replace("60.69", "51.00") + rc_text)
+    e = erkennen(text, Art.EINGANG, eigene)
+    assert e.steuerfall == Steuerfall.EU_LEISTUNG_13B
+    assert e.partner_ustid == "CZ26502275"
+    b = beleg_aus_erkennung(e, Art.EINGANG)
+    assert (b.netto, b.steuersatz, b.steuer) == (D("51.00"), D("19"), None)
+    assert b.zahlbetrag() == D("51.00")

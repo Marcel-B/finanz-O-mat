@@ -109,3 +109,26 @@ Summe 14,19 € 2,70 € 16,89 €
     "spalten": _HETZNER_KOPF + "Netto\n14,19 €\n14,19 €\nSteuer\n2,70 €A1\n2,70 €\nBrutto\n16,89 €\n16,89 €\n19 %\n"
     + _HETZNER_FUSS,
 }
+
+# EU-Anbieter, der deutsche Umsatzsteuer berechnet, weil beim Kunden keine USt-IdNr. hinterlegt ist
+JETBRAINS = """JetBrains s.r.o.
+Kavčí Hory Office Park
+Na Hřebenech II 1718/8
+Praha 4 - Nusle 140 00
+Česko
+Invoice INVCZ11712088
+Tax point date: 21.9.2026
+Issue date: 21.9.2026
+Bill To:
+Marcel Muster
+47800 Krefeld
+Germany
+Part Number Product Description Price Qty Extended Price
+AIGC-ADD JetBrains AI Credits 0.85 60 51.00 EUR
+Subtotal: 51.00 EUR
+VAT Rate: 19.00%
+VAT Amount: 9.69 EUR
+Total: 60.69 EUR
+PAID: 60.69 EUR
+JetBrains s.r.o. VAT ID: CZ26502275
+"""
