@@ -54,6 +54,12 @@ Paperless liegen, nicht doppelt ankommen, schaltet das Skript auf Nachfrage `PAP
 ein: Paperless verwirft dann Dateien, die es byte-gleich schon gibt (ab Paperless 3.0 legt es sie sonst doppelt an).
 Dafür startet das Skript die Dienste `paperless-consumer` und `paperless-task-queue` einmal neu.
 
+Paperless vermerkt eine Mail erst als erledigt, wenn ihr PDF fertig verarbeitet ist (Texterkennung). Ist die
+Warteschlange beim ersten Abruf lang, kann der nächste Lauf zehn Minuten später dieselbe Mail noch einmal holen; das
+Skript stößt deshalb keinen Sofort-Abruf mehr an. Gleiche Dateien verwirft Paperless mit
+`PAPERLESS_CONSUMER_DELETE_DUPLICATES`, nur wenn beide Kopien gleichzeitig verarbeitet werden, rutschen sie durch.
+Solche Doppel räumt `finanz-o-mat paperless duplikate` auf.
+
 Erneut `paperless-eingang mail` ausführen, um Ordner hinzuzufügen oder abzuwählen (abgewählte Regeln werden
 abgeschaltet, nicht gelöscht). Alles lässt sich auch in Paperless unter „E-Mail“ ansehen und ändern; was Paperless
 mit jeder Mail gemacht hat, steht dort unter „Verarbeitete Mails“.

@@ -308,12 +308,10 @@ def main() -> None:
             pl.anfrage("PATCH", f"/api/mail_rules/{regel['id']}/", {"enabled": False})
             ok(f"Regel „{regel['name']}“ abgeschaltet (nicht mehr gewählt)")
 
-    if ja("Jetzt gleich abrufen statt auf den nächsten Lauf (alle 10 Minuten) zu warten?", True):
-        try:
-            pl.anfrage("POST", f"/api/mail_accounts/{konto['id']}/process/", {})
-            ok("Abruf gestartet; Ergebnis in Paperless unter Dokumente bzw. E-Mail > Verarbeitete Mails")
-        except RuntimeError as fehler:
-            warn(f"Sofort-Abruf ging nicht ({fehler}); Paperless holt die Mails beim nächsten Lauf.")
+    # Kein Sofort-Abruf: Paperless vermerkt eine Mail erst als erledigt, wenn ihr PDF fertig verarbeitet ist.
+    # Ein zweiter Abruf in dieser Zeit (Sofort-Abruf plus Zeitplan, erneutes Einrichten) holt sie noch einmal.
+    ok("Paperless holt die Mails beim nächsten planmäßigen Lauf (alle 10 Minuten); "
+       "Ergebnis unter E-Mail > Verarbeitete Mails")
 
 
 if __name__ == "__main__":
