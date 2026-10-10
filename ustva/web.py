@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import base64
 import re
-import secrets
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from . import bank, export, uebersicht
+from . import bank, einstellungen, export, uebersicht
 from .berechnung import berechnen, zeitraum
 from .config import Config
 from .db import Datenbank
@@ -88,6 +87,28 @@ class IgnorierenEingabe(BaseModel):
     regel: bool = False  # künftig alle Umsätze mit diesem Partner ignorieren
 
 
+class EinstellungenEingabe(BaseModel):
+    """Nicht gesendete Felder bleiben unverändert; ein leerer Text entfernt den Wert aus der App."""
+
+    paperless_url: str | None = None
+    paperless_token: str | None = None
+    paperless_tags_ausgang: str | None = None
+    paperless_tags_eingang: str | None = None
+    eigene_ustid: str | None = None
+    bundesland: str | None = None
+
+
+class PaperlessTestEingabe(BaseModel):
+    paperless_url: str | None = None
+    paperless_token: str | None = None
+
+
+class PasswortEingabe(BaseModel):
+    aktuell: str = ""
+    benutzer: str = ""
+    neu: str
+
+
 class ImportAnfrage(BaseModel):
     quelle: str = "alle"  # alle | verzeichnis | paperless | konto
     zeitraum: str
@@ -103,26 +124,30 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     def _heute() -> date:
         return heute() if callable(heute) else (heute or date.today())
 
-    if cfg.app_benutzer and cfg.app_passwort:
-        erwartet = base64.b64encode(f"{cfg.app_benutzer}:{cfg.app_passwort}".encode()).decode()
+    anmeldung = einstellungen.Anmeldung(cfg, db)
 
-        @app.middleware("http")
-        async def anmeldung(request: Request, call_next):
-            kopf = request.headers.get("authorization", "")
-            if not secrets.compare_digest(kopf.encode(), f"Basic {erwartet}".encode()):
-                return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Finanz-O-Mat"'})
-            return await call_next(request)
+    def aktuell() -> Config:
+        """Konfiguration inklusive der Einstellungen aus der Oberfläche."""
+        return einstellungen.wirksam(cfg, db)
+
+    @app.middleware("http")
+    async def anmeldung_pruefen(request: Request, call_next):
+        if not anmeldung.kopf_gueltig(request.headers.get("authorization", "")):
+            return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Finanz-O-Mat"'})
+        return await call_next(request)
 
     @app.get("/api/status")
     def status():
-        frist = naechste_frist(_heute(), cfg.bundesland, cfg.dauerfristverlaengerung)
+        c = aktuell()
+        frist = naechste_frist(_heute(), c.bundesland, c.dauerfristverlaengerung)
         return {
             "frist": frist.to_dict(),
             "versteuerung": cfg.versteuerung,
             "dauerfristverlaengerung": cfg.dauerfristverlaengerung,
-            "bundesland": cfg.bundesland,
+            "bundesland": c.bundesland,
             "verzeichnis": str(cfg.rechnungs_verzeichnis) if cfg.rechnungs_verzeichnis else None,
-            "paperless": cfg.paperless_url if cfg.paperless_aktiv else None,
+            "paperless": c.paperless_url if c.paperless_aktiv else None,
+            "anmeldung": anmeldung.aktiv,
         }
 
     @app.get("/api/steuerfaelle")
@@ -178,7 +203,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         roh = await request.body()
         if len(roh) > 10_000_000:
             raise HTTPException(413, "Datei zu groß")
-        return bank.importieren(db, cfg, roh.decode("utf-8-sig", errors="replace")).to_dict()
+        return bank.importieren(db, aktuell(), roh.decode("utf-8-sig", errors="replace")).to_dict()
 
     @app.post("/api/abgleich")
     def abgleich():
@@ -271,12 +296,13 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     def importieren(anfrage: ImportAnfrage):
         jahr, monat = _zeitraum(anfrage.zeitraum)
         ergebnisse: dict[str, dict] = {}
-        if anfrage.quelle in ("alle", "verzeichnis") and cfg.rechnungs_verzeichnis:
-            ergebnisse["verzeichnis"] = verzeichnis.importieren(db, cfg).to_dict()
-        if anfrage.quelle in ("alle", "paperless") and cfg.paperless_aktiv:
-            ergebnisse["paperless"] = paperless.importieren(db, cfg, jahr, monat).to_dict()
+        c = aktuell()
+        if anfrage.quelle in ("alle", "verzeichnis") and c.rechnungs_verzeichnis:
+            ergebnisse["verzeichnis"] = verzeichnis.importieren(db, c).to_dict()
+        if anfrage.quelle in ("alle", "paperless") and c.paperless_aktiv:
+            ergebnisse["paperless"] = paperless.importieren(db, c, jahr, monat).to_dict()
         if anfrage.quelle in ("alle", "konto"):
-            if konto := bank.verzeichnis_importieren(db, cfg):
+            if konto := bank.verzeichnis_importieren(db, c):
                 ergebnisse["konto"] = konto.to_dict()
         if ergebnisse:
             # Neue Belege können zu bereits eingelesenen Umsätzen passen
@@ -318,6 +344,60 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         name = f"ustva-{zr}-{datei}"
         return Response(inhalt, media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    def _einstellungen() -> dict:
+        c = aktuell()
+
+        def feld(name: str, wert: str) -> dict:
+            return {"wert": wert, "quelle": einstellungen.quelle(cfg, db, name)}
+
+        benutzer = anmeldung.zugang()[0]
+        return {
+            "paperless_url": feld("paperless_url", c.paperless_url),
+            # Das Token selbst wird nie an den Browser zurückgegeben.
+            "paperless_token": {"gesetzt": bool(c.paperless_token),
+                                "quelle": einstellungen.quelle(cfg, db, "paperless_token")},
+            "paperless_tags_ausgang": feld("paperless_tags_ausgang", ", ".join(c.paperless_tags_ausgang)),
+            "paperless_tags_eingang": feld("paperless_tags_eingang", ", ".join(c.paperless_tags_eingang)),
+            "eigene_ustid": feld("eigene_ustid", c.eigene_ustid),
+            "bundesland": feld("bundesland", c.bundesland),
+            "bundeslaender": [{"wert": k, "name": v} for k, v in einstellungen.BUNDESLAENDER.items()],
+            "anmeldung": {"aktiv": anmeldung.aktiv, "benutzer": benutzer, "quelle": anmeldung.quelle(),
+                          "min_laenge": einstellungen.MIN_PASSWORT},
+        }
+
+    @app.get("/api/einstellungen")
+    def einstellungen_lesen():
+        return _einstellungen()
+
+    @app.put("/api/einstellungen")
+    def einstellungen_speichern(eingabe: EinstellungenEingabe):
+        neu = {k: v for k, v in eingabe.model_dump().items() if v is not None}
+        geprueft = {k: einstellungen.pruefen(k, v) for k, v in neu.items()}
+        for schluessel, wert in geprueft.items():
+            db.einstellung_setzen(schluessel, wert or None)
+        return _einstellungen()
+
+    @app.post("/api/einstellungen/paperless-test")
+    def paperless_testen(eingabe: PaperlessTestEingabe):
+        c = aktuell()
+        url = einstellungen.pruefen("paperless_url", eingabe.paperless_url or c.paperless_url)
+        token = eingabe.paperless_token or c.paperless_token
+        if not url or not token:
+            raise HTTPException(400, "Bitte URL und Token angeben.")
+        try:
+            with httpx.Client(timeout=10) as client:
+                tags = paperless.PaperlessClient(url, token, client).namen("/api/tags/")
+        except paperless.PaperlessFehler as e:
+            raise HTTPException(400, str(e)) from e
+        return {"text": f"Verbindung klappt, {len(tags)} Tags gefunden."}
+
+    @app.post("/api/passwort")
+    def passwort_aendern(eingabe: PasswortEingabe):
+        if anmeldung.aktiv and not anmeldung.pruefe(anmeldung.zugang()[0], eingabe.aktuell):
+            raise HTTPException(403, "Das aktuelle Passwort stimmt nicht.")
+        anmeldung.setzen(eingabe.benutzer or anmeldung.zugang()[0], eingabe.neu)
+        return _einstellungen()["anmeldung"]
 
     @app.exception_handler(ValueError)
     async def wertfehler(_request: Request, exc: ValueError):
