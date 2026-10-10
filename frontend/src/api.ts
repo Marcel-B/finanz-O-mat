@@ -279,6 +279,43 @@ export interface Kontakt extends KontaktEingabe {
   letzter_beleg: string | null;
 }
 
+export interface SevdeskVergleich {
+  zeitraum: string;
+  zahllast: string;
+  erwartet: string | null;
+  differenz: string | null;
+  passt: boolean;
+}
+
+export interface SevdeskErgebnis {
+  trocken: boolean;
+  neu: number;
+  belege: number;
+  vorhanden: number;
+  ausserhalb: number;
+  hochgeladen: number;
+  wartet: number;
+  kontakte: number;
+  uebersprungen: { grund: string; anzahl: number }[];
+  doppelt: string[];
+  pruefen: string[];
+  ohne_datei: string[];
+  fehler: string[];
+  zahlungen_ohne_zeitraum: string[];
+  vergleich: SevdeskVergleich[];
+}
+
+export interface SevdeskStatus {
+  csv: string[];
+  dateien: number;
+  paperless: boolean;
+  laeuft: boolean;
+  meldung: string;
+  ergebnis: SevdeskErgebnis | null;
+  fehler: string;
+  beendet: string;
+}
+
 async function anfrage<T>(pfad: string, optionen: RequestInit = {}): Promise<T> {
   const antwort = await fetch(pfad, {
     ...optionen,
@@ -331,6 +368,17 @@ export const api = {
   kontaktAusblenden: (id: number) => anfrage<null>(`/api/kontakte/${id}`, { method: "DELETE" }),
   kontakteZusammenfuehren: (ziel: number, mit: number) =>
     post<Kontakt>(`/api/kontakte/${ziel}/zusammenfuehren`, { mit }),
+  sevdesk: () => anfrage<SevdeskStatus>("/api/sevdesk"),
+  sevdeskLeeren: () => anfrage<null>("/api/sevdesk/dateien", { method: "DELETE" }),
+  sevdeskHochladen: (name: string, datei: Blob) =>
+    anfrage<{ abgelegt: number }>(`/api/sevdesk/dateien?name=${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: datei,
+      headers: { "Content-Type": "application/octet-stream" },
+    }),
+  sevdeskProbelauf: (o: { von?: string | null; bis?: string | null }) => post<SevdeskErgebnis>("/api/sevdesk/probelauf", o),
+  sevdeskImportieren: (o: { von?: string | null; bis?: string | null }) =>
+    post<SevdeskStatus>("/api/sevdesk/importieren", o),
   kurse: () => anfrage<Kurs[]>("/api/kurse"),
   kursSpeichern: (k: { waehrung: string; zeitraum: string; kurs: string; quelle: string }) =>
     anfrage<Kurs[]>("/api/kurse", { method: "PUT", body: JSON.stringify(k) }),

@@ -15,7 +15,18 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from . import adressbuch, aktualisierung, backup, bank, einstellungen, export, monatsexport, taetigkeit, uebersicht
+from . import (
+    adressbuch,
+    aktualisierung,
+    backup,
+    bank,
+    einstellungen,
+    export,
+    monatsexport,
+    sevdesk_web,
+    taetigkeit,
+    uebersicht,
+)
 from .berechnung import berechnen, zeitraum
 from .config import Config
 from .db import Datenbank
@@ -191,7 +202,7 @@ class NeuEinlesenAnfrage(BaseModel):
 
 
 def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner: Umrechner | None = None,
-               heute=None) -> FastAPI:
+               heute=None, sevdesk_ordner: Path | None = None) -> FastAPI:
     cfg = cfg or Config.aus_umgebung()
     db = db or Datenbank(cfg.datenbank)
     umrechner = umrechner or Umrechner(db, cfg.ezb_kurse)
@@ -653,6 +664,9 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
 
     app.include_router(aktualisierung.router(cfg.update_verzeichnis))
     app.include_router(backup.router(cfg.backup_verzeichnis))
+    # Hochgeladener sevDesk-Export liegt neben der Datenbank und bleibt als Archiv
+    app.include_router(sevdesk_web.router(sevdesk_ordner or cfg.datenbank.resolve().parent / "sevdesk-export",
+                                          db, aktuell, umrechner))
 
     @app.exception_handler(ValueError)
     async def wertfehler(_request: Request, exc: ValueError):

@@ -2,8 +2,8 @@
 
 Es gibt zwei Wege, je nach sevDesk-Tarif:
 
-- **Export-Dateien** (jeder Tarif): Belege und Rechnungen in der sevDesk-Oberfläche exportieren, den Ordner in den
-  Container kopieren, übernehmen. → [Weg A](#weg-a-export-dateien)
+- **Export-Dateien** (jeder Tarif): Belege und Rechnungen in der sevDesk-Oberfläche exportieren und den Ordner in
+  der App unter Einstellungen hineinziehen. → [Weg A](#weg-a-export-dateien)
 - **API** (ab Tarif „Buchhaltung Pro“, mit API-Token): holt zusätzlich Steuerregeln, Kontakte und Bankumsätze.
   → [Weg B](#weg-b-über-die-api)
 
@@ -31,9 +31,21 @@ sevDesk/
 
 Die Dateinamen bitte nicht ändern: darüber findet das Werkzeug zu jeder Buchung ihre Datei.
 
-### 2. Ordner in den Container kopieren
+### 2. In der App übernehmen (am einfachsten)
 
-Vom Mac auf den Proxmox-Host, dort in den Container (`<CTID>` ist die Nummer des finanz-O-mat-Containers):
+In finanz-O-mat unter **Einstellungen > Umzug aus sevDesk** den Ordner in das Feld ziehen (oder „Ordner wählen“;
+die CSV- und ZIP-Dateien direkt gehen auch). Die App lädt alles hoch, zeigt einen Probelauf und übernimmt nach
+einem Klick auf „Übernehmen“. Die Dateien bleiben als Archiv neben der Datenbank liegen
+(`/var/lib/finanz-o-mat/sevdesk-export`) und landen damit auch im Backup.
+
+Der Probelauf zeigt, wie viele Belege übernommen würden, was übersprungen wird, Hinweise an Belegen und die Zahllast
+je Monat neben der abgegebenen (siehe unten). „Nur bis Monat“ klammert Monate aus, die schon mit finanz-O-mat
+gemacht sind. Paperless verarbeitet die Dateien im Hintergrund; was nach fünf Minuten noch läuft, schließt ein
+weiterer Klick auf „Erneut übernehmen“ ab. Ein zweiter Lauf legt nichts doppelt an.
+
+### 2b. Alternativ auf der Kommandozeile
+
+Ordner vom Mac auf den Proxmox-Host, dort in den Container (`<CTID>` ist die Nummer des finanz-O-mat-Containers):
 
 ```sh
 # auf dem Mac
@@ -43,11 +55,6 @@ pct push <CTID> /tmp/sevdesk.tgz /var/lib/finanz-o-mat/sevdesk.tgz
 pct enter <CTID>
 # im Container
 cd /var/lib/finanz-o-mat && tar xzf sevdesk.tgz && rm sevdesk.tgz && chown -R finanzomat: sevDesk
-```
-
-### 3. Probelauf, dann übernehmen
-
-```sh
 finanz-o-mat sevdesk importieren --ordner /var/lib/finanz-o-mat/sevDesk --trocken
 finanz-o-mat sevdesk importieren --ordner /var/lib/finanz-o-mat/sevDesk
 ```
