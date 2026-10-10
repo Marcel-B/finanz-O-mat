@@ -152,6 +152,7 @@ export interface ImportErgebnis {
   vorhanden: number;
   zugeordnet?: number;
   fehler: string[];
+  doppelt?: string[];
 }
 
 export interface NeuEingelesen {

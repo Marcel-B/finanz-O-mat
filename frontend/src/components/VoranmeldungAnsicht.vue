@@ -68,9 +68,10 @@ async function einlesen() {
     const fehler: string[] = [];
     for (const [quelle, e] of Object.entries(ergebnis)) {
       if (quelle !== "keine") {
-        teile.push(`${namen[quelle]}: ${e.neu} neu, ${e.vorhanden} vorhanden${e.zugeordnet ? `, ${e.zugeordnet} zugeordnet` : ""}`);
+        const doppelt = e.doppelt?.length ? `, ${e.doppelt.length} doppelt` : "";
+        teile.push(`${namen[quelle]}: ${e.neu} neu, ${e.vorhanden} vorhanden${doppelt}${e.zugeordnet ? `, ${e.zugeordnet} zugeordnet` : ""}`);
       }
-      fehler.push(...e.fehler);
+      fehler.push(...e.fehler, ...(e.doppelt ?? []));
     }
     toast.add({ severity: "success", summary: "Eingelesen", detail: teile.join(" · "), life: 5000 });
     for (const f of fehler) toast.add({ severity: "warn", summary: "Hinweis", detail: f, life: 8000 });

@@ -22,7 +22,7 @@ from ..db import Datenbank
 from ..extraktion import betrag_parsen, erkennen, steuerfall_vorschlagen
 from ..fristen import monat_plus
 from ..steuerfaelle import Art
-from . import ImportErgebnis, beleg_aus_erkennung
+from . import ImportErgebnis, beleg_aus_erkennung, speichern
 
 log = logging.getLogger(__name__)
 
@@ -182,6 +182,7 @@ def importieren(
 
     ausgang = {n.lower() for n in cfg.paperless_tags_ausgang}
     eingang = {n.lower() for n in cfg.paperless_tags_eingang}
+    vorhandene = db.alle_belege()
 
     for dok in dokumente:
         namen = {tags.get(t, "").lower() for t in dok.get("tags", [])}
@@ -199,9 +200,8 @@ def importieren(
             ergebnis.vorhanden += 1
             continue
         try:
-            for beleg in dokument_belege(pl, dok, art, cfg, felder, korrespondenten):
-                db.beleg_anlegen(beleg)
-            ergebnis.neu += 1
+            speichern(db, dokument_belege(pl, dok, art, cfg, felder, korrespondenten), vorhandene, ergebnis,
+                      f"Dokument {dok['id']} ({dok.get('title')})")
         except Exception as e:  # ein fehlerhaftes Dokument soll den Import nicht abbrechen
             ergebnis.fehler.append(f"Dokument {dok.get('id')} ({dok.get('title')}): {e}")
     return ergebnis

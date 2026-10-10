@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 
+from ..db import Datenbank
+from ..doppelt import beschreibung, doppel, herkunft
 from ..extraktion import Erkennung, steuer_passt
 from ..models import Beleg
 from ..steuerfaelle import Art, Steuerfall
@@ -21,10 +23,23 @@ class ImportErgebnis:
     vorhanden: int = 0
     uebersprungen: int = 0
     fehler: list[str] = field(default_factory=list)
+    doppelt: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {"neu": self.neu, "vorhanden": self.vorhanden, "uebersprungen": self.uebersprungen,
-                "fehler": self.fehler}
+                "fehler": self.fehler, "doppelt": self.doppelt}
+
+
+def speichern(db: Datenbank, belege: list[Beleg], vorhandene: list[Beleg], ergebnis: ImportErgebnis,
+              name: str) -> None:
+    """Speichert die Belege eines Dokuments, außer es ist eine schon erfasste Rechnung."""
+    if belege and (alt := doppel(belege[0], vorhandene)):
+        ergebnis.doppelt.append(f"{name} nicht übernommen: dieselbe Rechnung wie {beschreibung(alt)} "
+                                f"({herkunft(alt)}). Ist es ein Duplikat, kann es dort gelöscht werden.")
+        return
+    for beleg in belege:
+        vorhandene.append(db.beleg_anlegen(beleg))
+    ergebnis.neu += 1
 
 
 def _euro(wert: Decimal) -> str:
