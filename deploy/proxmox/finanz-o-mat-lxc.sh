@@ -299,7 +299,7 @@ installieren() {
     echo "  Paperless:   ${PAPERLESS_URL:-nicht genutzt}"
     echo "  Tailscale:   $TAILSCALE${TAILSCALE_AUTHKEY:+ (mit Auth-Key)}, HTTPS über tailscale serve: $TAILSCALE_SERVE"
     echo "  App:         $REPO_URL ($REPO_BRANCH), Port $PORT, $VERSTEUERUNG-Versteuerung"
-    echo "  Updates:     alle 6 Stunden prüfen, $([[ $AUTO_UPDATE == ja ]] && echo "automatisch installieren" || echo "Hinweis in der App")"
+    echo "  Updates:     stündlich prüfen, $([[ $AUTO_UPDATE == ja ]] && echo "automatisch installieren" || echo "Hinweis in der App")"
     if [[ $NICHT_FRAGEN != 1 ]]; then
         read -rp "Container so anlegen? [J/n] " antwort
         [[ ${antwort:-j} =~ ^[JjYy]$ ]] || abbruch "Abgebrochen."

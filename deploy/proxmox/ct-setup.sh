@@ -8,7 +8,8 @@
 #   ct-setup.sh pruefen   nachsehen, ob es eine neue Version gibt (läuft per Timer), Ergebnis für die App
 #
 # Update aus der App: Die App legt /var/lib/finanz-o-mat/update/anfordern an, eine systemd-Path-Unit startet
-# dann finanz-o-mat-update.service (als root). Den Stand liest die App aus .../update/status.json.
+# dann finanz-o-mat-update.service (als root). Ebenso startet .../update/pruefen sofort eine Prüfung
+# („Nach Updates suchen“). Den Stand liest die App aus .../update/status.json.
 #
 # Konfiguration und Datenbank liegen außerhalb des Programmverzeichnisses und bleiben bei Updates erhalten:
 #   /etc/finanz-o-mat/finanz-o-mat.env   Einstellungen (Paperless, Anmeldung, Versteuerung, ...)
@@ -260,15 +261,17 @@ After=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/bin/bash $APP_DIR/deploy/proxmox/ct-setup.sh pruefen
+# Anforderung aus der App erst am Ende entfernen, solange zeigt die App die Prüfung als laufend
+ExecStopPost=/bin/rm -f $UPDATE_DIR/pruefen
 EOF
     cat >/etc/systemd/system/$DIENST-pruefen.timer <<EOF
 [Unit]
-Description=Finanz-O-Mat: alle 6 Stunden nach neuer Version sehen
+Description=Finanz-O-Mat: stündlich nach neuer Version sehen
 
 [Timer]
-OnBootSec=15min
-OnUnitActiveSec=6h
-RandomizedDelaySec=15min
+OnBootSec=5min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
 
 [Install]
 WantedBy=timers.target
@@ -283,6 +286,18 @@ Type=oneshot
 ExecStartPre=/bin/rm -f $UPDATE_DIR/anfordern
 ExecStart=/bin/bash $APP_DIR/deploy/proxmox/ct-setup.sh update
 TimeoutStartSec=30min
+EOF
+    # „Nach Updates suchen“ aus der App (Datei pruefen)
+    cat >/etc/systemd/system/$DIENST-pruefen.path <<EOF
+[Unit]
+Description=Finanz-O-Mat: Prüfung auf Anforderung aus der App
+
+[Path]
+PathExists=$UPDATE_DIR/pruefen
+Unit=$DIENST-pruefen.service
+
+[Install]
+WantedBy=multi-user.target
 EOF
     cat >/etc/systemd/system/$DIENST-update.path <<EOF
 [Unit]
@@ -303,7 +318,7 @@ dienst_starten() {
         return 0
     fi
     systemctl daemon-reload
-    systemctl enable --quiet --now "$DIENST-pruefen.timer" "$DIENST-update.path"
+    systemctl enable --quiet --now "$DIENST-pruefen.timer" "$DIENST-pruefen.path" "$DIENST-update.path"
     systemctl enable --quiet "$DIENST"
     systemctl restart "$DIENST"
     pruefe_erreichbar

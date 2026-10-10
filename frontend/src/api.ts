@@ -186,6 +186,7 @@ export interface UpdateStatus {
   geprueft?: string | null;
   meldung?: string;
   automatisch?: boolean;
+  pruefung_laeuft?: boolean;
 }
 
 async function anfrage<T>(pfad: string, optionen: RequestInit = {}): Promise<T> {
@@ -246,4 +247,5 @@ export const api = {
   uebersicht: (jahr: number) => anfrage<Jahresuebersicht>(`/api/uebersicht/${jahr}`),
   update: () => anfrage<UpdateStatus>("/api/update"),
   updateStarten: () => post<UpdateStatus>("/api/update"),
+  updatePruefen: () => post<UpdateStatus>("/api/update/pruefen"),
 };
