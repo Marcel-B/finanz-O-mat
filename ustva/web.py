@@ -396,8 +396,10 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         jahr, monat = _zeitraum(zr)
         belege = db.alle_belege()
         b = berechnen(belege, jahr, monat, umrechner, cfg.versteuerung)
-        umsaetze = [u for u in db.alle_umsaetze() if u.zeitraum == zr]
-        inhalt = monatsexport.monats_zip(aktuell(), b, umsaetze, {x.id: x for x in belege if x.id})
+        alle = db.alle_umsaetze()
+        inhalt = monatsexport.monats_zip(aktuell(), b, [u for u in alle if u.zeitraum == zr],
+                                         {x.id: x for x in belege if x.id},
+                                         andere_umsaetze=[u for u in alle if u.zeitraum != zr])
         return Response(inhalt, media_type="application/zip",
                         headers={"Content-Disposition": f'attachment; filename="Unterlagen-{zr}.zip"'})
 
