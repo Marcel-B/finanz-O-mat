@@ -11,6 +11,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { api, type Einstellungen, type Herkunft } from "@/api";
 
 import KarteBox from "./KarteBox.vue";
+import VersionKarte from "./VersionKarte.vue";
 
 const emit = defineEmits<{ geaendert: [] }>();
 const toast = useToast();
@@ -261,5 +262,7 @@ async function passwortSpeichern() {
         </div>
       </form>
     </KarteBox>
+
+    <VersionKarte />
   </div>
 </template>

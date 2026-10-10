@@ -3,7 +3,8 @@
 Die App selbst installiert nichts. Im Container prüft ein systemd-Timer regelmäßig, ob es auf GitHub
 einen neueren Stand gibt, und schreibt das Ergebnis nach ``<UPDATE_VERZEICHNIS>/status.json``.
 Fordert man in der Oberfläche das Update an, legt die App nur die Datei ``anfordern`` an; eine
-systemd-Path-Unit startet daraufhin das Update als root (deploy/proxmox/ct-setup.sh).
+systemd-Path-Unit startet daraufhin das Update als root (deploy/proxmox/ct-setup.sh). Genauso stößt
+die Datei ``pruefen`` eine sofortige Prüfung an.
 Ohne ``UPDATE_VERZEICHNIS`` (z. B. lokal oder mit Docker) ist die Funktion aus.
 """
 
@@ -16,6 +17,7 @@ from fastapi import APIRouter, HTTPException
 
 STATUS_DATEI = "status.json"
 ANFORDERN_DATEI = "anfordern"
+PRUEFEN_DATEI = "pruefen"
 
 
 def lesen(verzeichnis: Path | None) -> dict:
@@ -35,6 +37,7 @@ def lesen(verzeichnis: Path | None) -> dict:
         "geprueft": daten.get("geprueft"),
         "meldung": daten.get("meldung", ""),
         "automatisch": bool(daten.get("automatisch", False)),
+        "pruefung_laeuft": (verzeichnis / PRUEFEN_DATEI).exists(),
     }
     if (verzeichnis / ANFORDERN_DATEI).exists() and ergebnis["zustand"] != "laeuft":
         ergebnis["zustand"] = "angefordert"
@@ -56,6 +59,15 @@ def router(verzeichnis: Path | None) -> APIRouter:
         if status["zustand"] in {"laeuft", "angefordert"}:
             return status
         (verzeichnis / ANFORDERN_DATEI).touch()
+        return lesen(verzeichnis)
+
+    @r.post("/api/update/pruefen", status_code=202)
+    def jetzt_pruefen():
+        status = lesen(verzeichnis)
+        if not status["unterstuetzt"]:
+            raise HTTPException(409, "Updates aus der App gibt es nur im Proxmox-Container")
+        if status["zustand"] not in {"laeuft", "angefordert"}:
+            (verzeichnis / PRUEFEN_DATEI).touch()
         return lesen(verzeichnis)
 
     return r

@@ -43,3 +43,17 @@ def test_laufendes_update_nicht_doppelt_anfordern(db, umrechner, tmp_path):
 def test_kaputte_statusdatei(db, umrechner, tmp_path):
     (tmp_path / "status.json").write_text("{kein json")
     assert _client(db, umrechner, tmp_path).get("/api/update").json()["zustand"] == "unbekannt"
+
+
+def test_pruefung_anstossen(db, umrechner, tmp_path):
+    (tmp_path / "status.json").write_text(json.dumps({"zustand": "aktuell", "installiert": "abc1234"}))
+    client = _client(db, umrechner, tmp_path)
+    assert client.get("/api/update").json()["pruefung_laeuft"] is False
+    r = client.post("/api/update/pruefen")
+    assert r.status_code == 202
+    assert r.json()["pruefung_laeuft"] is True
+    assert (tmp_path / "pruefen").exists()
+
+
+def test_pruefung_ohne_container(db, umrechner):
+    assert _client(db, umrechner).post("/api/update/pruefen").status_code == 409

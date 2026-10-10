@@ -80,11 +80,12 @@ finanz-o-mat bericht --einlesen
 
 ## Aktualisieren
 
-Der Container sieht alle 6 Stunden auf GitHub nach, ob es auf dem Zweig (Standard `main`) einen neuen Stand gibt
+Der Container sieht stündlich auf GitHub nach, ob es auf dem Zweig (Standard `main`) einen neuen Stand gibt
 (`finanz-o-mat-pruefen.timer`). Wenn ja, zeigt die App oben einen Hinweis mit den Änderungen und dem Knopf
 „Jetzt aktualisieren“. Die App legt dafür nur eine Datei an; das Update selbst startet eine systemd-Path-Unit
 als root (`finanz-o-mat-update.service`). Die Seite lädt danach von selbst neu. Mit `AUTO_UPDATE="ja"` in der
-Konfiguration wird jede neue Version ohne Klick installiert.
+Konfiguration wird jede neue Version ohne Klick installiert. Unter „Einstellungen“ → „Version“ stehen die
+installierte Version und der Zeitpunkt der letzten Prüfung; „Nach Updates suchen“ prüft sofort.
 
 Schlägt ein Update fehl (z. B. der Bau der Oberfläche), geht das Programmverzeichnis auf den bisherigen Stand zurück,
 die App zeigt einen Hinweis, Details stehen in `journalctl -u finanz-o-mat-update`.
@@ -95,7 +96,8 @@ Von Hand auf dem Host:
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Marcel-B/finanz-O-mat/main/deploy/proxmox/finanz-o-mat-lxc.sh)" -- update <CTID>
 ```
 
-oder im Container `finanz-o-mat-update` (sofort nachsehen ohne Installation: `systemctl start finanz-o-mat-pruefen`). Das sichert die Datenbank, holt den neuesten Stand des Zweigs, installiert
+oder im Container `finanz-o-mat-update` (sofort nachsehen ohne Installation: `systemctl start finanz-o-mat-pruefen`, Ergebnis in
+`/var/lib/finanz-o-mat/update/status.json`). Das sichert die Datenbank, holt den neuesten Stand des Zweigs, installiert
 die App neu und startet den Dienst. Ist nichts Neues da, passiert nichts (`finanz-o-mat-update --force` installiert
 trotzdem neu). Eine Sicherung zurückspielen: Dienst stoppen, Datei aus `sicherungen/` über `finanzomat.sqlite`
 kopieren, Dienst starten.

@@ -3,35 +3,18 @@
 import Button from "primevue/button";
 import Message from "primevue/message";
 import { useConfirm } from "primevue/useconfirm";
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { onMounted, onUnmounted } from "vue";
 
-import { api, type UpdateStatus } from "../api";
+import {
+  updateFehler as fehler,
+  updateLaden,
+  updateLaeuft as laeuft,
+  updateStarten,
+  updateStatus as status,
+  updateStoppen,
+} from "../update";
 
 const confirm = useConfirm();
-const status = ref<UpdateStatus | null>(null);
-const fehler = ref("");
-let timer: ReturnType<typeof setTimeout> | undefined;
-let vorher: string | null | undefined;
-
-const laeuft = computed(() => status.value?.zustand === "laeuft" || status.value?.zustand === "angefordert");
-
-async function laden() {
-  try {
-    const neu = await api.update();
-    // Nach dem Update läuft eine neue Version: Seite neu laden, damit auch die Oberfläche neu ist
-    if (vorher !== undefined && neu.installiert && neu.installiert !== vorher && neu.zustand === "aktuell") {
-      window.location.reload();
-      return;
-    }
-    status.value = neu;
-    fehler.value = "";
-  } catch {
-    // Während des Neustarts ist die App kurz nicht erreichbar
-    if (!laeuft.value) fehler.value = "Update-Status nicht abrufbar";
-  }
-  clearTimeout(timer);
-  timer = setTimeout(laden, laeuft.value ? 3000 : 15 * 60 * 1000);
-}
 
 function aktualisieren() {
   confirm.require({
@@ -42,10 +25,7 @@ function aktualisieren() {
     rejectProps: { label: "Abbrechen", severity: "secondary", outlined: true },
     accept: async () => {
       try {
-        vorher = status.value?.installiert ?? null;
-        status.value = await api.updateStarten();
-        clearTimeout(timer);
-        timer = setTimeout(laden, 3000);
+        await updateStarten();
       } catch (e) {
         fehler.value = (e as Error).message;
       }
@@ -53,8 +33,8 @@ function aktualisieren() {
   });
 }
 
-onMounted(laden);
-onUnmounted(() => clearTimeout(timer));
+onMounted(updateLaden);
+onUnmounted(updateStoppen);
 </script>
 
 <template>
