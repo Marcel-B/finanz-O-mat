@@ -7,6 +7,7 @@ import time
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -14,12 +15,23 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from . import adressbuch, aktualisierung, backup, bank, einstellungen, export, monatsexport, sevdesk_web, uebersicht
+from . import (
+    adressbuch,
+    aktualisierung,
+    backup,
+    bank,
+    einstellungen,
+    export,
+    monatsexport,
+    sevdesk_web,
+    taetigkeit,
+    uebersicht,
+)
 from .berechnung import berechnen, zeitraum
 from .config import Config
 from .db import Datenbank
 from .fristen import naechste_frist
-from .models import Beleg, Kontakt
+from .models import Beleg, Kontakt, Taetigkeit
 from .quellen import ImportErgebnis, neu_einlesen, paperless, verzeichnis
 from .steuerfaelle import KENNZAHLEN, STEUERFAELLE, Art, Steuerfall
 from .waehrung import Umrechner
@@ -29,6 +41,7 @@ OHNE_FRONTEND = """<!doctype html><html lang="de"><meta charset="utf-8"><title>F
 <body style="font-family:sans-serif;max-width:40rem;margin:3rem auto;line-height:1.5">
 <h1>Finanz-O-Mat</h1><p>Die API läuft, aber die Oberfläche ist noch nicht gebaut:</p>
 <pre>cd frontend &amp;&amp; npm ci &amp;&amp; npm run build</pre></body></html>"""
+CENT = Decimal("0.01")
 RE_ZEITRAUM = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
 
 
@@ -158,6 +171,30 @@ class PasswortEingabe(BaseModel):
 class ImportAnfrage(BaseModel):
     quelle: str = "alle"  # alle | verzeichnis | paperless | konto
     zeitraum: str
+
+
+class TaetigkeitEingabe(BaseModel):
+    datum: date
+    stunden: Decimal
+    taetigkeit: str = ""
+    auftrag: str = ""
+    referenz: str = ""
+    satz: Decimal | None = None  # leer: Stundensatz aus der Vorlage
+    rolle: str = ""
+    ort: str = ""
+    leistungsart: str = ""
+
+    @field_validator("stunden")
+    @classmethod
+    def _stunden(cls, v: Decimal) -> Decimal:
+        if not Decimal(0) < v <= 24:
+            raise ValueError("Stunden zwischen 0 und 24 angeben")
+        return v
+
+    @field_validator("taetigkeit", "auftrag", "referenz", "rolle", "ort", "leistungsart")
+    @classmethod
+    def _text(cls, v: str) -> str:
+        return v.strip()
 
 
 class NeuEinlesenAnfrage(BaseModel):
@@ -497,6 +534,77 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         name = f"ustva-{zr}-{datei}"
         return Response(inhalt, media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    # Tätigkeitsnachweis
+    @app.get("/api/taetigkeiten")
+    def taetigkeiten(zeitraum: str):
+        jahr, monat = _zeitraum(zeitraum)
+        v = taetigkeit.vorlage_laden(db)
+        bundesland = aktuell().bundesland
+        eintraege = db.taetigkeiten(zeitraum)
+        betraege = [taetigkeit.betrag(t, v) for t in eintraege]
+        return {
+            "eintraege": [{**t.to_dict(), "betrag": None if b is None else str(b.quantize(CENT))}
+                          for t, b in zip(eintraege, betraege, strict=True)],
+            "stunden": str(sum((t.stunden for t in eintraege), Decimal(0))),
+            "betrag": str(sum((b for b in betraege if b is not None), Decimal(0)).quantize(CENT)),
+            "fehlende_tage": [t.isoformat() for t in
+                              taetigkeit.fehlende_tage(eintraege, jahr, monat, _heute(), bundesland)],
+            "vorschlag": taetigkeit.vorschlag(db, v, jahr, monat, bundesland),
+            "texte": taetigkeit.fruehere_texte(db),
+        }
+
+    def _taetigkeit(taetigkeit_id: int) -> Taetigkeit:
+        t = db.taetigkeit(taetigkeit_id)
+        if t is None:
+            raise HTTPException(404, "Eintrag nicht gefunden")
+        return t
+
+    @app.post("/api/taetigkeiten", status_code=201)
+    def taetigkeit_anlegen(eingabe: TaetigkeitEingabe):
+        t = Taetigkeit(**eingabe.model_dump())
+        if t.satz is None:  # Satz festhalten, damit ein neuer Stundensatz alte Monate nicht ändert
+            t.satz = taetigkeit.vorlage_laden(db).stundensatz
+        return db.taetigkeit_anlegen(t).to_dict()
+
+    @app.put("/api/taetigkeiten/{taetigkeit_id:int}")
+    def taetigkeit_aendern(taetigkeit_id: int, eingabe: TaetigkeitEingabe):
+        alt = _taetigkeit(taetigkeit_id)
+        t = Taetigkeit(**eingabe.model_dump(), id=taetigkeit_id)
+        if t.satz is None:
+            t.satz = alt.satz if alt.satz is not None else taetigkeit.vorlage_laden(db).stundensatz
+        return db.taetigkeit_aktualisieren(t).to_dict()
+
+    @app.delete("/api/taetigkeiten/{taetigkeit_id:int}", status_code=204)
+    def taetigkeit_loeschen(taetigkeit_id: int):
+        _taetigkeit(taetigkeit_id)
+        db.taetigkeit_loeschen(taetigkeit_id)
+        return Response(status_code=204)
+
+    @app.get("/api/taetigkeiten/vorlage")
+    def taetigkeit_vorlage():
+        return taetigkeit.vorlage_laden(db).to_dict()
+
+    @app.put("/api/taetigkeiten/vorlage")
+    def taetigkeit_vorlage_speichern(eingabe: dict):
+        return taetigkeit.vorlage_speichern(db, taetigkeit.Vorlage.aus_dict(eingabe)).to_dict()
+
+    @app.post("/api/taetigkeiten/import")
+    async def taetigkeit_import(request: Request):
+        roh = await request.body()
+        if len(roh) > 20_000_000:
+            raise HTTPException(413, "Datei zu groß")
+        return taetigkeit.importieren(db, roh).to_dict()
+
+    @app.get("/api/taetigkeiten/nachweis/{zr}")
+    def taetigkeit_nachweis(zr: str):
+        jahr, monat = _zeitraum(zr)
+        inhalt = taetigkeit.nachweis_xlsx(taetigkeit.vorlage_laden(db), db.taetigkeiten(zr), jahr, monat)
+        name = taetigkeit.dateiname(jahr, monat)
+        ascii_name = f"Taetigkeitsnachweis-{zr}.xlsx"
+        return Response(inhalt, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition":
+                                 f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"})
 
     def _einstellungen() -> dict:
         c = aktuell()

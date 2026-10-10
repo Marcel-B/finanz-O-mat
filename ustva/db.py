@@ -9,7 +9,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from .models import Beleg, Kontakt, Umsatz
+from .models import Beleg, Kontakt, Taetigkeit, Umsatz
 from .steuerfaelle import Art, Steuerfall
 
 SCHEMA = """
@@ -69,6 +69,19 @@ CREATE TABLE IF NOT EXISTS sevdesk_import (
     belege TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (objekt, sevdesk_id)
 );
+CREATE TABLE IF NOT EXISTS taetigkeiten (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    datum TEXT NOT NULL,
+    auftrag TEXT NOT NULL DEFAULT '',
+    referenz TEXT NOT NULL DEFAULT '',
+    taetigkeit TEXT NOT NULL DEFAULT '',
+    stunden TEXT NOT NULL,
+    satz TEXT,
+    rolle TEXT NOT NULL DEFAULT '',
+    ort TEXT NOT NULL DEFAULT '',
+    leistungsart TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS taetigkeiten_datum ON taetigkeiten(datum);
 CREATE TABLE IF NOT EXISTS kontakte (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -204,6 +217,31 @@ def _zeile_zu_umsatz(z: sqlite3.Row) -> Umsatz:
     )
 
 
+TAETIGKEIT_FELDER = ["datum", "auftrag", "referenz", "taetigkeit", "stunden", "satz", "rolle", "ort", "leistungsart"]
+
+
+def _taetigkeit_zu_werten(t: Taetigkeit) -> list:
+    return [
+        t.datum.isoformat(), t.auftrag, t.referenz, t.taetigkeit, str(t.stunden),
+        None if t.satz is None else str(t.satz), t.rolle, t.ort, t.leistungsart,
+    ]
+
+
+def _zeile_zu_taetigkeit(z: sqlite3.Row) -> Taetigkeit:
+    return Taetigkeit(
+        id=z["id"],
+        datum=date.fromisoformat(z["datum"]),
+        auftrag=z["auftrag"],
+        referenz=z["referenz"],
+        taetigkeit=z["taetigkeit"],
+        stunden=Decimal(z["stunden"]),
+        satz=_dec(z["satz"]),
+        rolle=z["rolle"],
+        ort=z["ort"],
+        leistungsart=z["leistungsart"],
+    )
+
+
 class Datenbank:
     def __init__(self, pfad: Path | str):
         if str(pfad) != ":memory:":
@@ -312,6 +350,43 @@ class Datenbank:
                 "ON CONFLICT(partner) DO UPDATE SET grund = excluded.grund",
                 (partner.strip().lower(), grund),
             )
+
+    # Tätigkeitsnachweis
+    def taetigkeiten(self, zeitraum: str | None = None) -> list[Taetigkeit]:
+        """Alle Einträge, nach Datum sortiert; mit ``zeitraum`` (JJJJ-MM) nur die eines Monats."""
+        with self._lock:
+            if zeitraum:
+                zeilen = self._con.execute(
+                    "SELECT * FROM taetigkeiten WHERE substr(datum, 1, 7) = ? ORDER BY datum, id", (zeitraum,)
+                ).fetchall()
+            else:
+                zeilen = self._con.execute("SELECT * FROM taetigkeiten ORDER BY datum, id").fetchall()
+        return [_zeile_zu_taetigkeit(z) for z in zeilen]
+
+    def taetigkeit(self, taetigkeit_id: int) -> Taetigkeit | None:
+        with self._lock:
+            z = self._con.execute("SELECT * FROM taetigkeiten WHERE id = ?", (taetigkeit_id,)).fetchone()
+        return _zeile_zu_taetigkeit(z) if z else None
+
+    def taetigkeit_anlegen(self, t: Taetigkeit) -> Taetigkeit:
+        with self._lock, self._con:
+            cur = self._con.execute(
+                f"INSERT INTO taetigkeiten ({', '.join(TAETIGKEIT_FELDER)}) "
+                f"VALUES ({', '.join('?' for _ in TAETIGKEIT_FELDER)})",
+                _taetigkeit_zu_werten(t),
+            )
+        t.id = cur.lastrowid
+        return t
+
+    def taetigkeit_aktualisieren(self, t: Taetigkeit) -> Taetigkeit:
+        zuweisung = ", ".join(f"{f} = ?" for f in TAETIGKEIT_FELDER)
+        with self._lock, self._con:
+            self._con.execute(f"UPDATE taetigkeiten SET {zuweisung} WHERE id = ?", [*_taetigkeit_zu_werten(t), t.id])
+        return t
+
+    def taetigkeit_loeschen(self, taetigkeit_id: int) -> None:
+        with self._lock, self._con:
+            self._con.execute("DELETE FROM taetigkeiten WHERE id = ?", (taetigkeit_id,))
 
     # Adressbuch
     def kontakte(self) -> list[Kontakt]:

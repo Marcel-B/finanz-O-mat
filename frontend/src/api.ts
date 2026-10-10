@@ -206,6 +206,51 @@ export interface BackupStatus {
   groesse?: number | null;
 }
 
+export interface Taetigkeit {
+  id: number;
+  datum: string;
+  stunden: string;
+  taetigkeit: string;
+  auftrag: string;
+  referenz: string;
+  satz: string | null;
+  rolle: string;
+  ort: string;
+  leistungsart: string;
+  betrag?: string | null;
+}
+
+export type TaetigkeitEingabe = Omit<Taetigkeit, "id" | "satz" | "betrag"> & { satz?: string | null };
+
+export interface TaetigkeitenMonat {
+  eintraege: Taetigkeit[];
+  stunden: string;
+  betrag: string;
+  fehlende_tage: string[]; // Werktage bis heute ohne Eintrag
+  vorschlag: TaetigkeitEingabe; // Vorbelegung für den nächsten Eintrag
+  texte: { taetigkeit: string; auftrag: string; referenz: string }[]; // frühere Tätigkeiten, neueste zuerst
+}
+
+export interface TaetigkeitVorlage {
+  titel: string;
+  name: string;
+  vorname: string;
+  kopf: string[];
+  stundensatz: string | null;
+  stunden: string;
+  auftraege: { name: string; nummer: string }[];
+  rollen: string[];
+  orte: string[];
+  leistungsarten: string[];
+}
+
+export interface TaetigkeitImport {
+  eintraege: number;
+  monate: string[];
+  uebersprungen: string[];
+  vorlage: string[];
+}
+
 export type Rolle = "" | "kunde" | "lieferant" | "beides";
 
 export interface KontaktEingabe {
@@ -350,6 +395,20 @@ export const api = {
   update: () => anfrage<UpdateStatus>("/api/update"),
   updateStarten: () => post<UpdateStatus>("/api/update"),
   updatePruefen: () => post<UpdateStatus>("/api/update/pruefen"),
+  taetigkeiten: (zeitraum: string) => anfrage<TaetigkeitenMonat>(`/api/taetigkeiten?zeitraum=${zeitraum}`),
+  taetigkeitAnlegen: (t: TaetigkeitEingabe) => post<Taetigkeit>("/api/taetigkeiten", t),
+  taetigkeitAendern: (id: number, t: TaetigkeitEingabe) =>
+    anfrage<Taetigkeit>(`/api/taetigkeiten/${id}`, { method: "PUT", body: JSON.stringify(t) }),
+  taetigkeitLoeschen: (id: number) => anfrage<null>(`/api/taetigkeiten/${id}`, { method: "DELETE" }),
+  taetigkeitVorlage: () => anfrage<TaetigkeitVorlage>("/api/taetigkeiten/vorlage"),
+  taetigkeitVorlageSpeichern: (v: TaetigkeitVorlage) =>
+    anfrage<TaetigkeitVorlage>("/api/taetigkeiten/vorlage", { method: "PUT", body: JSON.stringify(v) }),
+  taetigkeitImport: (datei: Blob) =>
+    anfrage<TaetigkeitImport>("/api/taetigkeiten/import", {
+      method: "POST",
+      body: datei,
+      headers: { "Content-Type": "application/octet-stream" },
+    }),
   backup: () => anfrage<BackupStatus>("/api/backup"),
   backupStarten: () => post<BackupStatus>("/api/backup"),
 };
