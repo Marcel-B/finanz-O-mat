@@ -234,7 +234,8 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     def beleg_aendern(beleg_id: int, eingabe: BelegEingabe):
         alt = _beleg(beleg_id)
         neu = Beleg(**eingabe.model_dump(), quelle=alt.quelle, quelle_ref=alt.quelle_ref,
-                    quelle_link=alt.quelle_link, hinweise=alt.hinweise, id=beleg_id)
+                    quelle_link=alt.quelle_link, hinweise=alt.hinweise, erechnung=alt.erechnung,
+                    id=beleg_id)
         return db.beleg_aktualisieren(neu).to_dict()
 
     @app.post("/api/belege/{beleg_id}/geprueft")

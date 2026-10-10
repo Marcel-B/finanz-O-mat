@@ -3,23 +3,28 @@
 Ob ein Dokument eine Ausgangs- oder Eingangsrechnung ist, entscheidet ein Tag
 oder Dokumenttyp (Standard: "Ausgangsrechnung" / "Eingangsrechnung"). Beträge
 kommen bevorzugt aus benutzerdefinierten Feldern (z. B. ein Geldfeld "Netto"),
-sonst aus dem OCR-Text des Dokuments.
+sonst aus dem OCR-Text des Dokuments. Ist das Originaldokument eine E-Rechnung
+(ZUGFeRD/Factur-X), gelten die Angaben aus der eingebetteten XML.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
 import httpx
 
+from .. import erechnung
 from ..config import Config
 from ..db import Datenbank
 from ..extraktion import betrag_parsen, erkennen, steuerfall_vorschlagen
 from ..fristen import monat_plus
 from ..steuerfaelle import Art
 from . import ImportErgebnis, beleg_aus_erkennung
+
+log = logging.getLogger(__name__)
 
 RE_GELDFELD = re.compile(r"^([A-Z]{3})?\s?(-?[\d.,]+)$")
 
@@ -85,6 +90,12 @@ class PaperlessClient:
         except PaperlessFehler:
             return {}  # ältere Paperless-Versionen ohne benutzerdefinierte Felder
 
+    def original(self, dok_id: int) -> bytes:
+        """Originaldatei; die archivierte PDF/A von Paperless enthält keine eingebettete XML mehr."""
+        antwort = self.client.get(f"{self.url}/api/documents/{dok_id}/download/", params={"original": "true"})
+        antwort.raise_for_status()
+        return antwort.content
+
     def dokumente(self, von: date, bis_exklusiv: date) -> list[dict]:
         return self._alle("/api/documents/", {
             "created__gte": von.isoformat(),
@@ -139,16 +150,32 @@ def importieren(
             continue
         try:
             werte = {felder.get(f["field"], "").lower(): f.get("value") for f in dok.get("custom_fields", [])}
+            gemeinsam = {
+                "quelle": "paperless",
+                "quelle_link": f"{cfg.paperless_url}/documents/{dok['id']}/details",
+                "beschreibung": dok.get("title") or "",
+            }
+            zahlung = _datum(werte.get(cfg.paperless_feld_zahlungsdatum.lower()))
+            if e_belege := _erechnung(pl, dok, art, cfg):
+                for i, beleg in enumerate(e_belege):
+                    for name, wert in gemeinsam.items():
+                        setattr(beleg, name, wert)
+                    beleg.quelle_ref = ref if i == 0 else f"{ref}#{i + 1}"
+                    if korrespondent := korrespondenten.get(dok.get("correspondent")):
+                        beleg.partner = korrespondent
+                    beleg.zahlungsdatum = zahlung
+                    beleg.rechnungsdatum = beleg.rechnungsdatum or _datum(dok.get("created"))
+                    db.beleg_anlegen(beleg)
+                ergebnis.neu += 1
+                continue
             erkennung = erkennen(dok.get("content") or "", art, cfg.eigene_ustid)
             _felder_uebernehmen(erkennung, werte, cfg)
             beleg = beleg_aus_erkennung(
-                erkennung, art,
-                quelle="paperless", quelle_ref=ref,
-                quelle_link=f"{cfg.paperless_url}/documents/{dok['id']}/details",
+                erkennung, art, quelle_ref=ref,
                 partner=korrespondenten.get(dok.get("correspondent"), "") if dok.get("correspondent") else "",
-                beschreibung=dok.get("title") or "",
+                **gemeinsam,
             )
-            if zahlung := _datum(werte.get(cfg.paperless_feld_zahlungsdatum.lower())):
+            if zahlung:
                 beleg.zahlungsdatum = zahlung
             if beleg.rechnungsdatum is None:
                 beleg.rechnungsdatum = _datum(dok.get("created"))
@@ -157,6 +184,20 @@ def importieren(
         except Exception as e:  # ein fehlerhaftes Dokument soll den Import nicht abbrechen
             ergebnis.fehler.append(f"Dokument {dok.get('id')} ({dok.get('title')}): {e}")
     return ergebnis
+
+
+def _erechnung(pl: PaperlessClient, dok: dict, art: Art, cfg: Config) -> list | None:
+    """Belege aus einer ZUGFeRD-/Factur-X-Datei, sonst None (dann gilt der OCR-Text)."""
+    name = (dok.get("original_file_name") or "").lower()
+    mime = dok.get("mime_type") or ""
+    if not (name.endswith((".pdf", ".xml")) or mime in ("application/pdf", "application/xml", "text/xml")):
+        return None
+    try:
+        e = erechnung.lesen(pl.original(dok["id"]), name)
+    except (httpx.HTTPError, erechnung.ERechnungFehler) as fehler:
+        log.warning("Paperless-Dokument %s: E-Rechnung nicht lesbar: %s", dok.get("id"), fehler)
+        return None
+    return erechnung.belege(e, art, cfg.eigene_ustid) if e else None
 
 
 def _felder_uebernehmen(e, werte: dict, cfg: Config) -> None:

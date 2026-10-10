@@ -194,6 +194,10 @@ function loeschen() {
         <InputNumber fluid v-model="form.kurs" locale="de-DE" :min-fraction-digits="4" :max-fraction-digits="6" placeholder="Monatskurs" />
       </label>
       <div class="flex flex-col gap-2 sm:col-span-2 lg:col-span-3">
+        <Message v-if="beleg?.erechnung" severity="success" size="small" icon="pi pi-verified">
+          Aus E-Rechnung gelesen ({{ beleg.erechnung }}). Beträge, Datum und Partner stammen aus den strukturierten
+          Rechnungsdaten.
+        </Message>
         <Message v-for="(h, i) in beleg?.hinweise ?? []" :key="i" severity="warn" size="small">{{ h }}</Message>
         <Message v-if="fehler" severity="error">{{ fehler }}</Message>
       </div>

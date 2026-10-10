@@ -33,6 +33,7 @@ class Beleg:
     quelle: str = "manuell"  # manuell | verzeichnis | paperless
     quelle_ref: str = ""  # Pfad oder Paperless-Dokument-ID
     quelle_link: str = ""
+    erechnung: str = ""  # Format, wenn aus einer E-Rechnung gelesen (z. B. "XRechnung (UBL)")
     pruefen: bool = False  # automatisch erkannt, noch nicht bestätigt
     hinweise: list[str] = field(default_factory=list)
     id: int | None = None

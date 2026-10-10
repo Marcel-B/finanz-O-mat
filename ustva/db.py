@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS belege (
     quelle_ref TEXT NOT NULL DEFAULT '',
     quelle_link TEXT NOT NULL DEFAULT '',
     pruefen INTEGER NOT NULL DEFAULT 0,
-    hinweise TEXT NOT NULL DEFAULT '[]'
+    hinweise TEXT NOT NULL DEFAULT '[]',
+    erechnung TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS belege_quelle ON belege(quelle, quelle_ref) WHERE quelle_ref != '';
 CREATE TABLE IF NOT EXISTS umsaetze (
@@ -67,7 +68,7 @@ CREATE TABLE IF NOT EXISTS kurse (
 FELDER = [
     "art", "steuerfall", "rechnungsdatum", "zahlungsdatum", "netto", "steuersatz", "steuer", "waehrung",
     "kurs", "partner", "partner_ustid", "rechnungsnummer", "beschreibung", "quelle", "quelle_ref",
-    "quelle_link", "pruefen", "hinweise",
+    "quelle_link", "pruefen", "hinweise", "erechnung",
 ]
 
 
@@ -100,6 +101,7 @@ def _zeile_zu_beleg(z: sqlite3.Row) -> Beleg:
         quelle_link=z["quelle_link"],
         pruefen=bool(z["pruefen"]),
         hinweise=json.loads(z["hinweise"]),
+        erechnung=z["erechnung"],
     )
 
 
@@ -117,6 +119,7 @@ def _beleg_zu_werten(b: Beleg) -> list:
         b.art.value, b.steuerfall.value, s(b.rechnungsdatum), s(b.zahlungsdatum), s(b.netto), s(b.steuersatz),
         s(b.steuer), b.waehrung.upper(), s(b.kurs), b.partner, b.partner_ustid, b.rechnungsnummer,
         b.beschreibung, b.quelle, b.quelle_ref, b.quelle_link, int(b.pruefen), json.dumps(b.hinweise),
+        b.erechnung,
     ]
 
 
@@ -162,6 +165,9 @@ class Datenbank:
         self._lock = threading.Lock()
         with self._lock:
             self._con.executescript(SCHEMA)
+            spalten = {z["name"] for z in self._con.execute("PRAGMA table_info(belege)")}
+            if "erechnung" not in spalten:  # Datenbanken von vor den E-Rechnungen
+                self._con.execute("ALTER TABLE belege ADD COLUMN erechnung TEXT NOT NULL DEFAULT ''")
 
     # Belege
     def alle_belege(self) -> list[Beleg]:

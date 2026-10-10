@@ -234,6 +234,14 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
         <template #body="{ data }">
           {{ data.partner || data.beschreibung || "–" }}
           <Tag v-if="data.pruefen" value="prüfen" severity="warn" class="ml-1" />
+          <Tag
+            v-if="data.erechnung"
+            value="E-Rechnung"
+            severity="success"
+            icon="pi pi-verified"
+            class="ml-1"
+            v-tooltip.top="`${data.erechnung}: Beträge exakt aus den Rechnungsdaten gelesen`"
+          />
           <div v-if="data.partner && data.beschreibung" class="text-xs text-muted-color">{{ data.beschreibung }}</div>
           <div v-if="data.fehler" class="text-xs text-red-600 dark:text-red-400">{{ data.fehler }}</div>
         </template>

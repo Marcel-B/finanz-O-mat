@@ -6,7 +6,9 @@ Erwartete Struktur (Groß-/Kleinschreibung egal, Unterordner beliebig tief)::
       ausgang/   eigene Rechnungen an Kunden
       eingang/   Rechnungen von Lieferanten
 
-Unterstützt werden PDF-Dateien mit Textebene und .txt-Dateien. Liegt neben einer
+Unterstützt werden E-Rechnungen (ZUGFeRD/Factur-X als PDF, XRechnung als .xml),
+die strukturiert ausgelesen werden, sowie PDF-Dateien mit Textebene und
+.txt-Dateien, bei denen die Angaben geschätzt werden. Liegt neben einer
 Datei eine gleichnamige ``.json``-Datei (``rechnung.pdf.json``), überschreiben
 ihre Angaben die automatische Erkennung, z. B.::
 
@@ -24,6 +26,7 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
+from .. import erechnung
 from ..config import Config
 from ..db import Datenbank
 from ..extraktion import erkennen
@@ -33,7 +36,7 @@ from . import ImportErgebnis, beleg_aus_erkennung
 
 log = logging.getLogger(__name__)
 
-ENDUNGEN = {".pdf", ".txt"}
+ENDUNGEN = {".pdf", ".txt", ".xml"}
 DEZIMAL_FELDER = {"netto", "steuer", "steuersatz", "kurs"}
 DATUM_FELDER = {"rechnungsdatum", "zahlungsdatum"}
 TEXT_FELDER = {"waehrung", "partner", "partner_ustid", "rechnungsnummer", "beschreibung"}
@@ -82,6 +85,25 @@ def zusatzangaben_anwenden(b: Beleg, daten: dict) -> None:
         b.netto = Decimal(0)
 
 
+def _belege_aus_datei(pfad: Path, art: Art, cfg: Config) -> list[Beleg]:
+    hinweis = ""
+    if pfad.suffix.lower() == ".xml":
+        return erechnung.belege(erechnung.xml_lesen(pfad.read_bytes()), art, cfg.eigene_ustid)
+    if pfad.suffix.lower() == ".pdf":
+        try:
+            if (e := erechnung.lesen(pfad)) is not None:
+                return erechnung.belege(e, art, cfg.eigene_ustid)
+        except erechnung.ERechnungFehler as fehler:
+            hinweis = f"Eingebettete E-Rechnung nicht lesbar ({fehler}), Angaben aus dem PDF-Text geschätzt."
+    text = text_lesen(pfad)
+    beleg = beleg_aus_erkennung(erkennen(text, art, cfg.eigene_ustid), art)
+    if hinweis:
+        beleg.hinweise.insert(0, hinweis)
+    if art == Art.EINGANG:
+        beleg.partner = erste_zeile(text)
+    return [beleg]
+
+
 def importieren(db: Datenbank, cfg: Config, verzeichnis: Path | None = None) -> ImportErgebnis:
     verzeichnis = verzeichnis or cfg.rechnungs_verzeichnis
     ergebnis = ImportErgebnis()
@@ -102,19 +124,16 @@ def importieren(db: Datenbank, cfg: Config, verzeichnis: Path | None = None) -> 
             ergebnis.vorhanden += 1
             continue
         try:
-            text = text_lesen(pfad)
-            erkennung = erkennen(text, art, cfg.eigene_ustid)
-            beleg = beleg_aus_erkennung(
-                erkennung, art,
-                quelle="verzeichnis", quelle_ref=pruefsumme, quelle_link=relativ.as_posix(),
-                beschreibung=pfad.name,
-            )
-            if art == Art.EINGANG:
-                beleg.partner = erste_zeile(text)
+            belege = _belege_aus_datei(pfad, art, cfg)
             zusatz = pfad.with_name(pfad.name + ".json")
-            if zusatz.is_file():
-                zusatzangaben_anwenden(beleg, json.loads(zusatz.read_text(encoding="utf-8")))
-            db.beleg_anlegen(beleg)
+            daten = json.loads(zusatz.read_text(encoding="utf-8")) if zusatz.is_file() else None
+            for i, beleg in enumerate(belege):
+                # Weitere Steuerposten derselben Rechnung bekommen eine eigene Referenz.
+                beleg.quelle, beleg.quelle_ref = "verzeichnis", pruefsumme if i == 0 else f"{pruefsumme}#{i + 1}"
+                beleg.quelle_link, beleg.beschreibung = relativ.as_posix(), beleg.beschreibung or pfad.name
+                if daten:
+                    zusatzangaben_anwenden(beleg, daten)
+                db.beleg_anlegen(beleg)
             ergebnis.neu += 1
         except Exception as e:  # eine kaputte Datei soll den Import nicht abbrechen
             log.exception("Fehler beim Einlesen von %s", pfad)
