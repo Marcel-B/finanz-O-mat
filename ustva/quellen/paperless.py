@@ -21,6 +21,7 @@ from ..config import Config
 from ..db import Datenbank
 from ..extraktion import betrag_parsen, erkennen, steuerfall_vorschlagen
 from ..fristen import monat_plus
+from ..models import Beleg
 from ..steuerfaelle import Art
 from . import ImportErgebnis, beleg_aus_erkennung, speichern
 
@@ -106,6 +107,25 @@ class PaperlessClient:
             naechste = daten.get("next")
             params = None  # "next" enthält die Parameter bereits
         return ergebnisse
+
+    def senden(self, methode: str, pfad: str, daten: dict) -> dict:
+        """Schreibender Aufruf (PATCH/POST) mit JSON; Fehler als PaperlessFehler."""
+        try:
+            antwort = self.client.request(methode, f"{self.url}{pfad}", json=daten)
+            antwort.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                raise PaperlessFehler("Paperless lehnt die Änderung ab, bitte Token und Rechte prüfen") from e
+            raise PaperlessFehler(_fehlertext(e.response)) from e
+        except httpx.HTTPError as e:
+            raise PaperlessFehler(f"Paperless nicht erreichbar: {e}") from e
+        try:
+            return antwort.json()
+        except ValueError:
+            return {}
+
+    def alle_dokumente(self, params: dict | None = None) -> list[dict]:
+        return self._alle("/api/documents/", params)
 
     def namen(self, pfad: str) -> dict[int, str]:
         return {e["id"]: e["name"] for e in self._alle(pfad)}
@@ -229,18 +249,26 @@ def dokument_belege(
             beleg.zahlungsdatum = zahlung
             beleg.rechnungsdatum = beleg.rechnungsdatum or _datum(dok.get("created"))
         return e_belege
+    return [text_beleg(dok, art, cfg, felder, korrespondenten)]
+
+
+def text_beleg(
+    dok: dict, art: Art, cfg: Config, felder: dict[int, str], korrespondenten: dict[int, str]
+) -> Beleg:
+    """Beleg aus OCR-Text und benutzerdefinierten Feldern, ohne die Originaldatei zu laden."""
+    werte = {felder.get(f["field"], "").lower(): f.get("value") for f in dok.get("custom_fields", [])}
     erkennung = erkennen(dok.get("content") or "", art, cfg.eigene_ustid)
     _felder_uebernehmen(erkennung, werte, cfg)
     beleg = beleg_aus_erkennung(
-        erkennung, art, quelle_ref=ref,
+        erkennung, art, quelle="paperless", quelle_ref=str(dok["id"]),
+        quelle_link=f"{cfg.paperless_url}/documents/{dok['id']}/details", beschreibung=dok.get("title") or "",
         partner=korrespondenten.get(dok.get("correspondent"), "") if dok.get("correspondent") else "",
-        **gemeinsam,
     )
-    if zahlung:
+    if zahlung := _datum(werte.get(cfg.paperless_feld_zahlungsdatum.lower())):
         beleg.zahlungsdatum = zahlung
     if beleg.rechnungsdatum is None:
         beleg.rechnungsdatum = _datum(dok.get("created"))
-    return [beleg]
+    return beleg
 
 
 def _erechnung(pl: PaperlessClient, dok: dict, art: Art, cfg: Config) -> list | None:

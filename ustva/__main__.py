@@ -9,6 +9,7 @@
     python -m ustva sevdesk sichern --ordner DIR        alles aus sevDesk sichern (Token in SEVDESK_TOKEN)
     python -m ustva sevdesk importieren --ordner DIR    Sicherung übernehmen (erst mit --trocken)
     python -m ustva sevdesk abgleich --erwartet CSV     Zahllast je Monat gegen abgegebene Werte
+    python -m ustva paperless duplikate [--loeschen]    doppelte Rechnungen in Paperless finden/aufräumen
 """
 
 from __future__ import annotations
@@ -118,6 +119,48 @@ def _vergleich_ausgeben(zeilen: list[dict]) -> int:
     return abweichungen
 
 
+def duplikate_befehl(args, cfg: Config, db: Datenbank, eingabe=input, pl=None) -> int:
+    from . import paperless_duplikate as pd
+
+    if not cfg.paperless_aktiv:
+        print("Paperless ist nicht eingerichtet (Einstellungen in der App oder PAPERLESS_URL/PAPERLESS_TOKEN).",
+              file=sys.stderr)
+        return 1
+    pl = pl or paperless.PaperlessClient(cfg.paperless_url, cfg.paperless_token)
+    try:
+        gruppen = pd.finden(pl, cfg, db, args.von)
+        tags = pl.namen("/api/tags/")
+    except paperless.PaperlessFehler as e:
+        print(f"Fehler: {e}", file=sys.stderr)
+        return 1
+    if not gruppen:
+        print("Keine doppelten Rechnungen gefunden.")
+        return 0
+    for gruppe in gruppen:
+        print("\n".join(pd.beschreiben(gruppe, tags)) + "\n")
+    machbar = [g for g in gruppen if not g.hinweis]
+    anzahl = sum(len(g.loeschen) for g in machbar)
+    print(f"{len(gruppen)} Rechnung(en) liegen mehrfach vor, {anzahl} Dokument(e) wären zu löschen.")
+    if not args.loeschen:
+        print("Zum Aufräumen erneut mit --loeschen aufrufen (fragt vorher noch einmal nach).")
+        return 0
+    if not machbar:
+        return 0
+    frage = f"{anzahl} Dokument(e) in Paperless löschen? [j/N] "
+    if not args.ja and eingabe(frage).strip().lower()[:1] not in ("j", "y"):
+        print("Nichts gelöscht.")
+        return 0
+    fehler = 0
+    for gruppe in machbar:
+        try:
+            pd.aufraeumen(pl, gruppe)
+        except paperless.PaperlessFehler as e:
+            fehler += 1
+            print(f"#{gruppe.behalten['id']}: {e}", file=sys.stderr)
+    print(f"Aufgeräumt: {len(machbar) - fehler} Rechnung(en). Gelöschtes liegt im Papierkorb von Paperless.")
+    return 1 if fehler else 0
+
+
 def sevdesk_befehl(args, cfg: Config) -> int:
     from . import sevdesk
 
@@ -204,6 +247,12 @@ def main(argv: list[str] | None = None) -> int:
         p_.add_argument("--bis", help="letzter Monat JJJJ-MM")
         p_.add_argument("--erwartet", help="CSV mit Zeitraum;Zahllast (z. B. aus ELSTER oder sevDesk)")
         p_.add_argument("--toleranz", default="1.00", help="erlaubte Abweichung in Euro (Standard 1,00)")
+    pp = sub.add_parser("paperless", help="Paperless pflegen")
+    pp_sub = pp.add_subparsers(dest="schritt", required=True)
+    du = pp_sub.add_parser("duplikate", help="doppelte Rechnungen finden und auf Wunsch löschen")
+    du.add_argument("--von", help="nur Dokumente ab Monat JJJJ-MM")
+    du.add_argument("--loeschen", action="store_true", help="Duplikate löschen (fragt nach)")
+    du.add_argument("--ja", action="store_true", help="beim Löschen nicht nachfragen")
     args = parser.parse_args(argv)
 
     cfg = Config.aus_umgebung()
@@ -216,6 +265,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.befehl == "passwort":
         return passwort(args, cfg)
+    if args.befehl == "paperless":
+        db = Datenbank(cfg.datenbank)
+        return duplikate_befehl(args, einstellungen.wirksam(cfg, db), db)
     if args.befehl == "sevdesk":
         return sevdesk_befehl(args, einstellungen.wirksam(cfg, Datenbank(cfg.datenbank)))
     return bericht(args, einstellungen.wirksam(cfg, Datenbank(cfg.datenbank)))
