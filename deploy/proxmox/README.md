@@ -44,6 +44,7 @@ bash finanz-o-mat-lxc.sh -y
 | `TAILSCALE` | `ja` | Tailscale im Container einrichten |
 | `TAILSCALE_AUTHKEY` | – | Auth-Key; ohne Key zeigt das Skript einen Anmeldelink |
 | `TAILSCALE_SERVE` | `nein` | zusätzlich HTTPS über `tailscale serve` |
+| `AUTO_UPDATE` | `nein` | `ja` = neue Versionen automatisch installieren, sonst Hinweis in der App |
 | `REPO_URL`, `REPO_BRANCH` | dieses Repo, `main` | Quelle der App |
 
 ## Was wo liegt (im Container)
@@ -53,6 +54,7 @@ bash finanz-o-mat-lxc.sh -y
 | `/etc/finanz-o-mat/finanz-o-mat.env` | Konfiguration, gleiche Variablen wie `.env.example` |
 | `/var/lib/finanz-o-mat/finanzomat.sqlite` | Datenbank |
 | `/var/lib/finanz-o-mat/sicherungen/` | Sicherung der Datenbank vor jedem Update (die letzten 10) |
+| `/var/lib/finanz-o-mat/update/` | Stand der Update-Prüfung für die App (`status.json`) |
 | `/srv/rechnungen` | Belegordner vom Host (falls eingebunden) |
 | `/opt/finanz-o-mat` | Programm (Git-Checkout mit Python-Umgebung in `.venv`, läuft direkt aus dem Checkout) |
 | `/opt/node` | Node.js, nur falls das System kein Node 20.19 oder neuer mitbringt (Debian 12) |
@@ -77,13 +79,22 @@ finanz-o-mat bericht --einlesen
 
 ## Aktualisieren
 
-Auf dem Host:
+Der Container sieht alle 6 Stunden auf GitHub nach, ob es auf dem Zweig (Standard `main`) einen neuen Stand gibt
+(`finanz-o-mat-pruefen.timer`). Wenn ja, zeigt die App oben einen Hinweis mit den Änderungen und dem Knopf
+„Jetzt aktualisieren“. Die App legt dafür nur eine Datei an; das Update selbst startet eine systemd-Path-Unit
+als root (`finanz-o-mat-update.service`). Die Seite lädt danach von selbst neu. Mit `AUTO_UPDATE="ja"` in der
+Konfiguration wird jede neue Version ohne Klick installiert.
+
+Schlägt ein Update fehl (z. B. der Bau der Oberfläche), geht das Programmverzeichnis auf den bisherigen Stand zurück,
+die App zeigt einen Hinweis, Details stehen in `journalctl -u finanz-o-mat-update`.
+
+Von Hand auf dem Host:
 
 ```sh
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Marcel-B/finanz-O-mat/main/deploy/proxmox/finanz-o-mat-lxc.sh)" -- update <CTID>
 ```
 
-oder im Container `finanz-o-mat-update`. Das sichert die Datenbank, holt den neuesten Stand des Zweigs, installiert
+oder im Container `finanz-o-mat-update` (sofort nachsehen ohne Installation: `systemctl start finanz-o-mat-pruefen`). Das sichert die Datenbank, holt den neuesten Stand des Zweigs, installiert
 die App neu und startet den Dienst. Ist nichts Neues da, passiert nichts (`finanz-o-mat-update --force` installiert
 trotzdem neu). Eine Sicherung zurückspielen: Dienst stoppen, Datei aus `sicherungen/` über `finanzomat.sqlite`
 kopieren, Dienst starten.

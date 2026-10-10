@@ -50,6 +50,9 @@ class Config:
     app_benutzer: str = ""
     app_passwort: str = ""
 
+    # Austausch mit dem Update-Dienst im Proxmox-Container (siehe ustva/aktualisierung.py)
+    update_verzeichnis: Path | None = None
+
     @classmethod
     def aus_umgebung(cls) -> Config:
         env = os.environ
@@ -76,6 +79,7 @@ class Config:
             ezb_kurse=_bool(env.get("EZB_KURSE"), True),
             app_benutzer=env.get("APP_BENUTZER", ""),
             app_passwort=env.get("APP_PASSWORT", ""),
+            update_verzeichnis=Path(env["UPDATE_VERZEICHNIS"]) if env.get("UPDATE_VERZEICHNIS") else None,
         )
         if cfg.versteuerung not in {"soll", "ist"}:
             raise ValueError("VERSTEUERUNG muss 'soll' oder 'ist' sein")

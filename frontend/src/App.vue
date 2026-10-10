@@ -11,6 +11,7 @@ import { onMounted, ref } from "vue";
 
 import { api, type Status, type Steuerfall } from "./api";
 import UebersichtAnsicht from "./components/UebersichtAnsicht.vue";
+import UpdateHinweis from "./components/UpdateHinweis.vue";
 import VoranmeldungAnsicht from "./components/VoranmeldungAnsicht.vue";
 
 const status = ref<Status | null>(null);
@@ -50,6 +51,7 @@ onMounted(async () => {
   </header>
 
   <main class="mx-auto max-w-7xl px-4 pb-8">
+    <UpdateHinweis />
     <Message v-if="fehler" severity="error" class="mb-4">{{ fehler }}</Message>
     <Tabs v-if="status" v-model:value="tab">
       <TabList>
