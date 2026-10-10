@@ -138,8 +138,8 @@ DAUERFRISTVERLAENGERUNG="$DAUERFRISTVERLAENGERUNG"
 BUNDESLAND="$BUNDESLAND"
 EIGENE_USTID="$EIGENE_USTID"
 
-# Belegordner mit ausgang/ und eingang/ (vom Host eingebunden, nur lesend)
-RECHNUNGS_VERZEICHNIS="$BELEG_CT_PATH"
+# Belegordner mit ausgang/ und eingang/ (vom Host eingebunden, nur lesend); leer = kein Ordner-Import
+RECHNUNGS_VERZEICHNIS="${BELEG_HOST_PATH:+$BELEG_CT_PATH}"
 
 # Paperless-ngx (Token unter Profil > API-Token)
 PAPERLESS_URL="$PAPERLESS_URL"
@@ -265,6 +265,9 @@ installieren() {
     if [[ -n $BELEG_HOST_PATH && ! -d $BELEG_HOST_PATH ]]; then
         abbruch "Belegordner $BELEG_HOST_PATH gibt es auf dem Host nicht."
     fi
+    if [[ -z $BELEG_HOST_PATH && -z $PAPERLESS_URL ]]; then
+        warn "Weder Belegordner noch Paperless angegeben: Belege lassen sich dann nur in der Oberfläche eingeben."
+    fi
     PASSWORT_ERZEUGT=0
     if [[ -n $APP_BENUTZER && -z $APP_PASSWORT ]]; then
         APP_PASSWORT=$(zufall 20)
@@ -281,7 +284,11 @@ installieren() {
     info "Zusammenfassung"
     echo "  Container:   $CTID ($CT_HOSTNAME), $CORES CPU, $MEMORY MB RAM, $DISK GB auf $CT_STORAGE"
     echo "  Netz:        $BRIDGE, $IP${GATEWAY:+, Gateway $GATEWAY}"
-    echo "  Belegordner: ${BELEG_HOST_PATH:-keiner} -> $BELEG_CT_PATH (nur lesend)"
+    if [[ -n $BELEG_HOST_PATH ]]; then
+        echo "  Belegordner: $BELEG_HOST_PATH -> $BELEG_CT_PATH (nur lesend)"
+    else
+        echo "  Belegordner: keiner (kein Import aus einem Ordner, später nachrüstbar)"
+    fi
     echo "  Paperless:   ${PAPERLESS_URL:-nicht genutzt}"
     echo "  Tailscale:   $TAILSCALE${TAILSCALE_AUTHKEY:+ (mit Auth-Key)}, HTTPS über tailscale serve: $TAILSCALE_SERVE"
     echo "  App:         $REPO_URL ($REPO_BRANCH), Port $PORT, $VERSTEUERUNG-Versteuerung"

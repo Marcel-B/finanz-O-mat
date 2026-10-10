@@ -104,10 +104,12 @@ müssen sie für alle lesbar sein:
 chmod -R o+rX /tank/rechnungen
 ```
 
-Ein Ordner lässt sich auch nachträglich einbinden:
+Der Belegordner ist optional. Bleibt er bei der Installation leer, gibt es keinen Import aus einem Ordner; Belege
+kommen dann aus Paperless oder werden in der Oberfläche eingegeben. Nachträglich einbinden:
 
 ```sh
 pct set <CTID> --mp0 /tank/rechnungen,mp=/srv/rechnungen,ro=1
+pct exec <CTID> -- sed -i 's|^RECHNUNGS_VERZEICHNIS=.*|RECHNUNGS_VERZEICHNIS="/srv/rechnungen"|' /etc/finanz-o-mat/finanz-o-mat.env
 pct reboot <CTID>
 ```
 
