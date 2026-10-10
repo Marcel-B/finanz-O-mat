@@ -122,6 +122,19 @@ class PaperlessClient:
         antwort.raise_for_status()
         return antwort.content
 
+    def herunterladen(self, dok_id: int) -> httpx.Response:
+        """Archivierte Fassung (meist PDF/A), sonst das Original."""
+        try:
+            antwort = self._get(f"{self.url}/api/documents/{dok_id}/download/")
+            antwort.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise PaperlessFehler(f"Dokument {dok_id} gibt es in Paperless nicht mehr") from e
+            raise PaperlessFehler(_fehlertext(e.response)) from e
+        except httpx.HTTPError as e:
+            raise PaperlessFehler(f"Paperless nicht erreichbar: {e}") from e
+        return antwort
+
     def dokument(self, dok_id: int) -> dict:
         try:
             antwort = self._get(f"{self.url}/api/documents/{dok_id}/")
@@ -134,12 +147,11 @@ class PaperlessClient:
             raise PaperlessFehler(f"Paperless nicht erreichbar: {e}") from e
         return antwort.json()
 
-    def dokumente(self, von: date, bis_exklusiv: date) -> list[dict]:
-        return self._alle("/api/documents/", {
-            "created__gte": von.isoformat(),
-            "created__lt": bis_exklusiv.isoformat(),
-            "ordering": "created",
-        })
+    def dokumente(self, von: date, bis_exklusiv: date, tag_id: int | None = None) -> list[dict]:
+        params = {"created__gte": von.isoformat(), "created__lt": bis_exklusiv.isoformat(), "ordering": "created"}
+        if tag_id is not None:
+            params["tags__id__all"] = str(tag_id)
+        return self._alle("/api/documents/", params)
 
 
 def importieren(

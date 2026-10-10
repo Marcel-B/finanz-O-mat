@@ -41,6 +41,9 @@ class Config:
     paperless_feld_steuer: str = "Umsatzsteuer"
     paperless_feld_steuersatz: str = "Steuersatz"
     paperless_feld_zahlungsdatum: str = "Zahlungsdatum"
+    # Für den Monats-Export an die Steuerberatung
+    paperless_tag_kontoauszug: str = "Kontoauszug"
+    paperless_tag_protokoll: str = "UStVA-Protokoll"
 
     # Kontoumsätze, die keinen Beleg brauchen (Teilwort in Partner oder Verwendungszweck)
     bank_ignorieren: list[str] = field(default_factory=lambda: ["Finanzamt", "Bundeskasse", "Steuerverwaltung"])
@@ -75,6 +78,8 @@ class Config:
             paperless_feld_steuer=env.get("PAPERLESS_FELD_STEUER", cls.paperless_feld_steuer),
             paperless_feld_steuersatz=env.get("PAPERLESS_FELD_STEUERSATZ", cls.paperless_feld_steuersatz),
             paperless_feld_zahlungsdatum=env.get("PAPERLESS_FELD_ZAHLUNGSDATUM", cls.paperless_feld_zahlungsdatum),
+            paperless_tag_kontoauszug=env.get("PAPERLESS_TAG_KONTOAUSZUG", cls.paperless_tag_kontoauszug),
+            paperless_tag_protokoll=env.get("PAPERLESS_TAG_PROTOKOLL", cls.paperless_tag_protokoll),
             bank_ignorieren=_liste(env.get("BANK_IGNORIEREN"), cls().bank_ignorieren),
             ezb_kurse=_bool(env.get("EZB_KURSE"), True),
             app_benutzer=env.get("APP_BENUTZER", ""),

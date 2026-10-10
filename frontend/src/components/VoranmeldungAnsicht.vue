@@ -152,6 +152,15 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
     />
     <Button label="Beleg hinzufügen" icon="pi pi-plus" severity="secondary" @click="bearbeiten(null)" />
     <span class="flex-1" />
+    <a :href="`/api/export/${zeitraum}/unterlagen.zip`">
+      <Button
+        label="ZIP für Steuerberatung"
+        icon="pi pi-download"
+        severity="secondary"
+        text
+        v-tooltip.top="'Belege als PDF, Kontoauszug, ELSTER-Protokoll und CSV-Dateien des Monats'"
+      />
+    </a>
     <a :href="`/api/export/${zeitraum}/kennzahlen.csv`">
       <Button label="CSV Kennzahlen" icon="pi pi-file-export" severity="secondary" text />
     </a>

@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from . import aktualisierung, bank, einstellungen, export, uebersicht
+from . import aktualisierung, bank, einstellungen, export, monatsexport, uebersicht
 from .berechnung import berechnen, zeitraum
 from .config import Config
 from .db import Datenbank
@@ -96,6 +96,8 @@ class EinstellungenEingabe(BaseModel):
     paperless_tags_eingang: str | None = None
     eigene_ustid: str | None = None
     bundesland: str | None = None
+    paperless_tag_kontoauszug: str | None = None
+    paperless_tag_protokoll: str | None = None
 
 
 class PaperlessTestEingabe(BaseModel):
@@ -364,6 +366,16 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         db.kurs_loeschen(waehrung, zr)
         return Response(status_code=204)
 
+    @app.get("/api/export/{zr}/unterlagen.zip")
+    def unterlagen_zip(zr: str):
+        jahr, monat = _zeitraum(zr)
+        belege = db.alle_belege()
+        b = berechnen(belege, jahr, monat, umrechner, cfg.versteuerung)
+        umsaetze = [u for u in db.alle_umsaetze() if u.zeitraum == zr]
+        inhalt = monatsexport.monats_zip(aktuell(), b, umsaetze, {x.id: x for x in belege if x.id})
+        return Response(inhalt, media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="Unterlagen-{zr}.zip"'})
+
     @app.get("/api/export/{zr}/{datei}")
     def csv_export(zr: str, datei: str):
         jahr, monat = _zeitraum(zr)
@@ -392,6 +404,8 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
                                 "quelle": einstellungen.quelle(cfg, db, "paperless_token")},
             "paperless_tags_ausgang": feld("paperless_tags_ausgang", ", ".join(c.paperless_tags_ausgang)),
             "paperless_tags_eingang": feld("paperless_tags_eingang", ", ".join(c.paperless_tags_eingang)),
+            "paperless_tag_kontoauszug": feld("paperless_tag_kontoauszug", c.paperless_tag_kontoauszug),
+            "paperless_tag_protokoll": feld("paperless_tag_protokoll", c.paperless_tag_protokoll),
             "eigene_ustid": feld("eigene_ustid", c.eigene_ustid),
             "bundesland": feld("bundesland", c.bundesland),
             "bundeslaender": [{"wert": k, "name": v} for k, v in einstellungen.BUNDESLAENDER.items()],

@@ -153,6 +153,17 @@ Eingelesen werden Dokumente, deren Datum im gewählten Monat oder in den beiden 
 Bei PDF-Dokumenten lädt die App die Originaldatei und liest eine eingebettete ZUGFeRD-/Factur-X-Rechnung aus;
 deren Angaben haben dann Vorrang vor Feldern und OCR-Text (Korrespondent und Zahlungsdatum aus Paperless bleiben).
 
+## Unterlagen für die Steuerberatung
+
+„ZIP für Steuerberatung“ in der Monatsansicht packt alles für den Monat zusammen:
+
+- `Belege/`: jeder Beleg, der in der Voranmeldung zählt oder einem Kontoumsatz des Monats zugeordnet ist, als Datei
+  aus dem Rechnungsverzeichnis bzw. als PDF aus Paperless (Name: Datum, Art, Partner, Betrag)
+- `Kontoauszug/` und `Finanzamt/`: Dokumente aus Paperless mit dem Tag `Kontoauszug` bzw. `UStVA-Protokoll`
+  (anpassbar in den Einstellungen), deren Titel oder Text den Monat nennt, z. B. „09/2026“ oder „September 2026“.
+  Der Kontoauszug muss bis zum 15. des Folgemonats datiert sein, das Protokoll bis Ende des übernächsten Monats.
+- die beiden CSV-Exporte und `FEHLT.txt` mit allem, was nicht gefunden wurde (auch Kontoumsätze ohne Beleg)
+
 ## Einstellungen und Anmeldung
 
 Im Reiter „Einstellungen“ lassen sich Paperless (URL, API-Token, Tags), die eigene USt-IdNr. und das Bundesland
