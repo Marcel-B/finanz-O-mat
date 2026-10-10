@@ -43,13 +43,13 @@ class Beleg:
             return self.steuer
         return self.netto * self.steuersatz / Decimal(100)
 
-    def zahlbetrag(self) -> Decimal:
-        """Betrag, der laut Rechnung bezahlt wird (in Belegwährung).
+    def steuer_auf_rechnung(self) -> bool:
+        """Bei Reverse Charge und steuerfreien Umsätzen steht keine Steuer auf der Rechnung."""
+        return self.steuerfall in (Steuerfall.INLAND, Steuerfall.VORSTEUER_INLAND)
 
-        Bei Reverse Charge und steuerfreien Umsätzen steht keine Steuer auf der
-        Rechnung; dann ist der Zahlbetrag der Nettobetrag.
-        """
-        if self.steuerfall in (Steuerfall.INLAND, Steuerfall.VORSTEUER_INLAND):
+    def zahlbetrag(self) -> Decimal:
+        """Betrag, der laut Rechnung bezahlt wird (in Belegwährung)."""
+        if self.steuer_auf_rechnung():
             return self.netto + self.steuer_in_belegwaehrung()
         return self.netto
 
