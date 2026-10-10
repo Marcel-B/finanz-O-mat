@@ -132,6 +132,7 @@ oben eine Warnung. Log: `journalctl -u finanz-o-mat-backup`.
 ```sh
 finanz-o-mat-backup                       # Backup sofort (wie der Timer)
 finanz-o-mat-backup liste                 # vorhandene Stände
+finanz-o-mat-backup ueberwachung URL      # Überwachung einschalten (ohne URL: fragt nach, „aus“ schaltet ab)
 finanz-o-mat-backup wiederherstellen      # neuesten Stand zurückspielen (fragt nach)
 finanz-o-mat-backup wiederherstellen 1a2b3c4d   # bestimmten Stand (ID aus liste)
 ```
@@ -144,8 +145,22 @@ Container weg (z. B. Platte defekt): neuen Container mit dem Installationsskript
 `finanz-o-mat-backup einrichten` mit denselben Nextcloud-Daten. Es erkennt das vorhandene Backup und fragt nach dessen
 Backup-Passwort. Danach `finanz-o-mat-backup wiederherstellen --mit-konfig`.
 
-Ohne Rückfragen: `BACKUP_URL`, `BACKUP_BENUTZER`, `BACKUP_APP_PASSWORT` und optional `BACKUP_ORDNER` und
-`BACKUP_PASSWORT` (für ein vorhandenes Backup) als Umgebungsvariablen setzen.
+Ohne Rückfragen: `BACKUP_URL`, `BACKUP_BENUTZER`, `BACKUP_APP_PASSWORT` und optional `BACKUP_ORDNER`,
+`BACKUP_PASSWORT` (für ein vorhandenes Backup) und `HC_PING_URL` als Umgebungsvariablen setzen.
+
+### Überwachung
+
+Die Warnung in der App sieht nur, wer die App öffnet. Damit ein ausgefallenes Backup auch so auffällt, fragt
+`einrichten` nach einer **Ping-URL** (später: `finanz-o-mat-backup ueberwachung <URL>`). Jedes Backup meldet dort
+Start, Erfolg oder Fehler. Bleibt die Meldung aus, weil der Container aus ist oder das Heimnetz weg, schickt der
+Dienst eine Mail.
+
+- [healthchecks.io](https://healthchecks.io) (kostenlos, extern): Prüfung anlegen mit Period 1 Tag und Grace
+  1 Stunde, die Ping-URL `https://hc-ping.com/<uuid>` eintragen. Eine eigene Prüfung je Backup (finanz-o-mat und
+  Paperless), sonst überdeckt das eine Backup den Ausfall des anderen.
+- Uptime Kuma (selbst gehostet): Monitor vom Typ „Push“ mit Heartbeat-Intervall 90000 Sekunden (25 Stunden), die
+  Push-URL `https://<kuma>/api/push/<token>?…` eintragen. Läuft Kuma im selben Heimnetz, merkt es einen Ausfall des
+  ganzen Netzes allerdings nicht.
 
 ## Oberfläche (Vue)
 
