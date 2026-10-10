@@ -147,6 +147,9 @@ PAPERLESS_TOKEN="$PAPERLESS_TOKEN"
 PAPERLESS_TAGS_AUSGANG="Ausgangsrechnung"
 PAPERLESS_TAGS_EINGANG="Eingangsrechnung"
 
+# Kontoumsätze, die keinen Beleg brauchen (Teilwort in Partner oder Verwendungszweck, mit Komma getrennt)
+BANK_IGNORIEREN="Finanzamt,Bundeskasse,Steuerverwaltung"
+
 EZB_KURSE="true"
 
 # Anmeldung für die Weboberfläche

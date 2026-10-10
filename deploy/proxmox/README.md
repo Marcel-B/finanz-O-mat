@@ -55,7 +55,7 @@ bash finanz-o-mat-lxc.sh -y
 | `/var/lib/finanz-o-mat/sicherungen/` | Sicherung der Datenbank vor jedem Update (die letzten 10) |
 | `/srv/rechnungen` | Belegordner vom Host (falls eingebunden) |
 | `/opt/finanz-o-mat` | Programm (Git-Checkout mit Python-Umgebung in `.venv`, läuft direkt aus dem Checkout) |
-| `/opt/node` | Node.js, nur falls das System kein Node 20 oder neuer mitbringt (Debian 12) |
+| `/opt/node` | Node.js, nur falls das System kein Node 20.19 oder neuer mitbringt (Debian 12) |
 
 Konfiguration und Datenbank bleiben bei Updates unverändert. Der Container läuft in den normalen Proxmox-Backups
 (vzdump) mit; der eingebundene Belegordner nicht, der gehört in die Sicherung des Hosts.

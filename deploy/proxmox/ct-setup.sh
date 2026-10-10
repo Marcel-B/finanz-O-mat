@@ -20,7 +20,8 @@ BENUTZER=finanzomat
 DIENST=finanz-o-mat
 SICHERUNGEN_BEHALTEN=10
 FRONTEND=$APP_DIR/frontend
-NODE_MIN=20
+# Vite 8 braucht Node ^20.19 oder >= 22.12
+NODE_MIN=20.19
 NODE_LINIE=22
 NODE_DIR=/opt/node
 
@@ -72,14 +73,14 @@ benutzer_und_ordner() {
 }
 
 node_bereitstellen() {
-    # Debian 13 bringt Node 20 mit; bei älteren Systemen die offizielle LTS-Version nach $NODE_DIR laden
+    # Debian 13 bringt Node 20.19 mit; bei älteren Systemen die offizielle LTS-Version nach $NODE_DIR laden
     if [[ -x $NODE_DIR/bin/node ]]; then
         export PATH="$NODE_DIR/bin:$PATH"
         return 0
     fi
     local kandidat
-    kandidat=$(apt-cache policy nodejs 2>/dev/null | awk '/Candidate:/ {print $2}' | sed 's/^[0-9]*://; s/\..*//')
-    if [[ $kandidat =~ ^[0-9]+$ ]] && ((kandidat >= NODE_MIN)); then
+    kandidat=$(apt-cache policy nodejs 2>/dev/null | awk '/Candidate:/ {print $2}' | sed 's/^[0-9]*://')
+    if [[ $kandidat =~ ^[0-9] ]] && dpkg --compare-versions "$kandidat" ge "$NODE_MIN"; then
         apt-get install -y -qq --no-install-recommends nodejs npm >/dev/null
         return 0
     fi
