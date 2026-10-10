@@ -51,6 +51,10 @@ TOLERANZ = Decimal("0.01")
 KURS_TOLERANZ = Decimal("0.05")  # Kursaufschlag und Auslandsgebühren der Bank
 VOR_RECHNUNG = timedelta(days=10)  # Vorkasse
 NACH_RECHNUNG = timedelta(days=120)
+# Lastschrift und Karte folgen einer Eingangsrechnung nach wenigen Tagen. Ohne Rechnungsnummer im
+# Verwendungszweck ordnen wir automatisch nur in diesem Abstand zu, sonst landet bei Abos mit gleichem
+# Betrag die Abbuchung schnell bei der Rechnung des Vormonats.
+NACH_RECHNUNG_ABBUCHUNG = timedelta(days=20)
 
 
 class CsvFormatFehler(ValueError):
@@ -226,6 +230,11 @@ def _woerter(text: str) -> set[str]:
 def kandidaten(u: Umsatz, belege: list[Beleg], vergeben: set[int], nur_passende: bool = True,
                euro: Euro | None = None) -> list[Beleg]:
     """Mögliche Belege für einen Umsatz, der beste zuerst."""
+    return [b for _, b in sorted(_bewertet(u, belege, vergeben, nur_passende, euro), key=lambda t: t[0])]
+
+
+def _bewertet(u: Umsatz, belege: list[Beleg], vergeben: set[int], nur_passende: bool,
+              euro: Euro | None) -> list[tuple[tuple, Beleg]]:
     art = Art.AUSGANG if u.betrag > 0 else Art.EINGANG
     treffer: list[tuple[tuple, Beleg]] = []
     for b in belege:
@@ -241,12 +250,14 @@ def kandidaten(u: Umsatz, belege: list[Beleg], vergeben: set[int], nur_passende:
         name = bool(_woerter(f"{b.partner} {b.beschreibung}") & _woerter(f"{u.partner} {u.verwendungszweck}"))
         # Ungefähr passende Beträge nur zusammen mit dem Namen, sonst trifft es zu leicht den falschen Beleg.
         sicher = betrag == "genau" or (betrag == "ungefaehr" and name)
-        if nur_passende and not (im_fenster and sicher):
+        nah = nummer or b.art == Art.AUSGANG or (
+            b.rechnungsdatum is not None and u.buchungsdatum <= b.rechnungsdatum + NACH_RECHNUNG_ABBUCHUNG)
+        if nur_passende and not (im_fenster and sicher and nah):
             continue
         abstand = abs((u.buchungsdatum - b.rechnungsdatum).days) if b.rechnungsdatum else 99999
         rang = {"genau": 0, "ungefaehr": 1}.get(betrag, 2)
         treffer.append(((rang, not im_fenster, not nummer, not name, abstand), b))
-    return [b for _, b in sorted(treffer, key=lambda t: t[0])]
+    return treffer
 
 
 def passt_zur_suche(b: Beleg, suche: str) -> bool:
@@ -275,15 +286,20 @@ def abgleich_ausfuehren(db: Datenbank, umrechner: Umrechner | None = None) -> in
     belege = db.alle_belege()
     umsaetze = db.alle_umsaetze()
     vergeben = {u.beleg_id for u in umsaetze if u.beleg_id is not None}
+    # Alle passenden Paare, das beste zuerst. So bekommt bei gleichen Beträgen (Abos) jede Rechnung die
+    # zeitlich nächste Abbuchung, egal in welcher Reihenfolge die Monate eingelesen wurden.
+    paare = [(wertung, i, u, b) for i, u in enumerate(umsaetze) if u.beleg_id is None and not u.ignoriert
+             for wertung, b in _bewertet(u, belege, vergeben, True, euro)]
+    paare.sort(key=lambda p: (p[0], p[1]))
     neu = 0
-    for u in umsaetze:
-        if u.beleg_id is not None or u.ignoriert:
+    erledigt: set[int] = set()
+    for _, _, u, b in paare:
+        if u.id in erledigt or b.id in vergeben:
             continue
-        passend = kandidaten(u, belege, vergeben, euro=euro)
-        if passend:
-            zuordnen(db, u, passend[0])
-            vergeben.add(passend[0].id)
-            neu += 1
+        zuordnen(db, u, b)
+        erledigt.add(u.id)
+        vergeben.add(b.id)
+        neu += 1
     return neu
 
 

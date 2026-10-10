@@ -237,6 +237,29 @@ function loeschen() {
         v-tooltip.top="'Liest den Beleg erneut aus der Quelle. Änderungen in diesem Dialog gehen dabei verloren.'"
         @click="neuEinlesen"
       />
+      <Button
+        v-if="beleg?.quelle === 'paperless' && beleg.quelle_link"
+        as="a"
+        :href="beleg.quelle_link"
+        target="_blank"
+        rel="noopener"
+        class="whitespace-nowrap"
+        label="In Paperless öffnen"
+        icon="pi pi-external-link"
+        severity="secondary"
+        text
+      />
+      <Button
+        v-else-if="beleg?.quelle === 'verzeichnis'"
+        as="a"
+        :href="`/api/belege/${beleg.id}/datei`"
+        target="_blank"
+        class="whitespace-nowrap"
+        label="Datei öffnen"
+        icon="pi pi-file"
+        severity="secondary"
+        text
+      />
       <span class="flex-1" />
       <Button label="Abbrechen" severity="secondary" text @click="sichtbar = false" />
       <Button label="Speichern und als geprüft markieren" icon="pi pi-check" :loading="speichert" @click="speichern" />
