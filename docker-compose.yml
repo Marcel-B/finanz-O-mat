@@ -1,0 +1,11 @@
+services:
+  finanz-o-mat:
+    build: .
+    env_file: .env
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/data
+      # Rechnungsverzeichnis nur lesend einbinden
+      - ./rechnungen:/rechnungen:ro
+    restart: unless-stopped
