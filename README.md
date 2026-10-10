@@ -36,6 +36,8 @@ Steuerberater nachfragen.
 - Angaben für die Zusammenfassende Meldung (ZM) an das BZSt auflisten, wenn Kz 21 oder 41 vorkommen.
 - Nächste Frist anzeigen: 10. des Folgemonats, bei Wochenende oder Feiertag der nächste Werktag
   (Landesfeiertage über `BUNDESLAND`), optional mit Dauerfristverlängerung.
+- Kontoumsätze aus dem N26-CSV-Export einlesen, automatisch den Rechnungen zuordnen und vor Umsätzen ohne Beleg
+  warnen. Bei Ausgangsrechnungen übernimmt die Zuordnung das Zahlungsdatum (wichtig für die Ist-Versteuerung).
 - CSV-Export der Kennzahlen und Belege (Semikolon, Dezimalkomma, öffnet direkt in Excel).
 
 ## Starten
@@ -96,6 +98,21 @@ z. B. `openai-2026-09.pdf.json`:
 ```json
 {"steuerfall": "ausland_13b", "netto": "20.00", "waehrung": "USD", "partner": "OpenAI", "geprueft": true}
 ```
+
+## Kontoumsätze (N26)
+
+In der N26-App oder im Web unter Konto → Kontoauszüge den CSV-Export für den Monat herunterladen und in der App unter
+„Kontoumsätze“ hochladen. Alternativ die CSV-Dateien in den Unterordner `konto/` des Rechnungsverzeichnisses legen;
+„Rechnungen einlesen“ nimmt sie dann mit. Mehrfaches Einlesen derselben Umsätze ist unschädlich.
+
+Zugeordnet wird ein Umsatz einer Rechnung gleicher Richtung (Einnahme ↔ Ausgangsrechnung, Ausgabe ↔ Eingangsrechnung)
+mit gleichem Zahlbetrag, gebucht höchstens 10 Tage vor bis 120 Tage nach dem Rechnungsdatum. Bei Fremdwährung zählt der
+Originalbetrag aus dem Export (z. B. 20,00 USD bei OpenAI). Passt es nicht automatisch, lässt sich der Beleg in der
+Liste von Hand zuordnen.
+
+Umsätze ohne Beleg erscheinen als Warnung. Was keinen Beleg braucht (Steuerzahlung, Privates, Umbuchung), markierst du
+als „kein Beleg nötig“, mit „Partner immer“ auch für alle künftigen Umsätze dieses Partners. Zahlungen ans Finanzamt
+werden automatisch übergangen (`BANK_IGNORIEREN`).
 
 ## Paperless-ngx
 

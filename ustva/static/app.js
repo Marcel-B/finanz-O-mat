@@ -86,6 +86,61 @@ async function laden() {
   zeigeBelege($("#offen"), offen);
   $("#offen-karte").hidden = offen.length === 0;
   zeigeKurse(kurse);
+  zeigeUmsaetze(bericht.umsaetze ?? []);
+}
+
+function zeigeUmsaetze(umsaetze) {
+  $("#keine-umsaetze").hidden = umsaetze.length > 0;
+  $("#umsaetze").innerHTML = umsaetze.map((u) => {
+    const betrag = Number(u.betrag);
+    const original = u.original_betrag && u.original_waehrung && u.original_waehrung !== "EUR"
+      ? `<div class="klein">${fmt.format(Math.abs(Number(u.original_betrag)))} ${esc(u.original_waehrung)}</div>` : "";
+    let status;
+    let aktionen;
+    if (u.beleg) {
+      const b = u.beleg;
+      status = `<span class="ok">✓</span> ${esc(b.partner || b.beschreibung || "Beleg")}${b.rechnungsnummer ? ` · ${esc(b.rechnungsnummer)}` : ""}`;
+      aktionen = `<button class="klein" data-loesen="${u.id}">Lösen</button>`;
+    } else if (u.ignoriert) {
+      status = `<span class="klein">kein Beleg nötig${u.ignoriert_grund ? ` (${esc(u.ignoriert_grund)})` : ""}</span>`;
+      aktionen = `<button class="klein" data-rueckgaengig="${u.id}">Rückgängig</button>`;
+    } else {
+      status = `<strong class="fehler">Beleg fehlt</strong>`;
+      aktionen = `<select class="klein" data-zuordnen="${u.id}"><option value="">Beleg zuordnen …</option></select>
+        <button class="klein" data-ignorieren="${u.id}">Kein Beleg nötig</button>
+        ${u.partner ? `<button class="klein" data-regel="${u.id}" title="Alle Umsätze mit ${esc(u.partner)} ohne Beleg akzeptieren">Partner immer</button>` : ""}`;
+    }
+    return `<tr class="${u.beleg || u.ignoriert ? "erledigt" : "fehlt"}">
+      <td>${datum(u.buchungsdatum)}</td>
+      <td>${esc(u.partner || "–")}<div class="klein">${esc(u.verwendungszweck || u.typ)}</div></td>
+      <td class="zahl">${betrag > 0 ? "+" : ""}${fmt.format(betrag)} €${original}</td>
+      <td>${status}</td>
+      <td><div class="aktionen-zelle">${aktionen}</div></td>
+    </tr>`;
+  }).join("");
+}
+
+async function kandidatenLaden(select) {
+  if (select.dataset.geladen) return;
+  select.dataset.geladen = "1";
+  const liste = await api(`/api/umsaetze/${select.dataset.zuordnen}/kandidaten`);
+  select.insertAdjacentHTML("beforeend", liste.length ? liste.map((b) =>
+    `<option value="${b.id}">${datum(b.rechnungsdatum)} · ${esc(b.partner || b.beschreibung || "Beleg")} · ` +
+    `${fmt.format(Number(b.zahlbetrag))} ${esc(b.waehrung)}</option>`).join("")
+    : `<option disabled>Keine passenden Belege</option>`);
+}
+
+async function bankHochladen(datei) {
+  meldung("Kontoumsätze werden eingelesen …");
+  try {
+    const text = await datei.text();
+    const e = await api("/api/import/bank", { method: "POST", headers: { "Content-Type": "text/csv" }, body: text });
+    meldung([`Konto: ${e.neu} neu, ${e.vorhanden} schon vorhanden, ${e.zugeordnet} Belegen zugeordnet`, ...e.fehler].join(" | "),
+      e.fehler.length > 0);
+    await laden();
+  } catch (err) {
+    meldung(err.message, true);
+  }
 }
 
 function elsterWert(k) {
@@ -225,8 +280,12 @@ async function einlesen() {
     const ergebnis = await api("/api/import", { method: "POST", body: JSON.stringify({ quelle: "alle", zeitraum: zeitraum() }) });
     const teile = [];
     let fehler = [];
+    const namen = { paperless: "Paperless", verzeichnis: "Verzeichnis", konto: "Konto" };
     for (const [quelle, e] of Object.entries(ergebnis)) {
-      if (quelle !== "keine") teile.push(`${quelle === "paperless" ? "Paperless" : "Verzeichnis"}: ${e.neu} neu, ${e.vorhanden} schon vorhanden`);
+      if (quelle !== "keine") {
+        teile.push(`${namen[quelle]}: ${e.neu} neu, ${e.vorhanden} schon vorhanden` +
+          (e.zugeordnet ? `, ${e.zugeordnet} zugeordnet` : ""));
+      }
       fehler = fehler.concat(e.fehler);
     }
     meldung([teile.join(" · "), ...fehler].filter(Boolean).join(" | "), fehler.length > 0);
@@ -257,6 +316,22 @@ document.addEventListener("click", async (event) => {
     await laden();
     return;
   }
+  const umsatzAktion = async (pfad, daten) => {
+    try {
+      await api(pfad, { method: "POST", body: JSON.stringify(daten) });
+      await laden();
+    } catch (e) {
+      meldung(e.message, true);
+    }
+  };
+  if (ziel.dataset.loesen) return umsatzAktion(`/api/umsaetze/${ziel.dataset.loesen}/zuordnen`, { beleg_id: null });
+  if (ziel.dataset.ignorieren) return umsatzAktion(`/api/umsaetze/${ziel.dataset.ignorieren}/ignorieren`, {});
+  if (ziel.dataset.rueckgaengig) {
+    return umsatzAktion(`/api/umsaetze/${ziel.dataset.rueckgaengig}/ignorieren`, { ignoriert: false });
+  }
+  if (ziel.dataset.regel) {
+    return umsatzAktion(`/api/umsaetze/${ziel.dataset.regel}/ignorieren`, { regel: true, grund: "Partner ohne Beleg" });
+  }
   if (ziel.closest("a")) return;
   const zeile = ziel.closest("tr[data-id]");
   if (zeile) {
@@ -266,6 +341,24 @@ document.addEventListener("click", async (event) => {
   }
 });
 
+document.addEventListener("focusin", (event) => {
+  if (event.target.dataset?.zuordnen) kandidatenLaden(event.target).catch((e) => meldung(e.message, true));
+});
+document.addEventListener("change", async (event) => {
+  const sel = event.target;
+  if (!sel.dataset?.zuordnen || !sel.value) return;
+  try {
+    await api(`/api/umsaetze/${sel.dataset.zuordnen}/zuordnen`, { method: "POST", body: JSON.stringify({ beleg_id: Number(sel.value) }) });
+    await laden();
+  } catch (e) {
+    meldung(e.message, true);
+  }
+});
+$("#bank-datei").addEventListener("change", (event) => {
+  const datei = event.target.files[0];
+  event.target.value = "";
+  if (datei) bankHochladen(datei);
+});
 $("#zeitraum").addEventListener("change", () => laden().catch((e) => meldung(e.message, true)));
 $("#einlesen").addEventListener("click", einlesen);
 $("#neu").addEventListener("click", () => oeffneDialog(null));

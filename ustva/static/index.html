@@ -66,6 +66,24 @@
     <p id="keine-belege" class="klein" hidden>Keine Belege in diesem Zeitraum.</p>
   </section>
 
+  <section class="karte">
+    <div class="karte-kopf">
+      <h2>Kontoumsätze</h2>
+      <label class="knopf">N26-CSV hochladen
+        <input type="file" id="bank-datei" accept=".csv,text/csv" hidden>
+      </label>
+    </div>
+    <p class="klein">In der N26-App unter Konto → Kontoauszüge den CSV-Export des Monats herunterladen. Umsätze werden
+      automatisch passenden Rechnungen zugeordnet; bei Ausgangsrechnungen setzt das das Zahlungsdatum.</p>
+    <div class="tabelle-scroll">
+      <table class="umsaetze">
+        <thead><tr><th>Datum</th><th>Partner / Verwendungszweck</th><th class="zahl">Betrag</th><th>Beleg</th><th></th></tr></thead>
+        <tbody id="umsaetze"></tbody>
+      </table>
+    </div>
+    <p id="keine-umsaetze" class="klein" hidden>Für diesen Monat sind keine Kontoumsätze eingelesen.</p>
+  </section>
+
   <section class="karte" id="offen-karte" hidden>
     <h2>Belege ohne Zeitraum</h2>
     <p class="klein">Ohne Rechnungsdatum oder, bei Ist-Versteuerung, noch nicht bezahlt. Sie zählen erst, wenn das

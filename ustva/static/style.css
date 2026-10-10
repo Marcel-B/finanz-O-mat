@@ -120,6 +120,15 @@ th { font-size: .8rem; color: var(--leise); font-weight: 600; }
 .marke.pruefen { color: var(--warnung); border-color: var(--warnung); }
 .fehler { color: var(--fehler); }
 
+.karte-kopf { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.karte-kopf h2 { margin: 0; }
+.umsaetze td { vertical-align: middle; }
+.umsaetze tr.fehlt td { background: var(--warnung-bg); }
+.umsaetze tr.erledigt td { color: var(--leise); }
+.umsaetze select { max-width: 260px; }
+.aktionen-zelle { display: flex; gap: 6px; flex-wrap: wrap; }
+.ok { color: var(--info); }
+
 .zeile { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 
 dialog {

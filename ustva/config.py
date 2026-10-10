@@ -42,6 +42,9 @@ class Config:
     paperless_feld_steuersatz: str = "Steuersatz"
     paperless_feld_zahlungsdatum: str = "Zahlungsdatum"
 
+    # Kontoumsätze, die keinen Beleg brauchen (Teilwort in Partner oder Verwendungszweck)
+    bank_ignorieren: list[str] = field(default_factory=lambda: ["Finanzamt", "Bundeskasse", "Steuerverwaltung"])
+
     ezb_kurse: bool = True  # Monatsmittel der EZB-Referenzkurse abrufen, wenn kein Kurs hinterlegt ist
 
     app_benutzer: str = ""
@@ -69,6 +72,7 @@ class Config:
             paperless_feld_steuer=env.get("PAPERLESS_FELD_STEUER", cls.paperless_feld_steuer),
             paperless_feld_steuersatz=env.get("PAPERLESS_FELD_STEUERSATZ", cls.paperless_feld_steuersatz),
             paperless_feld_zahlungsdatum=env.get("PAPERLESS_FELD_ZAHLUNGSDATUM", cls.paperless_feld_zahlungsdatum),
+            bank_ignorieren=_liste(env.get("BANK_IGNORIEREN"), cls().bank_ignorieren),
             ezb_kurse=_bool(env.get("EZB_KURSE"), True),
             app_benutzer=env.get("APP_BENUTZER", ""),
             app_passwort=env.get("APP_PASSWORT", ""),

@@ -42,6 +42,16 @@ class Beleg:
             return self.steuer
         return self.netto * self.steuersatz / Decimal(100)
 
+    def zahlbetrag(self) -> Decimal:
+        """Betrag, der laut Rechnung bezahlt wird (in Belegwährung).
+
+        Bei Reverse Charge und steuerfreien Umsätzen steht keine Steuer auf der
+        Rechnung; dann ist der Zahlbetrag der Nettobetrag.
+        """
+        if self.steuerfall in (Steuerfall.INLAND, Steuerfall.VORSTEUER_INLAND):
+            return self.netto + self.steuer_in_belegwaehrung()
+        return self.netto
+
     def to_dict(self) -> dict:
         d = asdict(self)
         for key, value in d.items():
@@ -53,3 +63,36 @@ class Beleg:
                 d[key] = value.value
         return d
 
+
+
+@dataclass
+class Umsatz:
+    """Eine Buchung vom Bankkonto. ``betrag`` in EUR, negativ für Ausgaben."""
+
+    buchungsdatum: date
+    betrag: Decimal
+    partner: str = ""
+    iban: str = ""
+    verwendungszweck: str = ""
+    typ: str = ""
+    original_betrag: Decimal | None = None
+    original_waehrung: str = ""
+    konto: str = "N26"
+    pruefsumme: str = ""
+    beleg_id: int | None = None
+    ignoriert: bool = False
+    ignoriert_grund: str = ""
+    id: int | None = None
+
+    @property
+    def zeitraum(self) -> str:
+        return f"{self.buchungsdatum:%Y-%m}"
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        for key, value in d.items():
+            if isinstance(value, Decimal):
+                d[key] = str(value)
+            elif isinstance(value, date):
+                d[key] = value.isoformat()
+        return d
