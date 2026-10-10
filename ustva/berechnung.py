@@ -233,6 +233,18 @@ def berechnen(
     posten = [Posten(kz, werte[kz]) for kz in REIHENFOLGE if kz in werte]
 
     # Hinweise
+    if versteuerung == "ist":
+        unbezahlt = [
+            b for b in belege
+            if b.art == Art.AUSGANG and b.steuerfall == Steuerfall.INLAND and b.zahlungsdatum is None
+            and b.rechnungsdatum is not None and f"{b.rechnungsdatum:%Y-%m}" <= ziel
+        ]
+        if unbezahlt:
+            hinweise.append(Hinweis(
+                "info",
+                f"Ist-Versteuerung: {len(unbezahlt)} Ausgangsrechnung(en) ohne Zahlungsdatum sind nicht enthalten. "
+                "Ist eine davon in diesem Monat bezahlt worden, bitte das Zahlungsdatum eintragen.",
+            ))
     fehlerhaft = [z for z in zeilen if z.fehler]
     if fehlerhaft:
         hinweise.append(Hinweis(

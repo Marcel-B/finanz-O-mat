@@ -19,7 +19,7 @@ def test_status_zeigt_frist(client):
     s = client.get("/api/status").json()
     assert s["frist"]["zeitraum"] == "2026-09"
     assert s["frist"]["faellig_text"] == "Montag, 12.10.2026"
-    assert s["versteuerung"] == "soll"
+    assert s["versteuerung"] == "ist"
 
 
 def test_beleg_anlegen_und_bericht(client):
@@ -30,6 +30,18 @@ def test_beleg_anlegen_und_bericht(client):
     assert r.status_code == 201
     beleg_id = r.json()["id"]
 
+    # Ist-Versteuerung (Standard): ohne Zahlungsdatum zählt die Rechnung noch nicht
+    bericht = client.get("/api/bericht/2026-09").json()
+    assert bericht["zahllast"] == "0"
+    assert any("ohne Zahlungsdatum" in h["text"] for h in bericht["hinweise"])
+    assert [b["id"] for b in client.get("/api/offen").json()] == [beleg_id]
+
+    r = client.put(f"/api/belege/{beleg_id}", json={
+        "art": "ausgang", "steuerfall": "inland", "rechnungsdatum": "2026-09-15", "netto": "1000.00",
+        "steuersatz": "19", "zahlungsdatum": "2026-09-28",
+    })
+    assert r.status_code == 200
+
     bericht = client.get("/api/bericht/2026-09").json()
     kz = {k["id"]: k["betrag"] for k in bericht["kennzahlen"]}
     assert kz["81"] == "1000"
@@ -38,7 +50,7 @@ def test_beleg_anlegen_und_bericht(client):
 
     r = client.put(f"/api/belege/{beleg_id}", json={
         "art": "ausgang", "steuerfall": "inland", "rechnungsdatum": "2026-09-15", "netto": "1000.00",
-        "steuersatz": "7",
+        "steuersatz": "7", "zahlungsdatum": "2026-09-28",
     })
     assert r.status_code == 200
     assert client.get("/api/bericht/2026-09").json()["zahllast"] == "70.00"

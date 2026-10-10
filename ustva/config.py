@@ -22,8 +22,8 @@ def _liste(value: str | None, default: list[str]) -> list[str]:
 @dataclass
 class Config:
     datenbank: Path = Path("data/finanzomat.sqlite")
-    # "soll": Rechnungsdatum zählt, "ist": Zahlungseingang zählt (nur Ausgangsrechnungen)
-    versteuerung: str = "soll"
+    # "ist": Zahlungseingang zählt (nur Ausgangsrechnungen), "soll": Rechnungsdatum zählt
+    versteuerung: str = "ist"
     dauerfristverlaengerung: bool = False
     bundesland: str = ""  # z. B. "NW"; für Feiertage, die die Frist verschieben
     eigene_ustid: str = ""
@@ -53,7 +53,7 @@ class Config:
         verzeichnis = env.get("RECHNUNGS_VERZEICHNIS")
         cfg = cls(
             datenbank=Path(env.get("DATENBANK", "data/finanzomat.sqlite")),
-            versteuerung=env.get("VERSTEUERUNG", "soll").strip().lower(),
+            versteuerung=env.get("VERSTEUERUNG", "ist").strip().lower(),
             dauerfristverlaengerung=_bool(env.get("DAUERFRISTVERLAENGERUNG")),
             bundesland=env.get("BUNDESLAND", "").strip().upper(),
             eigene_ustid=env.get("EIGENE_USTID", "").replace(" ", "").upper(),

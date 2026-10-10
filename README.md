@@ -62,7 +62,8 @@ python -m ustva serve          # Weboberfläche auf http://127.0.0.1:8000
 
 1. App öffnen. Ausgewählt ist automatisch der Monat, dessen Voranmeldung als Nächstes fällig ist.
 2. „Rechnungen einlesen“ holt neue Belege aus Verzeichnis und Paperless. Schon eingelesene werden übersprungen.
-3. Gelb markierte Belege anklicken, mit der Rechnung vergleichen, ggf. korrigieren und speichern (oder „OK“).
+3. Bezahlte Ausgangsrechnungen unter „Belege ohne Zeitraum“ anklicken und das Zahlungsdatum eintragen.
+   Gelb markierte Belege anklicken, mit der Rechnung vergleichen, ggf. korrigieren und speichern (oder „OK“).
 4. Hinweise lesen. Bei Fremdwährungen den BMF-Kurs des Monats eintragen.
 5. In Mein ELSTER das Formular „Umsatzsteuer-Voranmeldung“ öffnen und die Kennzahlen eintragen. Werte mit
    „berechnet ELSTER“ rechnet ELSTER selbst aus; sie dienen zum Abgleich.
@@ -108,8 +109,10 @@ Eingelesen werden Dokumente, deren Datum im gewählten Monat oder in den beiden 
 
 ## Annahmen und Grenzen
 
-- Standard ist Soll-Versteuerung (Rechnungsdatum zählt). Mit `VERSTEUERUNG=ist` zählen steuerpflichtige
-  Inlandsumsätze erst mit dem Zahlungsdatum; Vorsteuer und Reverse Charge richten sich weiter nach der Rechnung.
+- Standard ist Ist-Versteuerung: Steuerpflichtige Inlandsumsätze zählen erst im Monat des Zahlungseingangs.
+  Ausgangsrechnungen brauchen deshalb ein Zahlungsdatum (am Beleg, im Paperless-Feld `Zahlungsdatum` oder in der
+  JSON-Datei); bis dahin stehen sie unter „Belege ohne Zeitraum“. Vorsteuer und Reverse Charge richten sich weiter
+  nach der Rechnung. Mit `VERSTEUERUNG=soll` zählt stattdessen das Rechnungsdatum.
 - Standard ist keine Dauerfristverlängerung (`DAUERFRISTVERLAENGERUNG=true` schaltet sie ein).
 - Das Rechnungsdatum gilt als Leistungsdatum. Weicht der Leistungsmonat ab, das Datum am Beleg anpassen.
 - Bei Reverse Charge nimmt die App 19 % an und geht von vollem Vorsteuerabzug aus (Kz 67 = Kz 47 + Kz 85).
