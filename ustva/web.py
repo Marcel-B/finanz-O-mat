@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from datetime import date
@@ -11,6 +12,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
@@ -42,6 +44,12 @@ OHNE_FRONTEND = """<!doctype html><html lang="de"><meta charset="utf-8"><title>F
 <h1>Finanz-O-Mat</h1><p>Die API läuft, aber die Oberfläche ist noch nicht gebaut:</p>
 <pre>cd frontend &amp;&amp; npm ci &amp;&amp; npm run build</pre></body></html>"""
 CENT = Decimal("0.01")
+# PrimeVue setzt Stile zur Laufzeit, daher style-src 'unsafe-inline'; Skripte nur vom eigenen Server
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+       "font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; "
+       "frame-ancestors 'self'")
+# ohne Sitzung erreichbar
+OFFEN = {"/api/anmeldung", "/api/anmelden", "/api/abmelden"}
 RE_ZEITRAUM = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
 
 
@@ -162,6 +170,11 @@ class PaperlessTestEingabe(BaseModel):
     paperless_token: str | None = None
 
 
+class AnmeldeEingabe(BaseModel):
+    benutzer: str = ""
+    passwort: str = ""
+
+
 class PasswortEingabe(BaseModel):
     aktuell: str = ""
     benutzer: str = ""
@@ -219,9 +232,61 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
 
     @app.middleware("http")
     async def anmeldung_pruefen(request: Request, call_next):
-        if not anmeldung.kopf_gueltig(request.headers.get("authorization", "")):
-            return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Finanz-O-Mat"'})
-        return await call_next(request)
+        pfad = request.url.path
+        if pfad == "/api" or pfad.startswith("/api/"):
+            # Schreibende Anfragen nur von der App selbst, nicht von einer anderen Seite im Browser
+            if (request.method not in ("GET", "HEAD", "OPTIONS")
+                    and request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none")):
+                return JSONResponse(status_code=403, content={"detail": "Anfrage von einer fremden Seite abgelehnt."})
+            if pfad not in OFFEN and not await run_in_threadpool(
+                    anmeldung.sitzung_gueltig, request.cookies.get(einstellungen.COOKIE)):
+                return JSONResponse(status_code=401, content={"detail": "Bitte anmelden."})
+        antwort = await call_next(request)
+        koepfe = antwort.headers
+        koepfe.setdefault("X-Content-Type-Options", "nosniff")
+        koepfe.setdefault("X-Frame-Options", "SAMEORIGIN")
+        koepfe.setdefault("Referrer-Policy", "same-origin")
+        if pfad.startswith("/api/"):
+            koepfe.setdefault("Cache-Control", "no-store")
+        if koepfe.get("content-type", "").startswith("text/html"):
+            koepfe.setdefault("Content-Security-Policy", CSP)
+        return antwort
+
+    def _adresse(request: Request) -> str:
+        return request.client.host if request.client else "unbekannt"
+
+    def _cookie_setzen(request: Request, response: Response, wert: str) -> None:
+        # Secure nur bei HTTPS (z. B. tailscale serve), sonst ginge die Anmeldung über http:// im Heimnetz nicht
+        https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+        response.set_cookie(einstellungen.COOKIE, wert, httponly=True, samesite="strict", secure=https, path="/")
+
+    def _pruefen(benutzer: str, passwort: str, request: Request) -> bool:
+        try:
+            return anmeldung.pruefe_gebremst(benutzer, passwort, _adresse(request))
+        except einstellungen.Gesperrt as e:
+            minuten = max(1, math.ceil(e.sekunden / 60))
+            raise HTTPException(429, f"Zu viele Fehlversuche. Bitte in {minuten} Minute{'n' if minuten > 1 else ''} "
+                                     "noch einmal versuchen.", headers={"Retry-After": str(e.sekunden)}) from e
+
+    @app.get("/api/anmeldung")
+    def anmeldung_lesen(request: Request):
+        return {"aktiv": anmeldung.aktiv,
+                "angemeldet": anmeldung.sitzung_gueltig(request.cookies.get(einstellungen.COOKIE))}
+
+    @app.post("/api/anmelden")
+    def anmelden(eingabe: AnmeldeEingabe, request: Request, response: Response):
+        if anmeldung.aktiv:
+            if not _pruefen(eingabe.benutzer.strip(), eingabe.passwort, request):
+                raise HTTPException(401, "Benutzername oder Passwort stimmt nicht.")
+            _cookie_setzen(request, response, anmeldung.sitzung_anlegen())
+        return {"aktiv": anmeldung.aktiv, "angemeldet": True}
+
+    @app.post("/api/abmelden", status_code=204)
+    def abmelden(request: Request):
+        anmeldung.abmelden(request.cookies.get(einstellungen.COOKIE))
+        antwort = Response(status_code=204)
+        antwort.delete_cookie(einstellungen.COOKIE, path="/", httponly=True, samesite="strict")
+        return antwort
 
     # Gefundene Protokolle ändern sich nicht mehr; "noch keins" wird nach ein paar Minuten neu gefragt
     protokolle: dict[tuple, tuple[bool, float]] = {}
@@ -656,10 +721,12 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         return {"text": f"Verbindung klappt, {len(tags)} Tags gefunden."}
 
     @app.post("/api/passwort")
-    def passwort_aendern(eingabe: PasswortEingabe):
-        if anmeldung.aktiv and not anmeldung.pruefe(anmeldung.zugang()[0], eingabe.aktuell):
+    def passwort_aendern(eingabe: PasswortEingabe, request: Request, response: Response):
+        if anmeldung.aktiv and not _pruefen(anmeldung.zugang()[0], eingabe.aktuell, request):
             raise HTTPException(403, "Das aktuelle Passwort stimmt nicht.")
         anmeldung.setzen(eingabe.benutzer or anmeldung.zugang()[0], eingabe.neu)
+        # Alle anderen Sitzungen sind damit beendet; dieser Browser bleibt angemeldet
+        _cookie_setzen(request, response, anmeldung.sitzung_anlegen())
         return _einstellungen()["anmeldung"]
 
     app.include_router(aktualisierung.router(cfg.update_verzeichnis))

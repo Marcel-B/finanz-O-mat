@@ -107,6 +107,13 @@ CREATE TABLE IF NOT EXISTS kurse (
     quelle TEXT NOT NULL,
     PRIMARY KEY (waehrung, zeitraum)
 );
+CREATE TABLE IF NOT EXISTS sitzungen (
+    schluessel TEXT PRIMARY KEY,  -- SHA-256 des Cookie-Werts, der Wert selbst wird nicht gespeichert
+    benutzer TEXT NOT NULL,
+    stand TEXT NOT NULL,          -- Fingerabdruck der Zugangsdaten bei der Anmeldung
+    erstellt REAL NOT NULL,
+    zuletzt REAL NOT NULL
+);
 """
 
 FELDER = [
@@ -271,6 +278,33 @@ class Datenbank:
                     "ON CONFLICT(schluessel) DO UPDATE SET wert = excluded.wert",
                     (schluessel, wert),
                 )
+
+    # Sitzungen der Weboberfläche (siehe ustva/einstellungen.py)
+    def sitzung(self, schluessel: str) -> dict | None:
+        with self._lock:
+            z = self._con.execute("SELECT * FROM sitzungen WHERE schluessel = ?", (schluessel,)).fetchone()
+        return dict(z) if z else None
+
+    def sitzung_anlegen(self, schluessel: str, benutzer: str, stand: str, jetzt: float) -> None:
+        with self._lock, self._con:
+            self._con.execute("INSERT INTO sitzungen VALUES (?, ?, ?, ?, ?)",
+                              (schluessel, benutzer, stand, jetzt, jetzt))
+
+    def sitzung_beruehren(self, schluessel: str, jetzt: float) -> None:
+        with self._lock, self._con:
+            self._con.execute("UPDATE sitzungen SET zuletzt = ? WHERE schluessel = ?", (jetzt, schluessel))
+
+    def sitzungen_loeschen(self, schluessel: str | None = None, *, erstellt_vor: float | None = None,
+                           zuletzt_vor: float | None = None) -> None:
+        """Löscht eine Sitzung, die abgelaufenen (erstellt_vor/zuletzt_vor) oder ohne Angabe alle."""
+        with self._lock, self._con:
+            if schluessel is not None:
+                self._con.execute("DELETE FROM sitzungen WHERE schluessel = ?", (schluessel,))
+            elif erstellt_vor is not None or zuletzt_vor is not None:
+                self._con.execute("DELETE FROM sitzungen WHERE erstellt < ? OR zuletzt < ?",
+                                  (erstellt_vor or 0, zuletzt_vor or 0))
+            else:
+                self._con.execute("DELETE FROM sitzungen")
 
     # Belege
     def alle_belege(self) -> list[Beleg]:

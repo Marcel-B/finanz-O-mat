@@ -216,6 +216,17 @@ runuser -u finanzomat -- env DATENBANK=/var/lib/finanz-o-mat/finanzomat.sqlite \
   /opt/finanz-o-mat/.venv/bin/python -m ustva passwort
 ```
 
+Angemeldet wird über ein Formular in der App. Danach trägt der Browser ein Sitzungs-Cookie (HttpOnly,
+SameSite=Strict, über HTTPS zusätzlich Secure); in der Datenbank steht nur dessen Hash.
+
+- Eine Sitzung endet nach 8 Stunden ohne Nutzung, spätestens nach 7 Tagen, beim Abmelden (Knopf oben rechts) und
+  sobald sich Benutzer oder Passwort ändern, auch über die Kommandozeile oder die `.env`. Wer das Passwort in der App
+  ändert, bleibt angemeldet; alle anderen Browser müssen sich neu anmelden.
+- Nach 5 falschen Versuchen von einer Adresse innerhalb von 15 Minuten ist die Anmeldung von dort 15 Minuten
+  gesperrt, nach 20 falschen Versuchen insgesamt für alle. Fehlversuche stehen im Log
+  (`journalctl -u finanz-o-mat`). Ein Neustart des Dienstes hebt eine Sperre auf.
+- Ändernde Anfragen von fremden Webseiten lehnt die App ab, die Seiten lassen sich nicht in fremde Seiten einbetten.
+
 ## Tätigkeitsnachweis
 
 Im Reiter „Tätigkeiten“ trägst du je Tag ein, wie viele Stunden du für welchen Auftrag was gemacht hast. Ein neuer

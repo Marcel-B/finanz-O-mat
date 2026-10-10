@@ -1,4 +1,8 @@
 // Typen und Aufrufe der JSON-API des Backends (ustva/web.py)
+import { ref } from "vue";
+
+// false, sobald das Backend „Bitte anmelden“ meldet (Sitzung abgelaufen oder abgemeldet)
+export const angemeldet = ref<boolean | null>(null);
 
 export type Art = "ausgang" | "eingang";
 
@@ -19,6 +23,11 @@ export interface Status {
   verzeichnis: string | null;
   paperless: string | null;
   anmeldung: boolean;
+}
+
+export interface Anmeldung {
+  aktiv: boolean; // ohne Passwort ist die App offen
+  angemeldet: boolean;
 }
 
 export type Herkunft = "app" | "umgebung" | "";
@@ -321,6 +330,7 @@ async function anfrage<T>(pfad: string, optionen: RequestInit = {}): Promise<T> 
     ...optionen,
     headers: { "Content-Type": "application/json", ...(optionen.headers ?? {}) },
   });
+  if (antwort.status === 401 && pfad !== "/api/anmelden") angemeldet.value = false;
   if (!antwort.ok) {
     let text = `Fehler ${antwort.status}`;
     try {
@@ -341,6 +351,9 @@ const post = <T>(pfad: string, daten?: unknown) =>
   anfrage<T>(pfad, { method: "POST", body: daten === undefined ? undefined : JSON.stringify(daten) });
 
 export const api = {
+  anmeldung: () => anfrage<Anmeldung>("/api/anmeldung"),
+  anmelden: (benutzer: string, passwort: string) => post<Anmeldung>("/api/anmelden", { benutzer, passwort }),
+  abmelden: () => post<null>("/api/abmelden"),
   status: () => anfrage<Status>("/api/status"),
   steuerfaelle: () => anfrage<Steuerfall[]>("/api/steuerfaelle"),
   bericht: (zeitraum: string) => anfrage<Bericht>(`/api/bericht/${zeitraum}`),
