@@ -72,7 +72,10 @@ Ohne gebaute Oberfläche läuft nur die API; die Startseite zeigt dann den Build
 ## Monatlicher Ablauf
 
 1. App öffnen. Ausgewählt ist automatisch der Monat, dessen Voranmeldung als Nächstes fällig ist.
-2. „Rechnungen einlesen“ holt neue Belege aus Verzeichnis und Paperless. Schon eingelesene werden übersprungen.
+2. „Rechnungen einlesen“ holt neue Belege aus Verzeichnis und Paperless. Schon eingelesene werden übersprungen,
+   ebenso Dokumente mit einer schon erfassten Rechnung (gleiche Art, Datum, Betrag und Rechnungsnummer, ohne Nummer
+   gleicher Partner), etwa wenn dieselbe Rechnung unter anderem Titel zweimal in Paperless liegt. Die Meldung nennt
+   beide Dokumente. Schon erfasste Doppel zeigt die Monatsansicht als Warnung.
 3. Bezahlte Ausgangsrechnungen unter „Belege ohne Zeitraum“ anklicken und das Zahlungsdatum eintragen.
    Gelb markierte Belege anklicken, mit der Rechnung vergleichen, ggf. korrigieren und speichern (oder „OK“).
 4. Hinweise lesen. Bei Fremdwährungen den BMF-Kurs des Monats eintragen.

@@ -32,7 +32,7 @@ from ..db import Datenbank
 from ..extraktion import erkennen
 from ..models import Beleg
 from ..steuerfaelle import Art, Steuerfall
-from . import ImportErgebnis, beleg_aus_erkennung
+from . import ImportErgebnis, beleg_aus_erkennung, speichern
 
 log = logging.getLogger(__name__)
 
@@ -129,6 +129,7 @@ def importieren(db: Datenbank, cfg: Config, verzeichnis: Path | None = None) -> 
         ergebnis.fehler.append(f"Verzeichnis nicht gefunden: {verzeichnis}")
         return ergebnis
 
+    vorhandene = db.alle_belege()
     for pfad in sorted(verzeichnis.rglob("*")):
         if not pfad.is_file() or pfad.suffix.lower() not in ENDUNGEN:
             continue
@@ -142,9 +143,7 @@ def importieren(db: Datenbank, cfg: Config, verzeichnis: Path | None = None) -> 
             ergebnis.vorhanden += 1
             continue
         try:
-            for beleg in datei_belege(pfad, relativ, art, cfg, summe):
-                db.beleg_anlegen(beleg)
-            ergebnis.neu += 1
+            speichern(db, datei_belege(pfad, relativ, art, cfg, summe), vorhandene, ergebnis, str(relativ))
         except Exception as e:  # eine kaputte Datei soll den Import nicht abbrechen
             log.exception("Fehler beim Einlesen von %s", pfad)
             ergebnis.fehler.append(f"{relativ}: {e}")

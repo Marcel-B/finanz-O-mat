@@ -75,7 +75,7 @@ def test_verzeichnis_import(tmp_path, db, umrechner):
     assert verzeichnis.importieren(db, cfg).vorhanden == 3
 
 
-def _paperless_transport():
+def _paperless_transport(*weitere: dict):
     dokumente = [
         {"id": 11, "title": "OpenAI September", "content": beispiele.OPENAI, "created": "2026-09-03",
          "correspondent": 1, "document_type": 1, "tags": [1], "custom_fields": [{"field": 1, "value": "USD20.00"}]},
@@ -84,6 +84,7 @@ def _paperless_transport():
          "correspondent": 2, "document_type": 1, "tags": [2], "custom_fields": []},
         {"id": 13, "title": "Kontoauszug", "content": "Saldo 1.000,00", "created": "2026-09-30",
          "correspondent": None, "document_type": 2, "tags": [], "custom_fields": []},
+        *weitere,
     ]
     listen = {
         "/api/tags/": [{"id": 1, "name": "Eingangsrechnung"}, {"id": 2, "name": "Ausgangsrechnung"}],
@@ -197,3 +198,18 @@ def test_paperless_fehlertext_mit_detail(db):
     cfg = Config(paperless_url="http://paperless.local", paperless_token="t")
     ergebnis = paperless.importieren(db, cfg, 2026, 9, httpx.Client(transport=transport))
     assert ergebnis.fehler == ['Paperless antwortet mit Fehler 406: Invalid version in "Accept" header.']
+
+
+def test_paperless_import_erkennt_dieselbe_rechnung_unter_anderem_titel(db):
+    # Gleicher Inhalt, andere Datei und anderer Titel, z. B. einmal per Mail, einmal aus sevDesk
+    kopie = {"id": 14, "title": "invoice_openai.pdf", "content": beispiele.OPENAI, "created": "2026-09-04",
+             "correspondent": 1, "document_type": 1, "tags": [1], "custom_fields": [{"field": 1, "value": "USD20.00"}]}
+    transport, _ = _paperless_transport(kopie)
+    cfg = Config(paperless_url="http://paperless.local", paperless_token="geheim", eigene_ustid="DE123456789")
+    ergebnis = paperless.importieren(db, cfg, 2026, 9, httpx.Client(transport=transport))
+    assert (ergebnis.neu, ergebnis.fehler) == (2, [])
+    assert [b.quelle_ref for b in db.alle_belege()] == ["11", "12"]
+    assert len(ergebnis.doppelt) == 1
+    assert ergebnis.doppelt[0].startswith("Dokument 14 (invoice_openai.pdf) nicht übernommen")
+    assert "(Paperless-Dokument 11)" in ergebnis.doppelt[0]
+    assert ergebnis.to_dict()["doppelt"] == ergebnis.doppelt

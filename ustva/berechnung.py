@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 
+from .doppelt import beschreibung, doppel, herkunft
 from .models import Beleg
 from .steuerfaelle import KENNZAHLEN, STEUERFAELLE, Art, Steuerfall
 from .waehrung import KursFehlt, Umrechner
@@ -265,6 +266,17 @@ def berechnen(
             f"{len(fehlerhaft)} Beleg(e) konnten nicht berücksichtigt werden. Die Werte sind unvollständig, "
             "bitte die markierten Belege korrigieren.",
         ))
+    gezaehlt: list[Beleg] = []
+    for z in zeilen:
+        if z.beleg.steuerfall == Steuerfall.IGNORIEREN:
+            continue
+        if alt := doppel(z.beleg, gezaehlt):
+            hinweise.append(Hinweis(
+                "warnung",
+                f"Doppelt erfasst? {beschreibung(z.beleg)} ({herkunft(alt)} und {herkunft(z.beleg)}). "
+                "Ist es dieselbe Rechnung, einen der Belege löschen, sonst zählt die Steuer doppelt.",
+            ))
+        gezaehlt.append(z.beleg)
     zu_pruefen = [z for z in zeilen if z.beleg.pruefen and z.beleg.steuerfall != Steuerfall.IGNORIEREN]
     if zu_pruefen:
         hinweise.append(Hinweis(
