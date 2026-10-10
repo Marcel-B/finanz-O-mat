@@ -21,3 +21,20 @@ export const ausIso = (iso: string | null | undefined): Date | null => {
 };
 
 export const zeitraumVon = (d: Date): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+
+// Volltextsuche in einer Liste: Jedes eingegebene Wort muss irgendwo vorkommen. Beträge findet man
+// auch in deutscher Schreibweise ("62,89", "1.234,56"), Daten auch als TT.MM.JJJJ.
+export function suchtext(...werte: unknown[]): string {
+  const teile: string[] = [];
+  for (const wert of werte.flat()) {
+    if (wert == null || wert === "") continue;
+    const s = String(wert);
+    teile.push(s);
+    if (/^-?\d+(\.\d+)?$/.test(s)) teile.push(betrag(s), s.replace(".", ","));
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) teile.push(datum(s));
+  }
+  return teile.join(" ").toLowerCase();
+}
+
+export const passtZurSuche = (text: string, suche: string): boolean =>
+  suche.toLowerCase().split(/\s+/).filter(Boolean).every((wort) => text.includes(wort));
