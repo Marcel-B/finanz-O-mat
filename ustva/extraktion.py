@@ -359,10 +359,9 @@ HINWEIS_AUSL_STEUER = ("Ausländischer Anbieter mit ausgewiesener Steuer: Ist es
 
 def hinweis_eu_steuer(e: Erkennung) -> str:
     betrag = f" ({e.steuer:.2f} {e.waehrung})".replace(".", ",") if e.steuer else ""
-    return (f"Der Anbieter aus dem EU-Ausland ({e.partner_ustid}) hat Umsatzsteuer berechnet{betrag}. Für "
-            "Leistungen an dich als Unternehmer schuldest du die Steuer selbst (§ 13b, Kz 46/47, Vorsteuer in "
-            "Kz 67); die ausgewiesene Steuer ist nicht als Vorsteuer abziehbar. Hinterlege deine USt-IdNr. beim "
-            "Anbieter und fordere eine korrigierte Rechnung an.")
+    return (f"Anbieter aus dem EU-Ausland ({e.partner_ustid}) mit ausgewiesener Umsatzsteuer{betrag}, als "
+            "Vorsteuer (Kz 66) vorgeschlagen. Streng genommen gilt für Leistungen an Unternehmer § 13b; mit "
+            "deiner USt-IdNr. beim Anbieter kommen künftige Rechnungen ohne Steuer.")
 
 
 def steuerfall_vorschlagen(e: Erkennung) -> Steuerfall | None:
@@ -371,15 +370,17 @@ def steuerfall_vorschlagen(e: Erkennung) -> Steuerfall | None:
     fremdwaehrung = e.waehrung != "EUR"
 
     if e.art == Art.EINGANG:
-        if hat_steuer and not e.reverse_charge and eu_fremd and not e.partner_de_ustid:
-            # Typisch, wenn beim Anbieter keine USt-IdNr. hinterlegt ist: Er behandelt dich wie eine Privatperson.
-            hinweis = hinweis_eu_steuer(e)
-            if hinweis not in e.hinweise:
-                e.hinweise.append(hinweis)
-            return Steuerfall.EU_LEISTUNG_13B
         if hat_steuer and not e.reverse_charge:
-            if (fremdwaehrung or e.drittland) and HINWEIS_AUSL_STEUER not in e.hinweise:
-                e.hinweise.append(HINWEIS_AUSL_STEUER)
+            # Marcels Entscheidung (10.10.2026): ausgewiesene Steuer eines EU-Anbieters wie bisher in sevDesk
+            # als Vorsteuer buchen, nur mit Hinweis. Typisch, wenn beim Anbieter keine USt-IdNr. hinterlegt ist.
+            if eu_fremd and not e.partner_de_ustid:
+                hinweis = hinweis_eu_steuer(e)
+            elif fremdwaehrung or e.drittland:
+                hinweis = HINWEIS_AUSL_STEUER
+            else:
+                hinweis = ""
+            if hinweis and hinweis not in e.hinweise:
+                e.hinweise.append(hinweis)
             return Steuerfall.VORSTEUER_INLAND
         if eu_fremd:
             return Steuerfall.EU_LEISTUNG_13B
