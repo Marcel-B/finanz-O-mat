@@ -106,3 +106,10 @@ def test_mehrere_steuersaetze_bleiben_erhalten():
     b = beleg_aus_erkennung(e, Art.EINGANG)
     assert b.steuer == D("13.00")
     assert any("Mehrere Steuersätze" in h for h in b.hinweise)
+
+
+@pytest.mark.parametrize("layout", sorted(beispiele.HETZNER))
+def test_hetzner_tabelle_in_jedem_textlayout(layout):
+    e = erkennen(beispiele.HETZNER[layout], Art.EINGANG, "DE123456789")
+    assert (e.netto, e.steuer, e.brutto) == (D("14.19"), D("2.70"), D("16.89"))
+    assert e.steuersatz == D("19")

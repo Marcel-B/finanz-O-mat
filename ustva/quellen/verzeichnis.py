@@ -104,6 +104,24 @@ def _belege_aus_datei(pfad: Path, art: Art, cfg: Config) -> list[Beleg]:
     return [beleg]
 
 
+def pruefsumme(pfad: Path) -> str:
+    return hashlib.sha256(pfad.read_bytes()).hexdigest()
+
+
+def datei_belege(pfad: Path, relativ: Path, art: Art, cfg: Config, summe: str) -> list[Beleg]:
+    """Alle Belege einer Datei, fertig zum Speichern."""
+    belege = _belege_aus_datei(pfad, art, cfg)
+    zusatz = pfad.with_name(pfad.name + ".json")
+    daten = json.loads(zusatz.read_text(encoding="utf-8")) if zusatz.is_file() else None
+    for i, beleg in enumerate(belege):
+        # Weitere Steuerposten derselben Rechnung bekommen eine eigene Referenz.
+        beleg.quelle, beleg.quelle_ref = "verzeichnis", summe if i == 0 else f"{summe}#{i + 1}"
+        beleg.quelle_link, beleg.beschreibung = relativ.as_posix(), beleg.beschreibung or pfad.name
+        if daten:
+            zusatzangaben_anwenden(beleg, daten)
+    return belege
+
+
 def importieren(db: Datenbank, cfg: Config, verzeichnis: Path | None = None) -> ImportErgebnis:
     verzeichnis = verzeichnis or cfg.rechnungs_verzeichnis
     ergebnis = ImportErgebnis()
@@ -119,20 +137,12 @@ def importieren(db: Datenbank, cfg: Config, verzeichnis: Path | None = None) -> 
         if art is None:
             ergebnis.uebersprungen += 1
             continue
-        pruefsumme = hashlib.sha256(pfad.read_bytes()).hexdigest()
-        if db.beleg_vorhanden("verzeichnis", pruefsumme):
+        summe = pruefsumme(pfad)
+        if db.beleg_vorhanden("verzeichnis", summe):
             ergebnis.vorhanden += 1
             continue
         try:
-            belege = _belege_aus_datei(pfad, art, cfg)
-            zusatz = pfad.with_name(pfad.name + ".json")
-            daten = json.loads(zusatz.read_text(encoding="utf-8")) if zusatz.is_file() else None
-            for i, beleg in enumerate(belege):
-                # Weitere Steuerposten derselben Rechnung bekommen eine eigene Referenz.
-                beleg.quelle, beleg.quelle_ref = "verzeichnis", pruefsumme if i == 0 else f"{pruefsumme}#{i + 1}"
-                beleg.quelle_link, beleg.beschreibung = relativ.as_posix(), beleg.beschreibung or pfad.name
-                if daten:
-                    zusatzangaben_anwenden(beleg, daten)
+            for beleg in datei_belege(pfad, relativ, art, cfg, summe):
                 db.beleg_anlegen(beleg)
             ergebnis.neu += 1
         except Exception as e:  # eine kaputte Datei soll den Import nicht abbrechen

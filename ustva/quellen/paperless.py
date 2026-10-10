@@ -122,6 +122,18 @@ class PaperlessClient:
         antwort.raise_for_status()
         return antwort.content
 
+    def dokument(self, dok_id: int) -> dict:
+        try:
+            antwort = self._get(f"{self.url}/api/documents/{dok_id}/")
+            antwort.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise PaperlessFehler(f"Dokument {dok_id} gibt es in Paperless nicht mehr") from e
+            raise PaperlessFehler(_fehlertext(e.response)) from e
+        except httpx.HTTPError as e:
+            raise PaperlessFehler(f"Paperless nicht erreichbar: {e}") from e
+        return antwort.json()
+
     def dokumente(self, von: date, bis_exklusiv: date) -> list[dict]:
         return self._alle("/api/documents/", {
             "created__gte": von.isoformat(),
@@ -175,41 +187,48 @@ def importieren(
             ergebnis.vorhanden += 1
             continue
         try:
-            werte = {felder.get(f["field"], "").lower(): f.get("value") for f in dok.get("custom_fields", [])}
-            gemeinsam = {
-                "quelle": "paperless",
-                "quelle_link": f"{cfg.paperless_url}/documents/{dok['id']}/details",
-                "beschreibung": dok.get("title") or "",
-            }
-            zahlung = _datum(werte.get(cfg.paperless_feld_zahlungsdatum.lower()))
-            if e_belege := _erechnung(pl, dok, art, cfg):
-                for i, beleg in enumerate(e_belege):
-                    for name, wert in gemeinsam.items():
-                        setattr(beleg, name, wert)
-                    beleg.quelle_ref = ref if i == 0 else f"{ref}#{i + 1}"
-                    if korrespondent := korrespondenten.get(dok.get("correspondent")):
-                        beleg.partner = korrespondent
-                    beleg.zahlungsdatum = zahlung
-                    beleg.rechnungsdatum = beleg.rechnungsdatum or _datum(dok.get("created"))
-                    db.beleg_anlegen(beleg)
-                ergebnis.neu += 1
-                continue
-            erkennung = erkennen(dok.get("content") or "", art, cfg.eigene_ustid)
-            _felder_uebernehmen(erkennung, werte, cfg)
-            beleg = beleg_aus_erkennung(
-                erkennung, art, quelle_ref=ref,
-                partner=korrespondenten.get(dok.get("correspondent"), "") if dok.get("correspondent") else "",
-                **gemeinsam,
-            )
-            if zahlung:
-                beleg.zahlungsdatum = zahlung
-            if beleg.rechnungsdatum is None:
-                beleg.rechnungsdatum = _datum(dok.get("created"))
-            db.beleg_anlegen(beleg)
+            for beleg in dokument_belege(pl, dok, art, cfg, felder, korrespondenten):
+                db.beleg_anlegen(beleg)
             ergebnis.neu += 1
         except Exception as e:  # ein fehlerhaftes Dokument soll den Import nicht abbrechen
             ergebnis.fehler.append(f"Dokument {dok.get('id')} ({dok.get('title')}): {e}")
     return ergebnis
+
+
+def dokument_belege(
+    pl: PaperlessClient, dok: dict, art: Art, cfg: Config, felder: dict[int, str], korrespondenten: dict[int, str]
+) -> list:
+    """Alle Belege eines Paperless-Dokuments, fertig zum Speichern."""
+    ref = str(dok["id"])
+    werte = {felder.get(f["field"], "").lower(): f.get("value") for f in dok.get("custom_fields", [])}
+    gemeinsam = {
+        "quelle": "paperless",
+        "quelle_link": f"{cfg.paperless_url}/documents/{dok['id']}/details",
+        "beschreibung": dok.get("title") or "",
+    }
+    zahlung = _datum(werte.get(cfg.paperless_feld_zahlungsdatum.lower()))
+    if e_belege := _erechnung(pl, dok, art, cfg):
+        for i, beleg in enumerate(e_belege):
+            for name, wert in gemeinsam.items():
+                setattr(beleg, name, wert)
+            beleg.quelle_ref = ref if i == 0 else f"{ref}#{i + 1}"
+            if korrespondent := korrespondenten.get(dok.get("correspondent")):
+                beleg.partner = korrespondent
+            beleg.zahlungsdatum = zahlung
+            beleg.rechnungsdatum = beleg.rechnungsdatum or _datum(dok.get("created"))
+        return e_belege
+    erkennung = erkennen(dok.get("content") or "", art, cfg.eigene_ustid)
+    _felder_uebernehmen(erkennung, werte, cfg)
+    beleg = beleg_aus_erkennung(
+        erkennung, art, quelle_ref=ref,
+        partner=korrespondenten.get(dok.get("correspondent"), "") if dok.get("correspondent") else "",
+        **gemeinsam,
+    )
+    if zahlung:
+        beleg.zahlungsdatum = zahlung
+    if beleg.rechnungsdatum is None:
+        beleg.rechnungsdatum = _datum(dok.get("created"))
+    return [beleg]
 
 
 def _erechnung(pl: PaperlessClient, dok: dict, art: Art, cfg: Config) -> list | None:

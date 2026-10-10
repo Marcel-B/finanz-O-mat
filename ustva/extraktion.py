@@ -182,6 +182,24 @@ def _betraege(zeile: str) -> list[Decimal]:
     return werte
 
 
+def _beschriftung(zeile: str) -> str | None:
+    if SCHLUESSEL_NETTO.search(zeile):
+        return "netto"
+    if SCHLUESSEL_BRUTTO.search(zeile):
+        return "brutto"
+    if (SCHLUESSEL_STEUER.search(zeile) and not SCHLUESSEL_KEINE_STEUER.search(zeile)
+            and not RE_USTID.search(zeile)):
+        return "steuer"
+    if SCHLUESSEL_SUMME.search(zeile):
+        return "summe"
+    return None
+
+
+def _nur_betrag(zeile: str) -> bool:
+    """Zeile mit genau einem Betrag und höchstens einer Fußnote wie "A1"."""
+    return len(_betraege(zeile)) == 1 and len(re.sub(r"[\d.,'€$£\s−-]|EUR|USD|CHF|GBP", "", zeile)) <= 3
+
+
 def _tabellenzeile(werte: list[Decimal]) -> tuple[Decimal, Decimal, Decimal] | None:
     """Drei aufeinanderfolgende Beträge Netto, Steuer, Brutto mit Netto + Steuer = Brutto."""
     for i in range(len(werte) - 2):
@@ -250,26 +268,41 @@ def erkennen(text: str, art: Art | None = None, eigene_ustid: str = "") -> Erken
                 e.rechnungsdatum = d[0]
                 break
 
-    # Beträge aus beschrifteten Zeilen; die jeweils letzte Fundstelle gewinnt
+    # Beträge aus beschrifteten Zeilen; die jeweils letzte Fundstelle gewinnt. Steht die Beschriftung
+    # allein in einer Zeile (Tabellenzellen untereinander), gilt sie für den Betrag in der nächsten.
+    vorige: str | None = None
     for z in zeilen:
         werte = _betraege(z)
+        beschriftung = _beschriftung(z)
         if not werte:
+            vorige = beschriftung if len(z) <= 30 else None
             continue
+        if beschriftung is None and vorige and _nur_betrag(z):
+            beschriftung = vorige
+        vorige = None
         letzter = werte[-1]
-        if SCHLUESSEL_NETTO.search(z):
+        if beschriftung == "netto":
             e.netto = letzter
-        elif SCHLUESSEL_BRUTTO.search(z):
+        elif beschriftung in ("brutto", "summe"):
             e.brutto = letzter
-        elif SCHLUESSEL_STEUER.search(z) and not SCHLUESSEL_KEINE_STEUER.search(z) and not RE_USTID.search(z):
+        elif beschriftung == "steuer":
             e.steuer = letzter
             if s := RE_SATZ.search(z):
                 e.steuersatz = Decimal(s.group(1))
-        elif SCHLUESSEL_SUMME.search(z):
-            e.brutto = letzter
 
     # Tabellen wie "Summe 14,19 € 2,70 € 16,89 €" sind eindeutiger als einzelne Schlüsselwörter;
-    # die Zeile mit dem größten Bruttobetrag ist die Gesamtsumme.
-    tabelle = max((t for z in zeilen if (t := _tabellenzeile(_betraege(z)))), key=lambda t: t[2], default=None)
+    # die Zeile mit dem größten Bruttobetrag ist die Gesamtsumme. Steht jede Zelle in einer eigenen
+    # Zeile, bilden aufeinanderfolgende reine Betragszeilen die Tabellenzeile.
+    folgen = [_betraege(z) for z in zeilen]
+    lauf: list[Decimal] = []
+    for z in zeilen:
+        if _nur_betrag(z):
+            lauf += _betraege(z)
+        elif lauf:
+            folgen.append(lauf)
+            lauf = []
+    folgen.append(lauf)
+    tabelle = max((t for werte in folgen if (t := _tabellenzeile(werte))), key=lambda t: t[2], default=None)
     if tabelle:
         e.netto, e.steuer, e.brutto = tabelle
 

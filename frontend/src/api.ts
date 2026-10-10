@@ -149,6 +149,12 @@ export interface ImportErgebnis {
   fehler: string[];
 }
 
+export interface NeuEingelesen {
+  aktualisiert: number;
+  neu: number;
+  fehler: string[];
+}
+
 export interface Monat {
   zeitraum: string;
   monat: string;
@@ -216,6 +222,7 @@ export const api = {
     anfrage<Beleg>(`/api/belege/${id}`, { method: "PUT", body: JSON.stringify(b) }),
   belegGeprueft: (id: number) => post<Beleg>(`/api/belege/${id}/geprueft`),
   belegLoeschen: (id: number) => anfrage<null>(`/api/belege/${id}`, { method: "DELETE" }),
+  belegeNeuEinlesen: (ids?: number[]) => post<NeuEingelesen>("/api/belege/neu-einlesen", { ids: ids ?? null }),
   einlesen: (zeitraum: string) => post<Record<string, ImportErgebnis>>("/api/import", { quelle: "alle", zeitraum }),
   bankImport: (csv: string) =>
     anfrage<ImportErgebnis>("/api/import/bank", { method: "POST", body: csv, headers: { "Content-Type": "text/csv" } }),
