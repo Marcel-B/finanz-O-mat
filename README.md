@@ -156,6 +156,19 @@ Eingelesen werden Dokumente, deren Datum im gewählten Monat oder in den beiden 
 Bei PDF-Dokumenten lädt die App die Originaldatei und liest eine eingebettete ZUGFeRD-/Factur-X-Rechnung aus;
 deren Angaben haben dann Vorrang vor Feldern und OCR-Text (Korrespondent und Zahlungsdatum aus Paperless bleiben).
 
+**Doppelte Rechnungen** (z. B. einmal aus der Mail, einmal von Hand oder aus sevDesk) erkennt Paperless nur, wenn die
+Dateien byte-gleich sind. finanz-O-mat übernimmt so eine Rechnung beim Einlesen nur einmal und meldet den Rest.
+Aufräumen in Paperless:
+
+```sh
+finanz-o-mat paperless duplikate             # Liste: welche Rechnung mehrfach liegt, was behalten, was gelöscht würde
+finanz-o-mat paperless duplikate --loeschen  # dieselbe Liste, nach Rückfrage löschen
+```
+
+Erkannt wird wie beim Einlesen an Art, Datum, Betrag und Rechnungsnummer (ohne Nummer am Partner), außerdem an
+gleichem Text. Behalten wird das Dokument, auf das ein Beleg in finanz-O-mat verweist, sonst das älteste; es bekommt
+die Tags der anderen. Gelöschtes landet im Papierkorb von Paperless. Mit `--von 2026-01` nur neuere Dokumente.
+
 Rechnungen automatisch aus dem Postfach und aus einem Nextcloud-Ordner nach Paperless holen:
 [deploy/paperless-eingang](deploy/paperless-eingang/README.md).
 
