@@ -679,6 +679,7 @@ def importieren(
     db: Datenbank, cfg: Config, sicherung: Quelle, *, trocken: bool = False, paperless_nutzen: bool = True,
     von: str | None = None, bis: str | None = None, warten: float = 300, client: httpx.Client | None = None,
     schlafen: Callable[[float], None] = time.sleep, uhr: Callable[[], float] = time.monotonic,
+    fortschritt: Callable[[str], None] | None = None,
 ) -> Uebernahme:
     """Übernimmt die Belege aus Sicherung oder Export; ``von``/``bis`` als JJJJ-MM (Rechnungsdatum)."""
     erg = Uebernahme()
@@ -698,8 +699,12 @@ def importieren(
             erg.fehler.append(str(e))
             return erg
 
+    melden = fortschritt or (lambda _text: None)
     offen: list[tuple[Kandidat, str]] = []
-    for k in sicherung.kandidaten():
+    alle = sicherung.kandidaten()
+    for nr, k in enumerate(alle, 1):
+        if nr % 10 == 0:
+            melden(f"{nr} von {len(alle)} Belegen verarbeitet")
         if k.grund:
             erg.uebersprungen[k.grund] += 1
             continue
@@ -741,6 +746,7 @@ def importieren(
     # Paperless verarbeitet die Dateien im Hintergrund (OCR); die Belege entstehen, sobald die Dokument-ID da ist.
     ende = uhr() + warten
     while offen:
+        melden(f"Paperless verarbeitet noch {len(offen)} Datei(en)")
         noch: list[tuple[Kandidat, str]] = []
         for k, task in offen:
             assert ablage is not None

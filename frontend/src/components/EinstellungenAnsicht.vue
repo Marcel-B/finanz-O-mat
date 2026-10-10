@@ -11,6 +11,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { api, type Einstellungen, type Herkunft } from "@/api";
 
 import BackupKarte from "./BackupKarte.vue";
+import SevdeskImportKarte from "./SevdeskImportKarte.vue";
 import KarteBox from "./KarteBox.vue";
 import VersionKarte from "./VersionKarte.vue";
 
@@ -286,5 +287,6 @@ async function passwortSpeichern() {
 
     <VersionKarte />
     <BackupKarte />
+    <SevdeskImportKarte />
   </div>
 </template>

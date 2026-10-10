@@ -217,9 +217,10 @@ runuser -u finanzomat -- env DATENBANK=/var/lib/finanz-o-mat/finanzomat.sqlite \
 
 ## Umzug aus sevDesk
 
-`finanz-o-mat sevdesk importieren|abgleich` übernimmt die Export-Dateien der sevDesk-Oberfläche (oder eine
-Sicherung über die API mit `sevdesk sichern`), legt die Dateien in Paperless ab, übernimmt die Buchungen als
-geprüfte Belege und vergleicht die Zahllast je Monat mit den abgegebenen Voranmeldungen.
+Unter Einstellungen > „Umzug aus sevDesk“ den Export-Ordner aus sevDesk hineinziehen, den Probelauf ansehen und
+übernehmen: Die Dateien kommen nach Paperless, die Buchungen als geprüfte Belege in die App, Kunden und Lieferanten
+ins Adressbuch, und die Zahllast je Monat steht neben der abgegebenen. Auf der Kommandozeile geht dasselbe mit
+`finanz-o-mat sevdesk importieren|abgleich` (auch mit einer Sicherung über die API, `sevdesk sichern`).
 Anleitung: [docs/sevdesk-migration.md](docs/sevdesk-migration.md).
 
 ## Annahmen und Grenzen
