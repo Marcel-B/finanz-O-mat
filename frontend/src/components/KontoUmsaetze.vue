@@ -1,8 +1,8 @@
 <script setup lang="ts">
+import AutoComplete from "primevue/autocomplete";
 import Button from "primevue/button";
 import Column from "primevue/column";
 import DataTable from "primevue/datatable";
-import Select from "primevue/select";
 import Tag from "primevue/tag";
 import { useToast } from "primevue/usetoast";
 import { reactive, ref } from "vue";
@@ -18,8 +18,7 @@ const toast = useToast();
 
 const datei = ref<HTMLInputElement | null>(null);
 const laedtHoch = ref(false);
-const kandidaten = reactive<Record<number, BelegKurz[] | undefined>>({});
-const laedt = reactive<Record<number, boolean>>({});
+const kandidaten = reactive<Record<number, BelegKurz[]>>({});
 
 async function hochladen(event: Event) {
   const eingabe = event.target as HTMLInputElement;
@@ -47,22 +46,27 @@ function fehler(e: unknown) {
   toast.add({ severity: "error", summary: "Fehler", detail: (e as Error).message, life: 6000 });
 }
 
-// Erst beim Aufklappen laden. Das Select darf dabei nicht von Anfang an "loading" sein: PrimeVue lässt sich
-// dann nicht öffnen, und ohne Öffnen wird nie geladen.
-async function kandidatenLaden(u: Umsatz) {
-  if (kandidaten[u.id] || laedt[u.id]) return;
-  laedt[u.id] = true;
+// Die Suche läuft auf dem Server über alle Belege; jedes Aufklappen lädt neu, damit gerade
+// angelegte oder korrigierte Belege auftauchen.
+async function suchen(u: Umsatz, suche: string) {
   try {
-    kandidaten[u.id] = await api.kandidaten(u.id);
+    kandidaten[u.id] = await api.kandidaten(u.id, suche.trim());
   } catch (e) {
+    kandidaten[u.id] = [];
     fehler(e);
-  } finally {
-    laedt[u.id] = false;
   }
 }
 
 const kandidatLabel = (b: BelegKurz) =>
-  `${datum(b.rechnungsdatum)} · ${b.partner || b.beschreibung || "Beleg"} · ${betrag(b.zahlbetrag)} ${b.waehrung}`;
+  [
+    datum(b.rechnungsdatum),
+    b.partner || b.beschreibung || "Beleg",
+    b.rechnungsnummer,
+    `${betrag(b.zahlbetrag)} ${b.waehrung}`,
+    b.zugeordnet && `schon bei Umsatz vom ${datum(b.zugeordnet)}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
 async function aktion(fn: () => Promise<unknown>) {
   try {
@@ -152,20 +156,19 @@ const rueckgaengig = (u: Umsatz) => aktion(() => api.ignorieren(u.id, { ignorier
               @click="rueckgaengig(data)"
             />
             <template v-else>
-              <Select
+              <AutoComplete
                 size="small"
                 class="w-60"
-                placeholder="Beleg zuordnen …"
-                :options="kandidaten[data.id] ?? []"
+                input-class="w-full"
+                placeholder="Beleg suchen …"
+                dropdown
+                :min-length="0"
+                :suggestions="kandidaten[data.id] ?? []"
                 :option-label="kandidatLabel"
-                option-value="id"
-                :loading="laedt[data.id]"
-                :empty-message="kandidaten[data.id] ? 'Keine offenen Belege' : 'Lade Belege …'"
-                filter
-                filter-placeholder="Suchen"
-                :empty-filter-message="'Kein Beleg gefunden'"
-                @show="kandidatenLaden(data)"
-                @update:model-value="(id: number) => zuordnen(data, id)"
+                option-disabled="zugeordnet"
+                empty-search-message="Kein offener Beleg gefunden"
+                @complete="(e: { query: string }) => suchen(data, e.query)"
+                @option-select="(e: { value: BelegKurz }) => zuordnen(data, e.value.id)"
               />
               <Button size="small" severity="secondary" label="Kein Beleg nötig" @click="ignorieren(data)" />
               <Button

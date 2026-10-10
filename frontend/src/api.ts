@@ -104,6 +104,7 @@ export interface BelegKurz {
   rechnungsdatum: string | null;
   zahlbetrag: string;
   waehrung: string;
+  zugeordnet?: string; // Buchungsdatum des Umsatzes, an dem der Beleg schon hängt
 }
 
 export interface Umsatz {
@@ -228,7 +229,8 @@ export const api = {
   einlesen: (zeitraum: string) => post<Record<string, ImportErgebnis>>("/api/import", { quelle: "alle", zeitraum }),
   bankImport: (csv: string) =>
     anfrage<ImportErgebnis>("/api/import/bank", { method: "POST", body: csv, headers: { "Content-Type": "text/csv" } }),
-  kandidaten: (umsatzId: number) => anfrage<BelegKurz[]>(`/api/umsaetze/${umsatzId}/kandidaten`),
+  kandidaten: (umsatzId: number, suche = "") =>
+    anfrage<BelegKurz[]>(`/api/umsaetze/${umsatzId}/kandidaten?suche=${encodeURIComponent(suche)}`),
   zuordnen: (umsatzId: number, belegId: number | null) =>
     post<Umsatz>(`/api/umsaetze/${umsatzId}/zuordnen`, { beleg_id: belegId }),
   ignorieren: (umsatzId: number, daten: { ignoriert?: boolean; grund?: string; regel?: boolean }) =>

@@ -185,3 +185,45 @@ def test_fremdwaehrung_ohne_belegkurs_nutzt_monatskurs(umrechner):
     assert bank.passt_betrag(u, b, euro) == "ungefaehr"
     assert bank.kosten_geldverkehr(u, b, euro) == D("0.76")
     assert bank.passt_betrag(u, b) is None  # ohne Kurs kein Vergleich
+
+
+# Claude-Abo: Beleg mit Reverse Charge, Abbuchung am Folgetag
+N26_ANTHROPIC = N26_NEU.splitlines()[0] + """
+"2026-08-18","2026-08-18","ANTHROPIC* CLAUDE SUB","","Presentment","","Hauptkonto","-18.00","","",""
+"2026-09-18","2026-09-18","ANTHROPIC* CLAUDE SUB","","Presentment","","Hauptkonto","-18.00","","",""
+"""
+
+ANTHROPIC = {"art": "eingang", "steuerfall": "eu_leistung_13b", "netto": "18.00", "steuersatz": "19",
+             "partner": "Anthropic Ireland, Limited", "rechnungsnummer": "Invoice-9BF0758D-6257024"}
+
+
+def test_beleg_ohne_datum_nachgetragen_wird_zugeordnet(client, db):
+    client.post("/api/import/bank", content=N26_ANTHROPIC.encode(), headers={"Content-Type": "text/csv"})
+    sept = next(u for u in db.alle_umsaetze() if u.buchungsdatum == date(2026, 9, 18))
+    beleg = client.post("/api/belege", json={**ANTHROPIC, "rechnungsdatum": None}).json()
+    assert db.umsatz(sept.id).beleg_id is None  # ohne Datum keine automatische Zuordnung ...
+    kandidaten = client.get(f"/api/umsaetze/{sept.id}/kandidaten").json()
+    assert beleg["id"] in [k["id"] for k in kandidaten]  # ... aber in der Auswahl
+
+    client.put(f"/api/belege/{beleg['id']}", json={**ANTHROPIC, "rechnungsdatum": "2026-09-17"})
+    assert db.umsatz(sept.id).beleg_id == beleg["id"]
+
+
+def test_kandidaten_suche_und_schon_zugeordnete(client, db):
+    client.post("/api/import/bank", content=N26_ANTHROPIC.encode(), headers={"Content-Type": "text/csv"})
+    aug, sept = db.alle_umsaetze()
+    beleg_id = client.post("/api/belege", json={**ANTHROPIC, "rechnungsdatum": "2026-09-17"}).json()["id"]
+    for i in range(40):  # mehr Belege, als die Liste ohne Suche zeigt
+        client.post("/api/belege", json={"art": "eingang", "steuerfall": "vorsteuer_inland", "netto": "10",
+                                         "steuer": "1.90", "rechnungsdatum": "2026-09-01", "partner": f"Laden {i}"})
+    assert db.umsatz(sept.id).beleg_id == beleg_id
+
+    # Am August-Umsatz taucht der September-Beleg auf, ist aber als schon zugeordnet markiert.
+    [k] = client.get(f"/api/umsaetze/{aug.id}/kandidaten", params={"suche": "anthropic"}).json()
+    assert (k["id"], k["zugeordnet"]) == (beleg_id, "2026-09-18")
+    [k] = client.get(f"/api/umsaetze/{aug.id}/kandidaten", params={"suche": "6257024 18,00"}).json()
+    assert k["id"] == beleg_id
+
+    treffer = client.get(f"/api/umsaetze/{aug.id}/kandidaten", params={"suche": "Laden 39"}).json()
+    assert [k["partner"] for k in treffer] == ["Laden 39"]
+    assert len(client.get(f"/api/umsaetze/{aug.id}/kandidaten").json()) == 30
