@@ -311,6 +311,7 @@ export interface DruckBeleg {
   gedruckt: string;
   grund: string; // warum nicht druckbar; leer = druckbar
   fehler: string; // warum er beim letzten Druck nicht ins PDF kam
+  zeitraum: string | null; // Monat seiner Voranmeldung (JJJJ-MM); anderer Monat = nur hier abgebucht
 }
 
 // Öffnet die Belege des Monats als ein PDF in einem neuen Tab. Ein Formular statt fetch, damit der Browser das
