@@ -596,17 +596,23 @@ class PaperlessAblage:
         """Startet die Verarbeitung in Paperless und gibt die Aufgaben-ID zurück."""
         b = k.belege[0]
         tag_art = (self.cfg.paperless_tags_ausgang if b.art == Art.AUSGANG else self.cfg.paperless_tags_eingang)[0]
-        daten: dict = {
-            "title": k.titel,
-            "tags": [str(self._id(self.tags, "/api/tags/", t)) for t in (tag_art, "sevDesk")],
-        }
-        if b.rechnungsdatum:
-            daten["created"] = b.rechnungsdatum.isoformat()
-        if b.partner:
-            daten["correspondent"] = str(self._id(self.korrespondenten, "/api/correspondents/", b.partner))
         assert k.datei is not None
-        dateien = {"document": (k.datei.name, k.datei.read_bytes())}
-        antwort = self._post("/api/documents/post_document/", data=daten, files=dateien)
+        return self.dokument_hochladen(k.datei.name, k.datei.read_bytes(), k.titel, [tag_art, "sevDesk"],
+                                       b.rechnungsdatum, b.partner)
+
+    def tag_id(self, name: str) -> int:
+        """ID des Tags, legt ihn bei Bedarf an."""
+        return self._id(self.tags, "/api/tags/", name)
+
+    def dokument_hochladen(self, dateiname: str, inhalt: bytes, titel: str, tags: list[str],
+                           erstellt: date | None = None, korrespondent: str = "") -> str:
+        """Startet die Verarbeitung in Paperless und gibt die Aufgaben-ID zurück."""
+        daten: dict = {"title": titel, "tags": [str(self.tag_id(t)) for t in tags]}
+        if erstellt:
+            daten["created"] = erstellt.isoformat()
+        if korrespondent:
+            daten["correspondent"] = str(self._id(self.korrespondenten, "/api/correspondents/", korrespondent))
+        antwort = self._post("/api/documents/post_document/", data=daten, files={"document": (dateiname, inhalt)})
         return str(antwort.json()).strip('"')
 
     def aufgabe(self, task_id: str) -> tuple[str, str]:

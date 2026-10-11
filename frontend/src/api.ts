@@ -96,6 +96,7 @@ export interface Beleg {
   quelle_link: string;
   erechnung: string;
   pruefen: boolean;
+  gedruckt?: string; // Zeitpunkt des letzten Drucks, leer = nie
   hinweise: string[];
   netto_eur?: string | null;
   steuer_eur?: string | null;
@@ -105,8 +106,8 @@ export interface Beleg {
   fehler?: string;
 }
 
-export type BelegEingabe = Omit<Beleg, "id" | "quelle" | "quelle_link" | "erechnung" | "hinweise" | "netto_eur" | "steuer_eur" |
-  "brutto_eur" | "steuer_auf_rechnung" | "kurs_verwendet" | "fehler">;
+export type BelegEingabe = Omit<Beleg, "id" | "quelle" | "quelle_link" | "erechnung" | "gedruckt" | "hinweise" | "netto_eur" |
+  "steuer_eur" | "brutto_eur" | "steuer_auf_rechnung" | "kurs_verwendet" | "fehler">;
 
 export interface BelegKurz {
   id: number;
@@ -300,6 +301,59 @@ export interface StundenzettelImport {
   name: string;
 }
 
+export interface DruckBeleg {
+  id: number;
+  name: string;
+  partner: string;
+  art: Art;
+  rechnungsdatum: string | null;
+  gedruckt: string;
+  grund: string; // warum nicht druckbar; leer = druckbar
+}
+
+// Öffnet die Belege des Monats als ein PDF in einem neuen Tab. Ein Formular statt fetch, damit der Browser das
+// PDF selbst anzeigt; der Server vermerkt die enthaltenen Belege als gedruckt.
+export function belegeDrucken(zeitraum: string, ids?: number[]) {
+  const formular = document.createElement("form");
+  formular.method = "post";
+  formular.target = "_blank";
+  formular.action = `/api/druck/${zeitraum}/belege.pdf${ids?.length ? `?ids=${ids.join(",")}` : ""}`;
+  document.body.appendChild(formular);
+  formular.submit();
+  formular.remove();
+}
+
+export interface MailVorlage {
+  an: string;
+  betreff: string; // Platzhalter {monat} und {jahr}
+  text: string;
+}
+
+export interface MonatsabschlussStand {
+  zeitraum: string;
+  monat: string; // „September 2026“
+  umsaetze: number;
+  letzte_buchung: string | null;
+  ohne_beleg: number;
+  belege: number;
+  pruefen: number;
+  fehlerhaft: number;
+  kontoauszug: boolean | null; // null: ohne Paperless nicht prüfbar
+  protokoll: boolean | null;
+  paperless: boolean;
+  paperless_fehler: string;
+  stundenzettel: string; // eingetragene Stunden im Monat
+  mail: MailVorlage;
+}
+
+export interface Ablage {
+  zustand: "fertig" | "doppelt" | "wartet" | "fehler";
+  dokument: string;
+  fehler: string;
+  titel: string;
+  tag: string;
+}
+
 export type Rolle = "" | "kunde" | "lieferant" | "beides";
 
 export interface KontaktEingabe {
@@ -476,6 +530,16 @@ export const api = {
       body: datei,
       headers: { "Content-Type": "application/octet-stream" },
     }),
+  druckListe: (zeitraum: string) => anfrage<DruckBeleg[]>(`/api/druck/${zeitraum}`),
+  monatsabschluss: (zeitraum: string) => anfrage<MonatsabschlussStand>(`/api/monatsabschluss/${zeitraum}`),
+  monatsabschlussAblegen: (zeitraum: string, art: "kontoauszug" | "protokoll", datei: File) =>
+    anfrage<Ablage>(`/api/monatsabschluss/${zeitraum}/ablegen/${art}?name=${encodeURIComponent(datei.name)}`, {
+      method: "POST",
+      body: datei,
+      headers: { "Content-Type": "application/pdf" },
+    }),
+  mailVorlageSpeichern: (v: MailVorlage) =>
+    anfrage<MailVorlage>("/api/monatsabschluss/mail", { method: "PUT", body: JSON.stringify(v) }),
   backup: () => anfrage<BackupStatus>("/api/backup"),
   backupStarten: () => post<BackupStatus>("/api/backup"),
 };

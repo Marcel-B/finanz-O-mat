@@ -11,7 +11,7 @@ import { useConfirm } from "primevue/useconfirm";
 import { computed, reactive, ref, watch } from "vue";
 
 import { api, type Art, type Beleg, type BelegEingabe, type Steuerfall } from "@/api";
-import { alsIso, ausIso } from "@/format";
+import { alsIso, ausIso, zeitpunkt } from "@/format";
 
 const props = defineProps<{ beleg: Beleg | null; steuerfaelle: Steuerfall[]; zeitraum: string }>();
 const sichtbar = defineModel<boolean>("visible", { required: true });
@@ -219,6 +219,9 @@ function loeschen() {
         <Message v-if="beleg?.erechnung" severity="success" size="small" icon="pi pi-verified">
           Aus E-Rechnung gelesen ({{ beleg.erechnung }}). Beträge, Datum und Partner stammen aus den strukturierten
           Rechnungsdaten.
+        </Message>
+        <Message v-if="beleg?.gedruckt" severity="secondary" size="small" icon="pi pi-print">
+          Gedruckt am {{ zeitpunkt(beleg.gedruckt) }}
         </Message>
         <Message v-for="(h, i) in beleg?.hinweise ?? []" :key="i" severity="warn" size="small">{{ h }}</Message>
         <Message v-if="fehler" severity="error">{{ fehler }}</Message>

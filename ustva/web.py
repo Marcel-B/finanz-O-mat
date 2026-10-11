@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
@@ -22,9 +22,11 @@ from . import (
     aktualisierung,
     backup,
     bank,
+    belegdruck,
     belegnummern,
     einstellungen,
     export,
+    monatsabschluss,
     monatsexport,
     sevdesk_web,
     stundenzettel,
@@ -219,6 +221,12 @@ class StundenzettelTag(BaseModel):
 
 class StundenzettelMonat(BaseModel):
     tage: list[StundenzettelTag]
+
+
+class MailVorlage(BaseModel):
+    an: str = ""
+    betreff: str = ""
+    text: str = ""
 
 
 class NeuEinlesenAnfrage(BaseModel):
@@ -488,7 +496,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         alt = _beleg(beleg_id)
         neu = Beleg(**eingabe.model_dump(), quelle=alt.quelle, quelle_ref=alt.quelle_ref,
                     quelle_link=alt.quelle_link, hinweise=alt.hinweise, erechnung=alt.erechnung,
-                    id=beleg_id)
+                    gedruckt=alt.gedruckt, id=beleg_id)
         b = db.beleg_aktualisieren(neu)
         bank.abgleich_ausfuehren(db, umrechner)  # z. B. nachgetragenes Datum oder korrigierter Betrag
         return b.to_dict()
@@ -702,6 +710,78 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         return Response(inhalt, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition":
                                  f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"})
+
+    # Belege eines Monats drucken
+    def _monatsbelege(zr: str) -> list[Beleg]:
+        jahr, monat = _zeitraum(zr)
+        belege = db.alle_belege()
+        b = berechnen(belege, jahr, monat, umrechner, cfg.versteuerung)
+        umsaetze = [u for u in db.alle_umsaetze() if u.zeitraum == zr]
+        return list(monatsexport.monatsbelege(b, umsaetze, {x.id: x for x in belege if x.id}).values())
+
+    @app.get("/api/druck/{zr}")
+    def druck_liste(zr: str):
+        return belegdruck.liste(aktuell(), _monatsbelege(zr))
+
+    @app.post("/api/druck/{zr}/belege.pdf")
+    def druck_pdf(zr: str, ids: str = ""):
+        """Ein PDF zum Drucken; die enthaltenen Belege werden als gedruckt vermerkt.
+
+        POST, weil es den Vermerk setzt; die Oberfläche schickt ein Formular in einen neuen Tab.
+        """
+        belege = _monatsbelege(zr)
+        if ids:
+            gewaehlt = {int(i) for i in ids.split(",") if i.strip().isdigit()}
+            belege = [b for b in belege if b.id in gewaehlt]
+        c = aktuell()
+        with httpx.Client(timeout=30) as client:
+            pl = paperless.PaperlessClient(c.paperless_url, c.paperless_token, client) if c.paperless_aktiv else None
+            inhalt, enthalten, _ = belegdruck.pdf(c, belege, pl)
+        if not enthalten:
+            raise HTTPException(404, "Keine druckbaren Belege in diesem Monat.")
+        db.belege_gedruckt(enthalten, datetime.now().isoformat(timespec="minutes"))
+        return Response(inhalt, media_type="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="Belege-{zr}.pdf"'})
+
+    # Geführter Monatsabschluss
+    @app.get("/api/monatsabschluss/{zr}")
+    def monatsabschluss_stand(zr: str):
+        jahr, monat = _zeitraum(zr)
+        c = aktuell()
+        b = berechnen(db.alle_belege(), jahr, monat, umrechner, cfg.versteuerung)
+        umsaetze = db.alle_umsaetze()
+        if not c.paperless_aktiv:
+            return monatsabschluss.stand(db, b, umsaetze, None, c)
+        with httpx.Client(timeout=10) as client:
+            protokoll = abgegeben_pruefer(c, client)(jahr, monat) if c.paperless_tag_protokoll else None
+            pl = paperless.PaperlessClient(c.paperless_url, c.paperless_token, client)
+            return monatsabschluss.stand(db, b, umsaetze, pl, c, protokoll)
+
+    @app.post("/api/monatsabschluss/{zr}/ablegen/{art}")
+    async def monatsabschluss_ablegen(zr: str, art: str, request: Request, name: str = ""):
+        jahr, monat = _zeitraum(zr)
+        c = aktuell()
+        if not c.paperless_aktiv:
+            raise HTTPException(400, "Paperless ist nicht eingerichtet (Einstellungen).")
+        roh = await request.body()
+
+        def hochladen() -> dict:
+            with httpx.Client(timeout=60) as client:
+                pl = paperless.PaperlessClient(c.paperless_url, c.paperless_token, client)
+                try:
+                    return monatsabschluss.ablegen(pl, c, art, jahr, monat, Path(name).name, roh, _heute())
+                except paperless.PaperlessFehler as e:
+                    raise HTTPException(502, str(e)) from e
+
+        ergebnis = await run_in_threadpool(hochladen)
+        if art == "protokoll":  # die Frist-Anzeige soll es sofort merken
+            for schluessel in [k for k in protokolle if k[2:] == (jahr, monat)]:
+                del protokolle[schluessel]
+        return ergebnis
+
+    @app.put("/api/monatsabschluss/mail")
+    def monatsabschluss_mail(eingabe: MailVorlage):
+        return monatsabschluss.mail_speichern(db, eingabe.model_dump())
 
     # Stundenzettel
     def _jahr(jahr: int) -> int:

@@ -41,6 +41,7 @@ Steuerberater nachfragen.
 - Kontoumsätze aus dem N26-CSV-Export einlesen, automatisch den Rechnungen zuordnen und vor Umsätzen ohne Beleg
   warnen. Bei Ausgangsrechnungen übernimmt die Zuordnung das Zahlungsdatum (wichtig für die Ist-Versteuerung).
 - CSV-Export der Kennzahlen und Belege (Semikolon, Dezimalkomma, öffnet direkt in Excel).
+- Reiter „Monatsabschluss“: führt auf Wunsch Schritt für Schritt durch das Monatsende, siehe „Monatlicher Ablauf“.
 - Reiter „Übersicht“: grobe Jahresübersicht der Einnahmen und Ausgaben (netto) je Monat mit Diagramm, Ergebnis,
   USt-Zahllast und größten Kunden und Lieferanten. Nur zum eigenen Überblick, keine Gewinnermittlung (EÜR).
 - Reiter „Tätigkeiten“: Tätigkeitsnachweis für den Kunden, siehe unten.
@@ -90,6 +91,30 @@ Ohne gebaute Oberfläche läuft nur die API; die Startseite zeigt dann den Build
 5. In Mein ELSTER das Formular „Umsatzsteuer-Voranmeldung“ öffnen und die Kennzahlen eintragen. Werte mit
    „berechnet ELSTER“ rechnet ELSTER selbst aus; sie dienen zum Abgleich.
 6. Übertragungsprotokoll speichern, Zahlung veranlassen, CSV für die eigene Ablage exportieren.
+
+### Geführt: Reiter „Monatsabschluss“
+
+Wer mag, startet den Abschluss im Reiter „Monatsabschluss“. Ein Stepper führt durch acht Schritte, jeder lässt
+sich überspringen, und alles geht weiterhin auch über die anderen Reiter:
+
+1. **Kontoauszug**: öffnet das N26-Webbanking; die CSV kommt in die Kontoumsätze, die PDF nach Paperless (Tag
+   Kontoauszug, Titel „Kontoauszug September 2026“).
+2. **Belege**: „Rechnungen einlesen“ wie in der Voranmeldung.
+3. **Prüfen**: Umsätze ohne Beleg, ungeprüfte Belege und Hinweise; ein Klick öffnet den Monat in der Voranmeldung.
+4. **ELSTER**: öffnet Mein ELSTER und zeigt die Kennzahlen nach Abschnitten des Formulars, mit Kopierknopf und
+   Kz 83 zum Abgleich.
+5. **Protokoll**: das Übertragungsprotokoll (PDF) nach Paperless (Tag UStVA-Protokoll); die Karte „Nächste Abgabe“
+   springt danach auf den nächsten Monat.
+6. **Steuerberatung**: ZIP herunterladen und einen E-Mail-Entwurf im Mailprogramm öffnen (`mailto:`). Empfänger,
+   Betreff und Text stehen in einer Vorlage (Platzhalter `{monat}`, `{jahr}`), die im Schritt einmal eingetragen
+   wird. Die ZIP hängt man selbst an; die App verschickt nichts.
+7. **Drucken**: die Belege des Monats als ein PDF in einem neuen Tab („Ungedruckte“ oder „Alle“). Gedruckte
+   Belege bekommen einen Vermerk mit Datum, zu sehen hier, in der Belegliste der Voranmeldung (Druckersymbol) und
+   im Beleg. Den Druck gibt es auch als Knopf „Belege drucken“ in der Voranmeldung.
+8. **Stundenzettel**: trägt den Vorschlag für den Monat ein, Excel herunterladen.
+
+Erledigte Schritte bekommen einen Haken, soweit die App es prüfen kann (Kontoumsätze und Kontoauszug da, alles
+zugeordnet und geprüft, Protokoll in Paperless, alles gedruckt, Stunden eingetragen).
 
 Für die Kommandozeile oder einen Cronjob am Monatsanfang:
 

@@ -16,6 +16,7 @@ import AnmeldeAnsicht from "./components/AnmeldeAnsicht.vue";
 import AppLogo from "./components/AppLogo.vue";
 import BackupHinweis from "./components/BackupHinweis.vue";
 import EinstellungenAnsicht from "./components/EinstellungenAnsicht.vue";
+import MonatsabschlussAnsicht from "./components/MonatsabschlussAnsicht.vue";
 import StundenzettelAnsicht from "./components/StundenzettelAnsicht.vue";
 import TaetigkeitenAnsicht from "./components/TaetigkeitenAnsicht.vue";
 import UebersichtAnsicht from "./components/UebersichtAnsicht.vue";
@@ -26,6 +27,19 @@ const status = ref<Status | null>(null);
 const steuerfaelle = ref<Steuerfall[]>([]);
 const fehler = ref("");
 const tab = ref("voranmeldung");
+// Sprung aus dem Monatsabschluss in die Voranmeldung eines Monats
+const voranmeldungZiel = ref<{ zeitraum: string; n: number } | null>(null);
+const voranmeldungStand = ref(0); // zählt hoch, wenn der Monatsabschluss Daten geändert hat
+
+function abschlussGeaendert() {
+  voranmeldungStand.value++;
+  statusLaden(); // Karte „Nächste Abgabe“ nach abgelegtem Protokoll
+}
+
+function oeffnen(reiter: string, zeitraum: string) {
+  if (reiter === "voranmeldung") voranmeldungZiel.value = { zeitraum, n: (voranmeldungZiel.value?.n ?? 0) + 1 };
+  tab.value = reiter;
+}
 // Ist ein Passwort gesetzt? Sonst gibt es nichts abzumelden.
 const mitPasswort = ref(false);
 
@@ -118,6 +132,7 @@ onMounted(starten);
     <Tabs v-if="status && angemeldet" v-model:value="tab">
       <TabList>
         <Tab value="voranmeldung"><i class="pi pi-file-check mr-2" />Voranmeldung</Tab>
+        <Tab value="monatsabschluss"><i class="pi pi-list-check mr-2" />Monatsabschluss</Tab>
         <Tab value="uebersicht"><i class="pi pi-chart-bar mr-2" />Übersicht</Tab>
         <Tab value="taetigkeiten"><i class="pi pi-briefcase mr-2" />Tätigkeiten</Tab>
         <Tab value="stundenzettel"><i class="pi pi-clock mr-2" />Stundenzettel</Tab>
@@ -126,7 +141,20 @@ onMounted(starten);
       </TabList>
       <TabPanels class="!bg-transparent !px-0">
         <TabPanel value="voranmeldung">
-          <VoranmeldungAnsicht :status="status" :steuerfaelle="steuerfaelle" />
+          <VoranmeldungAnsicht
+            :status="status"
+            :steuerfaelle="steuerfaelle"
+            :springe-zu="voranmeldungZiel"
+            :neu-laden="voranmeldungStand"
+          />
+        </TabPanel>
+        <TabPanel value="monatsabschluss">
+          <MonatsabschlussAnsicht
+            :status="status"
+            :aktiv="tab === 'monatsabschluss'"
+            @oeffnen="oeffnen"
+            @geaendert="abschlussGeaendert"
+          />
         </TabPanel>
         <TabPanel value="uebersicht">
           <UebersichtAnsicht v-if="tab === 'uebersicht'" :status="status" />
