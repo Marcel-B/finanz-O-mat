@@ -1,8 +1,8 @@
 """Nummern aus dem Verwendungszweck in den Belegen wiederfinden.
 
 Im Verwendungszweck stehen oft Rechnungs- oder Kundennummern (Telekom etwa
-"Festnetz Vertragskonto 5626057860 RG 7206540387/17.12.2025"). Auf der Rechnung
-sind sie meist in Gruppen gesetzt ("Buchungskonto 562 605 7860"). Deshalb
+"Festnetz Vertragskonto 1234567890 RG 9876543210/17.12.2025"). Auf der Rechnung
+sind sie meist in Gruppen gesetzt ("Buchungskonto 123 456 7890"). Deshalb
 merken wir uns je Beleg alle Ziffernfolgen aus dem Dokumenttext, auch über
 solche Lücken hinweg zusammengesetzt, und vergleichen nur ganze Folgen.
 
@@ -35,7 +35,7 @@ _pause_bis = 0.0
 
 
 def nummern(text: str) -> set[str]:
-    """Alle Nummern im Text; Gruppen wie "562 605 7860" auch zusammengesetzt."""
+    """Alle Nummern im Text; Gruppen wie "123 456 7890" auch zusammengesetzt."""
     gefunden: set[str] = set()
     for m in RE_FOLGE.finditer(text):
         gruppen = re.split(r"[ \u00a0-]", m.group())

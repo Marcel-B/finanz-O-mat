@@ -13,15 +13,15 @@ from ustva.steuerfaelle import Art, Steuerfall
 from ustva.web import create_app
 
 # So steht es im Kontoauszug (N26) und auf der Rechnung der Telekom (fiktive Nummern).
-ZWECK = "Festnetz Vertragskonto 5626057860 RG 7206540387/17.12.2025"
+ZWECK = "Festnetz Vertragskonto 1234567890 RG 9876543210/17.12.2025"
 TEXT_DEZEMBER = """Telekom Deutschland GmbH, 53171 Bonn
 Datum 17.12.2025
-Rechnungsnummer 720 654 0387
-Kundennummer 274 373 1395
-47800 Krefeld
-Buchungskonto 562 605 7860
+Rechnungsnummer 987 654 3210
+Kundennummer 111 222 3334
+12345 Musterstadt
+Buchungskonto 123 456 7890
 Rechnungsbetrag 62,89 €"""
-TEXT_NOVEMBER = TEXT_DEZEMBER.replace("720 654 0387", "719 201 5156").replace("17.12.2025", "19.11.2025")
+TEXT_NOVEMBER = TEXT_DEZEMBER.replace("987 654 3210", "987 600 1111").replace("17.12.2025", "19.11.2025")
 
 
 @pytest.fixture(autouse=True)
@@ -41,14 +41,14 @@ def umsatz(zweck: str = ZWECK, betrag: str = "-62.89") -> Umsatz:
 
 def test_nummern_ueber_gruppen_hinweg():
     n = belegnummern.nummern(TEXT_DEZEMBER)
-    assert {"7206540387", "5626057860", "2743731395"} <= n
-    assert "4780053171" not in n  # nicht über Zeilen hinweg
+    assert {"9876543210", "1234567890", "1112223334"} <= n
+    assert "111222333412345" not in n  # nicht über Zeilen hinweg
     assert not {x for x in n if len(x) < 6}  # PLZ, Jahre, Beträge nicht
-    assert "2025791185264464" in belegnummern.nummern("Rechnung 2025-791185264464")
+    assert "2025123456789012" in belegnummern.nummern("Rechnung 2025-123456789012")
 
 
 def test_nummern_im_zweck():
-    assert belegnummern.nummern_im_zweck(umsatz()) == ["5626057860", "7206540387"]
+    assert belegnummern.nummern_im_zweck(umsatz()) == ["1234567890", "9876543210"]
     assert belegnummern.nummern_im_zweck(umsatz("Rechnung 2026-030")) == []
 
 
@@ -57,9 +57,9 @@ def test_treffer_unterscheidet_rechnungs_und_kundennummer():
                        telekom(date(2025, 12, 2), "54.54", id=3))
     aus_text = {1: belegnummern.nummern(TEXT_DEZEMBER), 2: belegnummern.nummern(TEXT_NOVEMBER), 3: set()}
     t = belegnummern.treffer(umsatz(), [dez, nov, mobil], aus_text)
-    assert [x.to_dict() for x in t[1]] == [{"nummer": "5626057860", "eindeutig": False},
-                                           {"nummer": "7206540387", "eindeutig": True}]
-    assert [x.to_dict() for x in t[2]] == [{"nummer": "5626057860", "eindeutig": False}]
+    assert [x.to_dict() for x in t[1]] == [{"nummer": "1234567890", "eindeutig": False},
+                                           {"nummer": "9876543210", "eindeutig": True}]
+    assert [x.to_dict() for x in t[2]] == [{"nummer": "1234567890", "eindeutig": False}]
     assert 3 not in t
 
 
@@ -90,7 +90,7 @@ def test_nachtragen_aus_paperless(db):
     assert anfrage.url.params["id__in"] == "9,21"
     assert anfrage.url.params["fields"] == "id,content"
     gespeichert = db.beleg_nummern()
-    assert "7206540387" in gespeichert[pl.id]
+    assert "9876543210" in gespeichert[pl.id]
     assert gespeichert[weg.id] == set() == gespeichert[manuell.id]  # gelöscht bzw. ohne Dokument
 
     belegnummern.nachtragen(db, cfg, db.alle_belege(), client)
@@ -118,7 +118,7 @@ def test_nachtragen_aus_verzeichnis(db, tmp_path):
     b = db.beleg_anlegen(telekom(date(2025, 12, 17), "52.85", quelle="verzeichnis", quelle_ref="abc",
                                  quelle_link="eingang/telekom.txt"))
     belegnummern.nachtragen(db, Config(rechnungs_verzeichnis=tmp_path), db.alle_belege())
-    assert "5626057860" in db.beleg_nummern()[b.id]
+    assert "1234567890" in db.beleg_nummern()[b.id]
 
 
 def test_kandidaten_mit_rechnungsnummer_zuerst(db, umrechner):
@@ -133,12 +133,12 @@ def test_kandidaten_mit_rechnungsnummer_zuerst(db, umrechner):
 
     kandidaten = client.get(f"/api/umsaetze/{u.id}/kandidaten").json()
     assert [k["id"] for k in kandidaten] == [dez.id, passt_betrag.id, nov.id]
-    assert kandidaten[0]["nummern"] == [{"nummer": "5626057860", "eindeutig": False},
-                                        {"nummer": "7206540387", "eindeutig": True}]
+    assert kandidaten[0]["nummern"] == [{"nummer": "1234567890", "eindeutig": False},
+                                        {"nummer": "9876543210", "eindeutig": True}]
     assert "nummern" not in kandidaten[1]
 
     # Nach einer Nummer aus dem Dokumenttext lässt sich auch suchen.
-    [k] = client.get(f"/api/umsaetze/{u.id}/kandidaten", params={"suche": "7206540387"}).json()
+    [k] = client.get(f"/api/umsaetze/{u.id}/kandidaten", params={"suche": "9876543210"}).json()
     assert k["id"] == dez.id
 
     # Hängt der Beleg schon an einem anderen Umsatz, taucht er trotzdem auf.
@@ -151,12 +151,12 @@ def test_kandidaten_mit_rechnungsnummer_zuerst(db, umrechner):
 
 
 def test_rechnungsnummer_in_gruppen():
-    assert erkennen(TEXT_DEZEMBER, Art.EINGANG).rechnungsnummer == "720 654 0387"
-    assert erkennen("Rechnungsnummer 37 1793 3100 0411\nDatum", Art.EINGANG).rechnungsnummer == "37 1793 3100 0411"
+    assert erkennen(TEXT_DEZEMBER, Art.EINGANG).rechnungsnummer == "987 654 3210"
+    assert erkennen("Rechnungsnummer 12 3456 7890 1234\nDatum", Art.EINGANG).rechnungsnummer == "12 3456 7890 1234"
     assert erkennen("Rechnungsnr.: RE-1036 vom 05.12.2025", Art.AUSGANG).rechnungsnummer == "RE-1036"
     assert erkennen("Rechnungsnummer 1234 12,50 EUR", Art.AUSGANG).rechnungsnummer == "1234"
 
 
 def test_abgleich_findet_rechnungsnummer_mit_leerzeichen():
-    b = telekom(date(2025, 12, 17), "52.85", rechnungsnummer="720 654 0387")
+    b = telekom(date(2025, 12, 17), "52.85", rechnungsnummer="987 654 3210")
     assert bank.kandidaten(umsatz(), [b], set()) == [b]

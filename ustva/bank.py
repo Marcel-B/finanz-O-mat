@@ -254,7 +254,7 @@ def _bewertet(u: Umsatz, belege: list[Beleg], vergeben: set[int], nur_passende: 
         im_fenster = b.rechnungsdatum is not None and \
             b.rechnungsdatum - VOR_RECHNUNG <= u.buchungsdatum <= b.rechnungsdatum + NACH_RECHNUNG
         betrag = passt_betrag(u, b, euro)
-        # Rechnungsnummern stehen auf dem Beleg oft in Gruppen ("720 654 0387"), im Zweck am Stück.
+        # Rechnungsnummern stehen auf dem Beleg oft in Gruppen ("987 654 3210"), im Zweck am Stück.
         rechnungsnummer = re.sub(r"\s", "", b.rechnungsnummer).lower()
         nummer = len(rechnungsnummer) >= 4 and rechnungsnummer in u.verwendungszweck.lower()
         name = bool(_woerter(f"{b.partner} {b.beschreibung}") & _woerter(f"{u.partner} {u.verwendungszweck}"))
