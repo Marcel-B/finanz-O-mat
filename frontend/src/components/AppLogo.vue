@@ -12,8 +12,8 @@ const verlauf = useId();
   <svg :width="groesse" :height="groesse" viewBox="0 0 64 64" role="img" aria-label="Finanz-O-Mat" class="shrink-0">
     <defs>
       <linearGradient :id="verlauf" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stop-color="#34d399" />
-        <stop offset="1" stop-color="#047857" />
+        <stop offset="0" stop-color="#60a5fa" />
+        <stop offset="1" stop-color="#1d4ed8" />
       </linearGradient>
     </defs>
     <rect width="64" height="64" rx="15" :fill="`url(#${verlauf})`" />
