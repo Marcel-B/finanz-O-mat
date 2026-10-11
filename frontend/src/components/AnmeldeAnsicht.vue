@@ -6,6 +6,7 @@ import Password from "primevue/password";
 import { reactive, ref } from "vue";
 
 import { api } from "@/api";
+import AppLogo from "@/components/AppLogo.vue";
 
 const emit = defineEmits<{ angemeldet: [] }>();
 
@@ -32,7 +33,10 @@ async function anmelden() {
   <section
     class="mx-auto mt-8 max-w-sm rounded-xl border border-surface-200 bg-surface-0 p-6 dark:border-surface-700 dark:bg-surface-900"
   >
-    <h2 class="mb-4 text-lg font-semibold">Anmelden</h2>
+    <div class="mb-5 flex flex-col items-center gap-3">
+      <AppLogo :groesse="64" />
+      <h2 class="text-lg font-semibold">Anmelden</h2>
+    </div>
     <form class="flex flex-col gap-3" @submit.prevent="anmelden">
       <label class="flex flex-col gap-1 text-sm">
         Benutzername
