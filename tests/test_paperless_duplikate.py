@@ -126,3 +126,18 @@ def test_befehl_loescht_nur_nach_bestaetigung(db, capsys):
     assert "behalten  #1" in ausgabe and "löschen   #3" in ausgabe and "Nichts gelöscht" in ausgabe
     assert duplikate_befehl(Args(), cfg(), db, eingabe=lambda _: "j", pl=client(anfragen)) == 0
     assert [a[0] for a in anfragen] == ["PATCH", "POST"]
+
+
+def test_folgt_umleitung_und_schreibt_an_die_neue_adresse(db):
+    anfragen = []
+    innen = transport(anfragen)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.scheme == "http":
+            return httpx.Response(301, headers={"Location": str(request.url.copy_with(scheme="https"))})
+        return innen.handle_request(request)
+
+    pl = PaperlessClient("http://paperless.local", "geheim", httpx.Client(transport=httpx.MockTransport(handler)))
+    pd.aufraeumen(pl, pd.finden(pl, cfg(), db)[0])
+    assert pl.url == "https://paperless.local"
+    assert [a[:2] for a in anfragen] == [("PATCH", "/api/documents/1/"), ("POST", "/api/documents/bulk_edit/")]
