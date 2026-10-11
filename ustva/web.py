@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import mimetypes
 import re
 import time
 from datetime import date, datetime, timedelta
@@ -531,6 +532,32 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
             raise HTTPException(404, "Datei nicht gefunden")
         return FileResponse(pfad)
 
+    druckfehler: dict[int, str] = {}  # Beleg-ID -> warum er beim letzten Druck fehlte
+
+    @app.post("/api/belege/{beleg_id}/drucken")
+    def beleg_drucken(beleg_id: int):
+        """Die Datei eines Belegs unverändert zum Drucken; vermerkt ihn (und Belege derselben Datei) als gedruckt.
+
+        Für Belege, die nicht ins Monats-PDF passen: Der Browser zeigt auch geschützte PDFs und Bilder an.
+        """
+        b = _beleg(beleg_id)
+        c = aktuell()
+        with httpx.Client(timeout=30) as client:
+            pl = paperless.PaperlessClient(c.paperless_url, c.paperless_token, client) if c.paperless_aktiv else None
+            try:
+                endung, inhalt = monatsexport.beleg_datei(c, b, pl)
+            except (OSError, ValueError, httpx.HTTPError) as e:
+                raise HTTPException(404, f"Datei nicht verfügbar: {e}") from e
+        ids = belegdruck.gleiche_datei(b, db.alle_belege())
+        db.belege_gedruckt(ids, datetime.now().isoformat(timespec="minutes"))
+        for i in ids:
+            druckfehler.pop(i, None)
+        name = monatsexport.beleg_dateiname(b, endung)
+        ascii_name = name.encode("ascii", "replace").decode().replace("?", "_").replace('"', "")
+        return Response(inhalt, media_type=mimetypes.guess_type(name)[0] or "application/octet-stream",
+                        headers={"Content-Disposition":
+                                 f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"})
+
     def _beleg(beleg_id: int) -> Beleg:
         b = db.beleg(beleg_id)
         if b is None:
@@ -721,7 +748,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
 
     @app.get("/api/druck/{zr}")
     def druck_liste(zr: str):
-        return belegdruck.liste(aktuell(), _monatsbelege(zr))
+        return belegdruck.liste(aktuell(), _monatsbelege(zr), druckfehler)
 
     @app.post("/api/druck/{zr}/belege.pdf")
     def druck_pdf(zr: str, ids: str = ""):
@@ -736,7 +763,10 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         c = aktuell()
         with httpx.Client(timeout=30) as client:
             pl = paperless.PaperlessClient(c.paperless_url, c.paperless_token, client) if c.paperless_aktiv else None
-            inhalt, enthalten, _ = belegdruck.pdf(c, belege, pl)
+            inhalt, enthalten, fehler = belegdruck.pdf(c, belege, pl)
+        for b in belege:
+            druckfehler.pop(b.id, None)
+        druckfehler.update(fehler)
         if not enthalten:
             raise HTTPException(404, "Keine druckbaren Belege in diesem Monat.")
         db.belege_gedruckt(enthalten, datetime.now().isoformat(timespec="minutes"))

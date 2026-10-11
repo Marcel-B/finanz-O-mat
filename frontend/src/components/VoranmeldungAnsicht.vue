@@ -8,7 +8,7 @@ import Tag from "primevue/tag";
 import { useToast } from "primevue/usetoast";
 import { computed, ref, watch } from "vue";
 
-import { api, belegeDrucken, type Beleg, type Bericht, type Kennzahl, type Status, type Steuerfall } from "@/api";
+import { api, belegDrucken, belegeDrucken, type Beleg, type Bericht, type Kennzahl, type Status, type Steuerfall } from "@/api";
 import { ausIso, betrag, datum, elsterWert, passtZurSuche, suchtext, zeitpunkt, zeitraumVon } from "@/format";
 
 import BelegDialog from "./BelegDialog.vue";
@@ -144,8 +144,9 @@ async function geprueft(b: Beleg) {
   }
 }
 
-function drucken() {
-  belegeDrucken(zeitraum.value);
+function drucken(id?: number) {
+  if (id) belegDrucken(id);
+  else belegeDrucken(zeitraum.value);
   window.addEventListener("focus", laden, { once: true }); // Vermerk „gedruckt“ zeigen, wenn man zurückkommt
 }
 
@@ -190,7 +191,7 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
       severity="secondary"
       text
       v-tooltip.top="'Alle Belege des Monats als ein PDF zum Drucken; sie bekommen den Vermerk „gedruckt“'"
-      @click="drucken"
+      @click="drucken()"
     />
     <a :href="`/api/export/${zeitraum}/unterlagen.zip`">
       <Button
@@ -384,6 +385,15 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
             <a v-if="data.quelle === 'verzeichnis'" :href="`/api/belege/${data.id}/datei`" target="_blank">
               <Button size="small" text icon="pi pi-file" aria-label="Datei öffnen" />
             </a>
+            <Button
+              v-if="data.quelle === 'paperless' || data.quelle === 'verzeichnis'"
+              v-tooltip.top="'Diesen Beleg drucken'"
+              size="small"
+              text
+              icon="pi pi-print"
+              aria-label="Diesen Beleg drucken"
+              @click="drucken(data.id)"
+            />
           </div>
         </template>
       </Column>
