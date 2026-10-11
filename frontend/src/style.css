@@ -1,6 +1,18 @@
 @import "tailwindcss";
 @import "tailwindcss-primeui";
 
+/* Kompaktere Oberfläche: Tailwind und PrimeVue rechnen in rem, daher skaliert die Basisgröße Schrift, Abstände und
+   Steuerelemente gemeinsam (14 statt 16 px, folgt weiter der Schriftgröße des Browsers). Die Seitenbreite bleibt
+   bei 1280 px, damit die kleinere Schrift mehr Platz für Tabellen lässt statt nur schmaler zu werden. Die kleinste
+   Schriftstufe (text-xs) bleibt mit gut 11 px lesbar. */
+html {
+  font-size: 87.5%;
+}
+@theme {
+  --container-7xl: 1280px;
+  --text-xs: 0.8rem;
+}
+
 :root {
   /* Diagrammfarben, für hellen und dunklen Hintergrund geprüft */
   --chart-einnahmen: #2a78d6;
