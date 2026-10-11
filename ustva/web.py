@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
@@ -22,6 +22,7 @@ from . import (
     aktualisierung,
     backup,
     bank,
+    belegdruck,
     einstellungen,
     export,
     monatsabschluss,
@@ -473,7 +474,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         alt = _beleg(beleg_id)
         neu = Beleg(**eingabe.model_dump(), quelle=alt.quelle, quelle_ref=alt.quelle_ref,
                     quelle_link=alt.quelle_link, hinweise=alt.hinweise, erechnung=alt.erechnung,
-                    id=beleg_id)
+                    gedruckt=alt.gedruckt, id=beleg_id)
         b = db.beleg_aktualisieren(neu)
         bank.abgleich_ausfuehren(db, umrechner)  # z. B. nachgetragenes Datum oder korrigierter Betrag
         return b.to_dict()
@@ -687,6 +688,38 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         return Response(inhalt, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition":
                                  f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"})
+
+    # Belege eines Monats drucken
+    def _monatsbelege(zr: str) -> list[Beleg]:
+        jahr, monat = _zeitraum(zr)
+        belege = db.alle_belege()
+        b = berechnen(belege, jahr, monat, umrechner, cfg.versteuerung)
+        umsaetze = [u for u in db.alle_umsaetze() if u.zeitraum == zr]
+        return list(monatsexport.monatsbelege(b, umsaetze, {x.id: x for x in belege if x.id}).values())
+
+    @app.get("/api/druck/{zr}")
+    def druck_liste(zr: str):
+        return belegdruck.liste(aktuell(), _monatsbelege(zr))
+
+    @app.post("/api/druck/{zr}/belege.pdf")
+    def druck_pdf(zr: str, ids: str = ""):
+        """Ein PDF zum Drucken; die enthaltenen Belege werden als gedruckt vermerkt.
+
+        POST, weil es den Vermerk setzt; die Oberfläche schickt ein Formular in einen neuen Tab.
+        """
+        belege = _monatsbelege(zr)
+        if ids:
+            gewaehlt = {int(i) for i in ids.split(",") if i.strip().isdigit()}
+            belege = [b for b in belege if b.id in gewaehlt]
+        c = aktuell()
+        with httpx.Client(timeout=30) as client:
+            pl = paperless.PaperlessClient(c.paperless_url, c.paperless_token, client) if c.paperless_aktiv else None
+            inhalt, enthalten, _ = belegdruck.pdf(c, belege, pl)
+        if not enthalten:
+            raise HTTPException(404, "Keine druckbaren Belege in diesem Monat.")
+        db.belege_gedruckt(enthalten, datetime.now().isoformat(timespec="minutes"))
+        return Response(inhalt, media_type="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="Belege-{zr}.pdf"'})
 
     # Geführter Monatsabschluss
     @app.get("/api/monatsabschluss/{zr}")

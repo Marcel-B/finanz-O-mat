@@ -8,8 +8,8 @@ import Tag from "primevue/tag";
 import { useToast } from "primevue/usetoast";
 import { computed, ref, watch } from "vue";
 
-import { api, type Beleg, type Bericht, type Kennzahl, type Status, type Steuerfall } from "@/api";
-import { ausIso, betrag, datum, elsterWert, passtZurSuche, suchtext, zeitraumVon } from "@/format";
+import { api, belegeDrucken, type Beleg, type Bericht, type Kennzahl, type Status, type Steuerfall } from "@/api";
+import { ausIso, betrag, datum, elsterWert, passtZurSuche, suchtext, zeitpunkt, zeitraumVon } from "@/format";
 
 import BelegDialog from "./BelegDialog.vue";
 import KarteBox from "./KarteBox.vue";
@@ -144,6 +144,11 @@ async function geprueft(b: Beleg) {
   }
 }
 
+function drucken() {
+  belegeDrucken(zeitraum.value);
+  window.addEventListener("focus", laden, { once: true }); // Vermerk „gedruckt“ zeigen, wenn man zurückkommt
+}
+
 const steuerfallTitel = (wert: string) => props.steuerfaelle.find((s) => s.wert === wert)?.titel ?? wert;
 
 const belegSuche = ref("");
@@ -154,7 +159,7 @@ const gefundeneBelege = computed(() =>
         b.partner, b.beschreibung, b.rechnungsnummer, b.partner_ustid, b.rechnungsdatum, b.zahlungsdatum,
         b.art === "ausgang" ? "Ausgang" : "Eingang", steuerfallTitel(b.steuerfall), `Kz ${steuerfallKz(b.steuerfall)}`,
         b.netto, b.steuer, b.waehrung, b.netto_eur, b.steuer_eur, b.brutto_eur, b.erechnung, b.hinweise, b.fehler,
-        b.pruefen && "prüfen",
+        b.pruefen && "prüfen", b.gedruckt && "gedruckt",
       ),
       belegSuche.value,
     ),
@@ -179,6 +184,14 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
     />
     <Button label="Beleg hinzufügen" icon="pi pi-plus" severity="secondary" @click="bearbeiten(null)" />
     <span class="flex-1" />
+    <Button
+      label="Belege drucken"
+      icon="pi pi-print"
+      severity="secondary"
+      text
+      v-tooltip.top="'Alle Belege des Monats als ein PDF zum Drucken; sie bekommen den Vermerk „gedruckt“'"
+      @click="drucken"
+    />
     <a :href="`/api/export/${zeitraum}/unterlagen.zip`">
       <Button
         label="ZIP für Steuerberatung"
@@ -314,6 +327,12 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
         <template #body="{ data }">
           {{ data.partner || data.beschreibung || "–" }}
           <Tag v-if="data.pruefen" value="prüfen" severity="warn" class="ml-1" />
+          <i
+            v-if="data.gedruckt"
+            v-tooltip.top="`Gedruckt am ${zeitpunkt(data.gedruckt)}`"
+            class="pi pi-print ml-1 text-sm text-muted-color"
+            aria-label="gedruckt"
+          />
           <Tag
             v-if="data.erechnung"
             value="E-Rechnung"

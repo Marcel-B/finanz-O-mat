@@ -12,8 +12,17 @@ import Textarea from "primevue/textarea";
 import { useToast } from "primevue/usetoast";
 import { computed, reactive, ref, watch } from "vue";
 
-import { api, type Bericht, type Kennzahl, type MailVorlage, type MonatsabschlussStand, type Status } from "@/api";
-import { ausIso, betrag, datum, elsterWert, zeitraumVon } from "@/format";
+import {
+  api,
+  belegeDrucken,
+  type Bericht,
+  type DruckBeleg,
+  type Kennzahl,
+  type MailVorlage,
+  type MonatsabschlussStand,
+  type Status,
+} from "@/api";
+import { ausIso, betrag, datum, elsterWert, zeitpunkt, zeitraumVon } from "@/format";
 
 import KarteBox from "./KarteBox.vue";
 
@@ -37,7 +46,7 @@ const ABSCHNITTE: { titel: string; kz: string[] }[] = [
   { titel: "Leistungsempfänger als Steuerschuldner (§ 13b UStG)", kz: ["46", "47", "84", "85"] },
   { titel: "Abziehbare Vorsteuerbeträge", kz: ["66", "61", "67"] },
 ];
-const SCHRITTE = ["Kontoauszug", "Belege", "Prüfen", "ELSTER", "Protokoll", "Steuerberatung", "Stundenzettel"];
+const SCHRITTE = ["Kontoauszug", "Belege", "Prüfen", "ELSTER", "Protokoll", "Steuerberatung", "Drucken", "Stundenzettel"];
 
 // Gestartet ist pro Browser vermerkt, damit ein Neuladen mitten im Abschluss an derselben Stelle weitergeht
 const SPEICHER = "finanzomat.monatsabschluss";
@@ -78,6 +87,7 @@ const mailVorbereitet = ref(alt?.mail ?? false);
 
 const stand = ref<MonatsabschlussStand | null>(null);
 const bericht = ref<Bericht | null>(null);
+const druck = ref<DruckBeleg[]>([]);
 const laedt = ref(false);
 const beschaeftigt = reactive({ csv: false, kontoauszug: false, protokoll: false, belege: false, stunden: false, mail: false });
 const vorlage = reactive<MailVorlage>({ an: "", betreff: "", text: "" });
@@ -93,7 +103,11 @@ async function laden() {
   if (!laeuft.value) return;
   laedt.value = true;
   try {
-    [stand.value, bericht.value] = await Promise.all([api.monatsabschluss(zeitraum.value), api.bericht(zeitraum.value)]);
+    [stand.value, bericht.value, druck.value] = await Promise.all([
+      api.monatsabschluss(zeitraum.value),
+      api.bericht(zeitraum.value),
+      api.druckListe(zeitraum.value),
+    ]);
     Object.assign(vorlage, stand.value.mail);
     vorlageOffen.value ||= !vorlage.an;
   } catch (e) {
@@ -134,7 +148,8 @@ const erledigt = computed((): Record<number, boolean> => {
     4: s.protokoll === true,
     5: s.protokoll === true,
     6: mailVorbereitet.value,
-    7: Number(s.stundenzettel) > 0,
+    7: druckbar.value.length > 0 && ungedruckt.value.length === 0,
+    8: Number(s.stundenzettel) > 0,
   };
 });
 
@@ -254,7 +269,24 @@ async function vorlageSpeichern() {
   }
 }
 
-// 7. Stundenzettel
+// 7. Drucken
+const druckbar = computed(() => druck.value.filter((b) => !b.grund));
+const ungedruckt = computed(() => druckbar.value.filter((b) => !b.gedruckt));
+
+function drucken(ids?: number[]) {
+  belegeDrucken(zeitraum.value, ids);
+  // Den Vermerk setzt der Server beim Erzeugen des PDFs; zeigen, sobald man aus dem PDF-Tab zurückkommt
+  window.addEventListener(
+    "focus",
+    () => {
+      laden();
+      emit("geaendert");
+    },
+    { once: true },
+  );
+}
+
+// 8. Stundenzettel
 async function stundenEintragen() {
   beschaeftigt.stunden = true;
   try {
@@ -532,8 +564,43 @@ const stunden = (wert: string | number) =>
           </form>
         </StepPanel>
 
-        <!-- 7. Stundenzettel -->
+        <!-- 7. Drucken -->
         <StepPanel :value="7">
+          <h3 class="mb-2 font-semibold">Belege drucken</h3>
+          <p class="mb-4 text-muted-color">
+            Öffnet die Belege von {{ monatsname }} als ein PDF in einem neuen Tab, dort drucken. Gedruckte Belege bekommen
+            einen Vermerk, auch in der Voranmeldung.
+          </p>
+          <div class="mb-4 flex flex-wrap gap-2">
+            <Button
+              :label="`Ungedruckte drucken (${ungedruckt.length})`"
+              icon="pi pi-print"
+              :disabled="!ungedruckt.length"
+              @click="drucken(ungedruckt.map((b) => b.id))"
+            />
+            <Button label="Alle drucken" icon="pi pi-print" severity="secondary" :disabled="!druckbar.length" @click="drucken()" />
+          </div>
+          <p v-if="!druck.length" class="text-muted-color">Keine Belege in diesem Monat.</p>
+          <table v-else class="w-full text-left text-sm">
+            <tr v-for="b in druck" :key="b.id" class="border-b border-surface-100 dark:border-surface-800">
+              <td class="w-24 py-1.5 pr-2">{{ datum(b.rechnungsdatum) }}</td>
+              <td class="py-1.5 pr-2">
+                {{ b.partner || "–" }}
+                <span class="text-xs text-muted-color">{{ b.art === "ausgang" ? "Ausgang" : "Eingang" }}</span>
+              </td>
+              <td class="py-1.5 text-right">
+                <span v-if="b.grund" class="text-muted-color">{{ b.grund }}</span>
+                <span v-else-if="b.gedruckt" class="text-muted-color">
+                  <i class="pi pi-print mr-1 text-xs" />gedruckt am {{ zeitpunkt(b.gedruckt) }}
+                </span>
+                <span v-else class="text-amber-600 dark:text-amber-400">noch nicht gedruckt</span>
+              </td>
+            </tr>
+          </table>
+        </StepPanel>
+
+        <!-- 8. Stundenzettel -->
+        <StepPanel :value="8">
           <h3 class="mb-2 font-semibold">Stundenzettel für den Minijob</h3>
           <p class="mb-4 text-muted-color">
             Trägt die Monatsstunden auf die Arbeitstage von {{ monatsname }} ein (wie im Reiter Stundenzettel). Für Urlaub
@@ -568,6 +635,15 @@ const stunden = (wert: string | number) =>
 /* Sieben Schritte passen auf schmalen Bildschirmen nicht nebeneinander: dort nur den aktuellen benennen */
 .monatsabschluss :deep(.p-steplist) {
   overflow-x: auto;
+}
+.monatsabschluss :deep(.p-step) {
+  padding-inline: 0.25rem;
+}
+.monatsabschluss :deep(.p-step-title) {
+  font-size: 0.875rem;
+}
+.monatsabschluss :deep(.p-stepper-separator) {
+  margin-inline: 0.25rem;
 }
 @media (max-width: 640px) {
   .monatsabschluss :deep(.p-step:not(.p-step-active) .p-step-title) {

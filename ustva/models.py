@@ -36,6 +36,7 @@ class Beleg:
     quelle_link: str = ""
     erechnung: str = ""  # Format, wenn aus einer E-Rechnung gelesen (z. B. "XRechnung (UBL)")
     pruefen: bool = False  # automatisch erkannt, noch nicht bestätigt
+    gedruckt: str = ""  # wann zuletzt gedruckt (ISO); setzt nur Datenbank.belege_gedruckt
     hinweise: list[str] = field(default_factory=list)
     id: int | None = None
     # Anschrift des Partners aus einer E-Rechnung (strasse, plz, ort, land, email); nur beim Einlesen gefüllt,

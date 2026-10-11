@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS belege (
     quelle_link TEXT NOT NULL DEFAULT '',
     pruefen INTEGER NOT NULL DEFAULT 0,
     hinweise TEXT NOT NULL DEFAULT '[]',
-    erechnung TEXT NOT NULL DEFAULT ''
+    erechnung TEXT NOT NULL DEFAULT '',
+    gedruckt TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS belege_quelle ON belege(quelle, quelle_ref) WHERE quelle_ref != '';
 CREATE TABLE IF NOT EXISTS umsaetze (
@@ -157,6 +158,7 @@ def _zeile_zu_beleg(z: sqlite3.Row) -> Beleg:
         pruefen=bool(z["pruefen"]),
         hinweise=json.loads(z["hinweise"]),
         erechnung=z["erechnung"],
+        gedruckt=z["gedruckt"],
     )
 
 
@@ -265,6 +267,8 @@ class Datenbank:
             spalten = {z["name"] for z in self._con.execute("PRAGMA table_info(belege)")}
             if "erechnung" not in spalten:  # Datenbanken von vor den E-Rechnungen
                 self._con.execute("ALTER TABLE belege ADD COLUMN erechnung TEXT NOT NULL DEFAULT ''")
+            if "gedruckt" not in spalten:  # Datenbanken von vor dem Belegdruck
+                self._con.execute("ALTER TABLE belege ADD COLUMN gedruckt TEXT NOT NULL DEFAULT ''")
 
     # Einstellungen aus der Oberfläche (überschreiben die Umgebungsvariablen)
     def einstellungen(self) -> dict[str, str]:
@@ -342,6 +346,11 @@ class Datenbank:
         with self._lock, self._con:
             self._con.execute(f"UPDATE belege SET {zuweisung} WHERE id = ?", [*_beleg_zu_werten(b), b.id])
         return b
+
+    def belege_gedruckt(self, ids: list[int], zeitpunkt: str) -> None:
+        """Vermerkt den Druck; steht nicht in FELDER, damit Bearbeiten ihn nicht überschreibt."""
+        with self._lock, self._con:
+            self._con.executemany("UPDATE belege SET gedruckt = ? WHERE id = ?", [(zeitpunkt, i) for i in ids])
 
     def beleg_loeschen(self, beleg_id: int) -> None:
         with self._lock, self._con:

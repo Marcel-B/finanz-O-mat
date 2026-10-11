@@ -94,7 +94,7 @@ Ohne gebaute Oberfläche läuft nur die API; die Startseite zeigt dann den Build
 
 ### Geführt: Reiter „Monatsabschluss“
 
-Wer mag, startet den Abschluss im Reiter „Monatsabschluss“. Ein Stepper führt durch sieben Schritte, jeder lässt
+Wer mag, startet den Abschluss im Reiter „Monatsabschluss“. Ein Stepper führt durch acht Schritte, jeder lässt
 sich überspringen, und alles geht weiterhin auch über die anderen Reiter:
 
 1. **Kontoauszug**: öffnet das N26-Webbanking; die CSV kommt in die Kontoumsätze, die PDF nach Paperless (Tag
@@ -108,10 +108,13 @@ sich überspringen, und alles geht weiterhin auch über die anderen Reiter:
 6. **Steuerberatung**: ZIP herunterladen und einen E-Mail-Entwurf im Mailprogramm öffnen (`mailto:`). Empfänger,
    Betreff und Text stehen in einer Vorlage (Platzhalter `{monat}`, `{jahr}`), die im Schritt einmal eingetragen
    wird. Die ZIP hängt man selbst an; die App verschickt nichts.
-7. **Stundenzettel**: trägt den Vorschlag für den Monat ein, Excel herunterladen.
+7. **Drucken**: die Belege des Monats als ein PDF in einem neuen Tab („Ungedruckte“ oder „Alle“). Gedruckte
+   Belege bekommen einen Vermerk mit Datum, zu sehen hier, in der Belegliste der Voranmeldung (Druckersymbol) und
+   im Beleg. Den Druck gibt es auch als Knopf „Belege drucken“ in der Voranmeldung.
+8. **Stundenzettel**: trägt den Vorschlag für den Monat ein, Excel herunterladen.
 
 Erledigte Schritte bekommen einen Haken, soweit die App es prüfen kann (Kontoumsätze und Kontoauszug da, alles
-zugeordnet und geprüft, Protokoll in Paperless, Stunden eingetragen).
+zugeordnet und geprüft, Protokoll in Paperless, alles gedruckt, Stunden eingetragen).
 
 Für die Kommandozeile oder einen Cronjob am Monatsanfang:
 

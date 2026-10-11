@@ -26,6 +26,10 @@ export const elsterWert = (k: { betrag: string; betrag_art: string }): string =>
   return k.betrag_art === "bemessungsgrundlage" ? String(Math.trunc(wert)) : wert.toFixed(2).replace(".", ",");
 };
 
+// "2026-10-11T13:05" -> "11.10.2026, 13:05 Uhr"
+export const zeitpunkt = (iso: string | null | undefined): string =>
+  iso ? `${datum(iso.slice(0, 10))}${iso.length > 10 ? `, ${iso.slice(11, 16)} Uhr` : ""}` : "–";
+
 export const zeitraumVon = (d: Date): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 
 // Volltextsuche in einer Liste: Jedes eingegebene Wort muss irgendwo vorkommen. Beträge findet man

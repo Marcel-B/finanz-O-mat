@@ -110,6 +110,29 @@ class _Zip:
         return self.puffer.getvalue()
 
 
+def monatsbelege(bericht: Bericht, umsaetze: list[Umsatz], belege_nach_id: dict[int, Beleg]) -> dict[int, Beleg]:
+    """Belege der Voranmeldung, dann die über Kontoumsätze des Monats zugeordneten aus anderen Monaten."""
+    belege: dict[int, Beleg] = {zeile.beleg.id: zeile.beleg for zeile in bericht.zeilen if zeile.beleg.id}
+    for u in umsaetze:
+        if u.beleg_id in belege_nach_id:
+            belege.setdefault(u.beleg_id, belege_nach_id[u.beleg_id])
+    return belege
+
+
+def beleg_datei(cfg: Config, b: Beleg, pl: PaperlessClient | None) -> tuple[str, bytes]:
+    """(Dateiendung, Inhalt) des Belegs aus dem Rechnungsverzeichnis bzw. als PDF aus Paperless."""
+    if b.quelle == "verzeichnis" and cfg.rechnungs_verzeichnis:
+        basis = cfg.rechnungs_verzeichnis.resolve()
+        pfad = (basis / b.quelle_link).resolve()
+        if not pfad.is_relative_to(basis) or not pfad.is_file():
+            raise FileNotFoundError("Datei nicht mehr vorhanden")
+        return pfad.suffix.lower(), pfad.read_bytes()
+    if b.quelle == "paperless" and pl is not None:
+        antwort = pl.herunterladen(int(b.quelle_ref.split("#")[0]))
+        return _endung(antwort), antwort.content
+    raise ValueError("keine Datei hinterlegt (manuell angelegt)")
+
+
 def monats_zip(cfg: Config, bericht: Bericht, umsaetze: list[Umsatz], belege_nach_id: dict[int, Beleg],
                client: httpx.Client | None = None, andere_umsaetze: list[Umsatz] = ()) -> bytes:
     """`umsaetze` sind die Kontoumsätze des Monats, `andere_umsaetze` die übrigen."""
@@ -117,30 +140,17 @@ def monats_zip(cfg: Config, bericht: Bericht, umsaetze: list[Umsatz], belege_nac
     z = _Zip()
     fehlt: list[str] = []
 
-    # Belege der Voranmeldung, dann die über Kontoumsätze zugeordneten aus anderen Monaten
-    belege: dict[int, Beleg] = {zeile.beleg.id: zeile.beleg for zeile in bericht.zeilen if zeile.beleg.id}
+    belege = monatsbelege(bericht, umsaetze, belege_nach_id)
     im_monat = {u.beleg_id for u in umsaetze if u.beleg_id}
     abgebucht = {u.beleg_id: u for u in andere_umsaetze if u.beleg_id}
     anderswo = [f"{beleg_dateiname(b, '')}: abgebucht am {abgebucht[i].buchungsdatum:%d.%m.%Y}"
                 for i, b in belege.items() if i in abgebucht and i not in im_monat]
-    for u in umsaetze:
-        if u.beleg_id in belege_nach_id:
-            belege.setdefault(u.beleg_id, belege_nach_id[u.beleg_id])
 
     pl = PaperlessClient(cfg.paperless_url, cfg.paperless_token, client) if cfg.paperless_aktiv else None
     for b in belege.values():
         try:
-            if b.quelle == "verzeichnis" and cfg.rechnungs_verzeichnis:
-                basis = cfg.rechnungs_verzeichnis.resolve()
-                pfad = (basis / b.quelle_link).resolve()
-                if not pfad.is_relative_to(basis) or not pfad.is_file():
-                    raise FileNotFoundError("Datei nicht mehr vorhanden")
-                z.schreiben(f"Belege/{beleg_dateiname(b, pfad.suffix.lower())}", pfad.read_bytes())
-            elif b.quelle == "paperless" and pl is not None:
-                antwort = pl.herunterladen(int(b.quelle_ref.split("#")[0]))
-                z.schreiben(f"Belege/{beleg_dateiname(b, _endung(antwort))}", antwort.content)
-            else:
-                raise ValueError("keine Datei hinterlegt (manuell angelegt)")
+            endung, inhalt = beleg_datei(cfg, b, pl)
+            z.schreiben(f"Belege/{beleg_dateiname(b, endung)}", inhalt)
         except Exception as e:  # ein fehlender Beleg soll den Export nicht verhindern
             fehlt.append(f"Beleg {beleg_dateiname(b, '')}: {e}")
 
