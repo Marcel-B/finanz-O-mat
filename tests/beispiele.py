@@ -87,7 +87,7 @@ _HETZNER_KOPF = """Hetzner Online GmbH
 Industriestr. 25
 91710 Gunzenhausen
 Rechnungsdatum: 21.09.2026
-Rechnung 087001217350
+Rechnung 087000000001
 Gesamtübersicht
 """
 _HETZNER_FUSS = """Der Betrag wird innerhalb von 10 Tagen per Lastschrift eingezogen.
@@ -116,12 +116,12 @@ Kavčí Hory Office Park
 Na Hřebenech II 1718/8
 Praha 4 - Nusle 140 00
 Česko
-Invoice INVCZ11712088
+Invoice INVCZ00000001
 Tax point date: 21.9.2026
 Issue date: 21.9.2026
 Bill To:
 Marcel Muster
-47800 Krefeld
+12345 Musterstadt
 Germany
 Part Number Product Description Price Qty Extended Price
 AIGC-ADD JetBrains AI Credits 0.85 60 51.00 EUR

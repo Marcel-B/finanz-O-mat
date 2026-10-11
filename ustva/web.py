@@ -23,6 +23,7 @@ from . import (
     backup,
     bank,
     belegdruck,
+    belegnummern,
     einstellungen,
     export,
     monatsabschluss,
@@ -420,14 +421,35 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         u = _umsatz(umsatz_id)
         andere = {x.beleg_id: x for x in db.alle_umsaetze() if x.beleg_id is not None and x.id != u.id}
         euro = bank.euro_schaetzer(umrechner)
-        belege = [b for b in db.alle_belege() if bank.passt_zur_suche(b, suche)]
-        offen = bank.kandidaten(u, belege, set(andere), nur_passende=False, euro=euro)[:30]
+        alle = db.alle_belege()
+        belegnummern.nachtragen(db, aktuell(), alle)
+        aus_text = db.beleg_nummern()
+        belege = [b for b in alle if bank.passt_zur_suche(b, suche, aus_text.get(b.id, set()))]
+        # Steht eine Nummer aus dem Verwendungszweck nur in einem Beleg (etwa die Rechnungsnummer),
+        # kommt dieser nach oben, auch wenn der Betrag nicht passt.
+        treffer = belegnummern.treffer(u, alle, aus_text)
+
+        def eindeutig(b: Beleg) -> bool:
+            return any(t.eindeutig for t in treffer.get(b.id, []))
+
+        def sortiert(liste: list[Beleg]) -> list[Beleg]:
+            return sorted(liste, key=lambda b: not eindeutig(b))
+
+        def kurz(b: Beleg) -> dict:
+            daten = _beleg_kurz(b)
+            if b.id in treffer:
+                daten["nummern"] = [t.to_dict() for t in treffer[b.id]]
+            return daten
+
+        offen = sortiert(bank.kandidaten(u, belege, set(andere), nur_passende=False, euro=euro))[:30]
         # Belege, die schon an einem anderen Umsatz hängen, zeigen wir mit an, damit man sie wiederfindet:
-        # bei einer Suche alle Treffer, sonst nur die, die genau passen würden.
-        vergeben = bank.kandidaten(u, [b for b in belege if b.id in andere], set(),
-                                   nur_passende=not suche, euro=euro)[:10]
-        return [*(_beleg_kurz(b) for b in offen),
-                *({**_beleg_kurz(b), "zugeordnet": andere[b.id].buchungsdatum.isoformat()} for b in vergeben)]
+        # bei einer Suche alle Treffer, sonst nur die, die genau passen würden oder die Nummer tragen.
+        schon = [b for b in belege if b.id in andere]
+        passend = bank.kandidaten(u, schon, set(), nur_passende=not suche, euro=euro)
+        ids = {b.id for b in passend}
+        vergeben = sortiert([b for b in schon if b.id not in ids and eindeutig(b)] + passend)[:10]
+        return [*(kurz(b) for b in offen),
+                *({**kurz(b), "zugeordnet": andere[b.id].buchungsdatum.isoformat()} for b in vergeben)]
 
     @app.post("/api/umsaetze/{umsatz_id}/zuordnen")
     def umsatz_zuordnen(umsatz_id: int, eingabe: ZuordnungEingabe):
