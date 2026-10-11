@@ -274,6 +274,13 @@ async function vorlageSpeichern() {
 const druckbar = computed(() => druck.value.filter((b) => !b.grund));
 const ungedruckt = computed(() => druckbar.value.filter((b) => !b.gedruckt));
 
+// Beleg einer anderen Voranmeldung, der nur über seinen Kontoumsatz in diesem Monat dabei ist (wie im ZIP)
+function andererMonat(b: DruckBeleg): string {
+  if (!b.zeitraum || b.zeitraum === zeitraum.value) return "";
+  const [j, m] = b.zeitraum.split("-").map(Number);
+  return `aus ${MONATE[m - 1]}${j === jahr.value ? "" : ` ${j}`}, hier abgebucht`;
+}
+
 function drucken(ids?: number[], einzeln = false) {
   if (einzeln && ids) belegDrucken(ids[0]);
   else belegeDrucken(zeitraum.value, ids);
@@ -589,6 +596,11 @@ const stunden = (wert: string | number) =>
               <td class="py-1.5 pr-2">
                 {{ b.partner || "–" }}
                 <span class="text-xs text-muted-color">{{ b.art === "ausgang" ? "Ausgang" : "Eingang" }}</span>
+                <span
+                  v-if="andererMonat(b)"
+                  v-tooltip.top="'Zählt in der Voranmeldung seines Monats; steht hier wie im ZIP, weil er in diesem Monat abgebucht wurde'"
+                  class="ml-1 text-xs text-sky-700 dark:text-sky-400"
+                >· {{ andererMonat(b) }}</span>
               </td>
               <td class="py-1.5 text-right">
                 <span v-if="b.gedruckt" class="text-muted-color">

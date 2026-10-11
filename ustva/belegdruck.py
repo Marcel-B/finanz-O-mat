@@ -18,6 +18,7 @@ from pathlib import PurePath
 
 from pypdf import PdfReader, PdfWriter
 
+from .berechnung import zeitraum
 from .config import Config
 from .models import Beleg
 from .monatsexport import beleg_datei, beleg_dateiname
@@ -50,11 +51,16 @@ def grund(cfg: Config, b: Beleg) -> str:
 
 
 def liste(cfg: Config, belege: list[Beleg], fehler: dict[int, str] | None = None) -> list[dict]:
-    """`fehler`: warum ein Beleg beim letzten Druck nicht ins PDF kam."""
+    """`fehler`: warum ein Beleg beim letzten Druck nicht ins PDF kam.
+
+    `zeitraum` ist der Monat, in dessen Voranmeldung der Beleg zählt. Weicht er vom gedruckten Monat ab,
+    steht der Beleg nur da, weil sein Kontoumsatz in diesem Monat liegt (wie im ZIP).
+    """
     fehler = fehler or {}
     return [{"id": b.id, "name": beleg_dateiname(b, ""), "partner": b.partner or b.beschreibung,
              "art": b.art.value, "rechnungsdatum": b.rechnungsdatum.isoformat() if b.rechnungsdatum else None,
-             "gedruckt": b.gedruckt, "grund": grund(cfg, b), "fehler": fehler.get(b.id, "")}
+             "gedruckt": b.gedruckt, "grund": grund(cfg, b), "fehler": fehler.get(b.id, ""),
+             "zeitraum": zeitraum(b, cfg.versteuerung)}
             for b in reihenfolge(belege)]
 
 
