@@ -250,8 +250,8 @@ oder verschieben und die Stunden ändern, etwa in der Urlaubszeit; „Gleichmä�
 neu auf die gewählten Tage. Ein Klick auf „… eintragen“ speichert den Monat.
 
 „Excel erstellen“ gibt das Jahr als .xlsx im Layout der bisherigen Datei aus, ein Blatt je Monat von Januar bis zum
-vergangenen Monat (den laufenden nur, wenn schon etwas eingetragen ist), also nichts in der Zukunft. Name,
-Monatsstunden und Arbeitstag stehen unter „Einstellungen“ im Reiter; dort lässt sich auch die bisherige Excel-Datei
+vergangenen Monat (den laufenden nur, wenn schon etwas eingetragen ist), also nichts in der Zukunft. Über der
+Unterschriftslinie steht „Ort, Datum“ mit dem Monatsende als Datum. Name, Ort, Monatsstunden und Arbeitstag stehen unter „Einstellungen“ im Reiter; dort lässt sich auch die bisherige Excel-Datei
 übernehmen. Übernommen werden nur Zeilen mit einem Datum aus dem gewählten Jahr, Blätter mit alten Daten meldet die App.
 
 ## Umzug aus sevDesk

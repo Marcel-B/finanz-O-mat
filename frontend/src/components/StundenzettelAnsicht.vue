@@ -156,7 +156,7 @@ async function eintragen() {
 
 // Einstellungen und Übernahme der bisherigen Datei
 const einstellungenOffen = ref(false);
-const form = reactive({ name: "", stunden: 20 as number | null, wochentag: 2 });
+const form = reactive({ name: "", ort: "", stunden: 20 as number | null, wochentag: 2 });
 const speichertEinstellungen = ref(false);
 const liestEin = ref(false);
 const datei = ref<HTMLInputElement | null>(null);
@@ -165,6 +165,7 @@ const wochentagOptionen = WOCHENTAGE.map((label, value) => ({ label, value }));
 function einstellungenOeffnen() {
   const e = daten.value?.einstellungen;
   form.name = e?.name ?? "";
+  form.ort = e?.ort ?? "";
   form.stunden = Number(e?.stunden ?? 20);
   form.wochentag = e?.wochentag ?? 2;
   einstellungenOffen.value = true;
@@ -175,6 +176,7 @@ async function einstellungenSpeichern() {
   try {
     const e = await api.stundenzettelEinstellungenSpeichern({
       name: form.name,
+      ort: form.ort,
       stunden: String(form.stunden ?? 20),
       wochentag: form.wochentag,
     });
@@ -381,6 +383,10 @@ async function einlesen(event: Event) {
       <label class="flex flex-col gap-1 text-sm">
         Name (oben links im Blatt)
         <InputText v-model="form.name" placeholder="Nachname Vorname" fluid />
+      </label>
+      <label class="flex flex-col gap-1 text-sm">
+        Ort (steht mit dem Monatsende als Datum über der Unterschrift)
+        <InputText v-model="form.ort" placeholder="z. B. Musterstadt" fluid />
       </label>
       <div class="grid gap-3 sm:grid-cols-2">
         <label class="flex flex-col gap-1 text-sm">

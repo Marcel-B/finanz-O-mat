@@ -271,6 +271,7 @@ export interface StundenzettelEinstellungen {
   name: string;
   stunden: string; // je Monat
   wochentag: number; // 0 = Montag
+  ort: string; // mit dem Datum über der Unterschriftslinie
 }
 
 export interface StundenzettelMonat {

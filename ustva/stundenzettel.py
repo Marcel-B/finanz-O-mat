@@ -9,6 +9,7 @@ etwa in der Urlaubszeit.
 
 from __future__ import annotations
 
+import calendar
 import io
 import json
 from dataclasses import dataclass, field
@@ -28,14 +29,16 @@ class Einstellungen:
     name: str = ""  # steht oben links, z. B. „Nachname Vorname“
     stunden: Decimal = Decimal(20)  # je Monat
     wochentag: int = 2  # 0 = Montag, 2 = Mittwoch
+    ort: str = ""  # steht mit dem Datum über der Unterschriftslinie
 
     def to_dict(self) -> dict:
-        return {"name": self.name, "stunden": str(self.stunden), "wochentag": self.wochentag}
+        return {"name": self.name, "stunden": str(self.stunden), "wochentag": self.wochentag, "ort": self.ort}
 
     @classmethod
     def aus_dict(cls, d: dict) -> Einstellungen:
         e = cls()
         e.name = str(d.get("name") or "").strip()
+        e.ort = str(d.get("ort") or "").strip()
         if d.get("stunden") not in (None, ""):
             try:
                 e.stunden = Decimal(str(d["stunden"]).replace(",", "."))
@@ -130,7 +133,12 @@ def _zahl(h: Decimal) -> int | float:
     return int(h) if h == h.to_integral_value() else float(h)
 
 
-def _blatt(wb, e: Einstellungen, monat: int, tage: list[tuple[date, Decimal]]) -> None:
+def unterschriftsdatum(jahr: int, monat: int) -> date:
+    """Unterschrieben wird zum Monatsende."""
+    return date(jahr, monat, calendar.monthrange(jahr, monat)[1])
+
+
+def _blatt(wb, e: Einstellungen, jahr: int, monat: int, tage: list[tuple[date, Decimal]]) -> None:
     ws = wb.add_worksheet(MONATSNAMEN[monat - 1])
 
     def fmt(**kw):
@@ -182,6 +190,9 @@ def _blatt(wb, e: Einstellungen, monat: int, tage: list[tuple[date, Decimal]]) -
     ws.write_formula(g, 4, f"=SUM(E{erste + 1}:E{erste + zeilen})", summe, _zahl(gesamt))
 
     u = g + 4
+    if tage:
+        ort_datum = f"{unterschriftsdatum(jahr, monat):%d.%m.%Y}"
+        ws.write(u - 1, 2, f"{e.ort}, {ort_datum}" if e.ort else ort_datum, fmt(font_size=12))
     ws.write(u, 2, "Datum", unterschrift_links)
     ws.write_blank(u, 3, None, unterschrift_mitte)
     ws.write(u, 4, "Unterschrift", unterschrift_rechts)
@@ -199,7 +210,7 @@ def xlsx(e: Einstellungen, jahr: int, eintraege: list[tuple[date, Decimal]], bis
     puffer = io.BytesIO()
     wb = xlsxwriter.Workbook(puffer, {"in_memory": True})
     for m in range(1, bis + 1):
-        _blatt(wb, e, m, [(d, h) for d, h in eintraege if d.month == m])
+        _blatt(wb, e, jahr, m, [(d, h) for d, h in eintraege if d.month == m])
     if bis:
         wb.worksheets()[bis - 1].activate()
     wb.close()
