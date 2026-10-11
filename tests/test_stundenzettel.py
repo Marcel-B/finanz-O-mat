@@ -43,9 +43,11 @@ def test_vorschlag_mittwoche_ohne_feiertage(client):
 
 
 def test_einstellungen(client):
-    assert client.get("/api/stundenzettel/einstellungen").json() == {"name": "", "stunden": "20", "wochentag": 2}
-    e = client.put("/api/stundenzettel/einstellungen", json={"name": " Muster Max ", "stunden": "10", "wochentag": 0})
-    assert e.json() == {"name": "Muster Max", "stunden": "10", "wochentag": 0}
+    assert client.get("/api/stundenzettel/einstellungen").json() == {"name": "", "stunden": "20", "wochentag": 2,
+                                                                     "ort": ""}
+    e = client.put("/api/stundenzettel/einstellungen", json={"name": " Muster Max ", "stunden": "10", "wochentag": 0,
+                                                                   "ort": " Musterstadt "})
+    assert e.json() == {"name": "Muster Max", "stunden": "10", "wochentag": 0, "ort": "Musterstadt"}
     v = client.get("/api/stundenzettel/vorschlag/2026-09").json()
     assert [t["datum"] for t in v["tage"]] == ["2026-09-07", "2026-09-14", "2026-09-21", "2026-09-28"]
     assert client.put("/api/stundenzettel/einstellungen", json={"stunden": "0"}).status_code == 400
@@ -116,6 +118,7 @@ def test_excel_wie_vorlage(client):
     assert ws["E13"].value == "=SUM(E5:E11)"
     assert ws["E11"].border.bottom.style == "double"
     assert ws["C17"].value == "Datum" and ws["E17"].value == "Unterschrift"
+    assert ws["C16"].value == "30.09.2026"  # ohne Ort nur das Monatsende
 
     # Mehr als sieben Tage: die Summe rutscht nach unten
     ws = wb["März"]
@@ -127,6 +130,14 @@ def test_excel_wie_vorlage(client):
     leer = wb["Januar"]
     assert leer["A5"].value is None
     assert leer["E13"].value == "=SUM(E5:E11)"
+    assert leer["C16"].value is None
+
+
+def test_excel_mit_ort_und_datum(client):
+    client.put("/api/stundenzettel/einstellungen", json={"name": "Muster Max", "ort": "Musterstadt"})
+    client.put("/api/stundenzettel/monat/2026-02", json=tage(("2026-02-04", "20")))
+    wb = openpyxl.load_workbook(io.BytesIO(client.get("/api/stundenzettel/2026/excel").content))
+    assert wb["Februar"]["C16"].value == "Musterstadt, 28.02.2026"
 
 
 def _alte_datei() -> bytes:
