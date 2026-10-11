@@ -72,16 +72,28 @@ class PaperlessClient:
     Version an und übernimmt für alle weiteren Anfragen die Version, die der
     Server im Kopf ``X-Api-Version`` meldet. Die ausgewerteten Felder sind in
     allen Versionen gleich.
+
+    Leitet Paperless um (etwa von http auf https), folgt der Client beim Lesen
+    und nimmt die neue Adresse für alle weiteren Anfragen. Schreibende Anfragen
+    folgen keiner Umleitung, weil httpx aus einem umgeleiteten POST ein GET macht.
     """
 
     def __init__(self, url: str, token: str, client: httpx.Client | None = None):
         self.url = url.rstrip("/")
         self.client = client or httpx.Client(timeout=30)
+        self.client.follow_redirects = True
         self.client.headers.update({"Authorization": f"Token {token}", "Accept": "application/json"})
         self.api_version: str | None = None
 
     def _get(self, adresse: str, params: dict | None = None) -> httpx.Response:
         antwort = self.client.get(adresse, params=params)
+        if antwort.history and adresse.startswith(self.url):
+            pfad = adresse[len(self.url):]
+            ziel = str(antwort.url.copy_with(query=None))
+            if ziel.endswith(pfad) and ziel[:-len(pfad)] != self.url:
+                log.warning("Paperless leitet von %s auf %s um; bitte die Adresse in den Einstellungen anpassen",
+                            self.url, ziel[:-len(pfad)])
+                self.url = ziel[:-len(pfad)]
         version = antwort.headers.get("x-api-version", "")
         if self.api_version is None and version.isdigit():
             self.api_version = version
@@ -111,7 +123,7 @@ class PaperlessClient:
     def senden(self, methode: str, pfad: str, daten: dict) -> dict:
         """Schreibender Aufruf (PATCH/POST) mit JSON; Fehler als PaperlessFehler."""
         try:
-            antwort = self.client.request(methode, f"{self.url}{pfad}", json=daten)
+            antwort = self.client.request(methode, f"{self.url}{pfad}", json=daten, follow_redirects=False)
             antwort.raise_for_status()
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (401, 403):
