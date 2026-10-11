@@ -44,6 +44,7 @@ Steuerberater nachfragen.
 - Reiter „Übersicht“: grobe Jahresübersicht der Einnahmen und Ausgaben (netto) je Monat mit Diagramm, Ergebnis,
   USt-Zahllast und größten Kunden und Lieferanten. Nur zum eigenen Überblick, keine Gewinnermittlung (EÜR).
 - Reiter „Tätigkeiten“: Tätigkeitsnachweis für den Kunden, siehe unten.
+- Reiter „Stundenzettel“: feste Stunden je Monat an einem festen Wochentag, siehe unten.
 - Reiter „Adressbuch“: alle Kunden und Lieferanten mit Anschrift, USt-IdNr., Kundennummer und Anzahl der Belege.
   Neue Partner aus Belegen kommen von selbst dazu; Anschriften stammen aus E-Rechnungen und dem sevDesk-Umzug oder
   werden von Hand ergänzt. Doppelte Schreibweisen lassen sich zusammenführen, CSV-Export für Excel. Automatische
@@ -239,6 +240,19 @@ Was gleich bleibt, steht in der Vorlage (Reiter „Tätigkeiten“ → „Vorlag
 Name, Überschrift, Absender rechts oben, Aufträge mit Auftragsnummer und die Auswahllisten. „Excel-Datei übernehmen“
 liest all das aus der bisherigen Excel-Datei (Blatt „Werte“ und die Monatsblätter) und übernimmt auch die schon
 erfassten Monate. Der Stundensatz wird am Eintrag gespeichert; ein neuer Satz ändert also keine alten Monate.
+
+## Stundenzettel
+
+Für einen Stundenzettel mit festen Stunden je Monat (Standard: 20 Stunden, mittwochs). Der Reiter „Stundenzettel“
+öffnet den vergangenen Monat mit einem Vorschlag: alle Mittwoche ohne Feiertag, die Stunden in halben Stunden
+gleichmäßig verteilt (vier Mittwoche je 5 h, fünf je 4 h). Vor dem Eintragen lassen sich Tage entfernen, hinzufügen
+oder verschieben und die Stunden ändern, etwa in der Urlaubszeit; „Gleichmäßig verteilen“ verteilt die Monatsstunden
+neu auf die gewählten Tage. Ein Klick auf „… eintragen“ speichert den Monat.
+
+„Excel erstellen“ gibt das Jahr als .xlsx im Layout der bisherigen Datei aus, ein Blatt je Monat von Januar bis zum
+vergangenen Monat (den laufenden nur, wenn schon etwas eingetragen ist), also nichts in der Zukunft. Name,
+Monatsstunden und Arbeitstag stehen unter „Einstellungen“ im Reiter; dort lässt sich auch die bisherige Excel-Datei
+übernehmen. Übernommen werden nur Zeilen mit einem Datum aus dem gewählten Jahr, Blätter mit alten Daten meldet die App.
 
 ## Umzug aus sevDesk
 
