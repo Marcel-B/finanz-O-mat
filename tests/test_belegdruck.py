@@ -9,7 +9,7 @@ from pypdf import PdfReader, PdfWriter
 
 from ustva import belegdruck
 from ustva.config import Config
-from ustva.models import Beleg
+from ustva.models import Beleg, Umsatz
 from ustva.quellen.paperless import PaperlessClient
 from ustva.steuerfaelle import Art, Steuerfall
 from ustva.web import create_app
@@ -152,3 +152,20 @@ def test_fehler_in_liste_und_einzeldruck(verzeichnis, db, umrechner):
 
     assert client.post(f"/api/belege/{manuell.id}/drucken").status_code == 404
     assert client.post("/api/belege/999/drucken").status_code == 404
+
+
+def test_beleg_aus_anderem_monat_kommt_nicht_in_den_druck(verzeichnis, db, umrechner):
+    """Eine Juli-Rechnung, im August abgebucht, gehört in den Juli-Druck, nicht in den August-Druck."""
+    client = TestClient(create_app(Config(rechnungs_verzeichnis=verzeichnis), db, umrechner,
+                                   heute=date(2026, 10, 11)))
+    juli = db.beleg_anlegen(Beleg(art=Art.EINGANG, steuerfall=Steuerfall.VORSTEUER_INLAND,
+                                  rechnungsdatum=date(2026, 7, 29), netto=D("10"), steuer=D("1.90"),
+                                  partner="Software", quelle="verzeichnis", quelle_ref="y",
+                                  quelle_link="ausgang/re-31.pdf"))
+    db.umsatz_anlegen(Umsatz(buchungsdatum=date(2026, 8, 3), betrag=D("-11.90"), partner="Software",
+                             beleg_id=juli.id, pruefsumme="software"))
+
+    assert client.get("/api/druck/2026-08").json() == []
+    assert client.post("/api/druck/2026-08/belege.pdf").status_code == 404
+    assert client.get(f"/api/belege/{juli.id}").json()["gedruckt"] == ""
+    assert [z["id"] for z in client.get("/api/druck/2026-07").json()] == [juli.id]

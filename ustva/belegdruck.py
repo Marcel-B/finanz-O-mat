@@ -1,8 +1,12 @@
 """Belege eines Monats drucken: alle Dateien als ein PDF, Druck am Beleg vermerken.
 
-Es sind dieselben Belege wie im ZIP für die Steuerberatung (`monatsexport.monatsbelege`):
-Ausgangsrechnungen zuerst, dann Eingangsrechnungen, jeweils nach Rechnungsdatum. Mehrere
-Belege aus derselben Datei (ein Beleg je Steuersatz) kommen nur einmal ins PDF.
+Es sind die Belege der Voranmeldung des Monats, so wie sie in der Belegliste stehen. Anders als
+im ZIP für die Steuerberatung kommen Belege anderer Monate nicht dazu, auch wenn ihr Kontoumsatz
+in diesem Monat liegt: Sonst gälte z. B. eine Juli-Rechnung, die im August abgebucht wurde, mit
+dem August-Druck schon als gedruckt, bevor der Juli gedruckt ist.
+
+Ausgangsrechnungen zuerst, dann Eingangsrechnungen, jeweils nach Rechnungsdatum. Mehrere Belege
+aus derselben Datei (ein Beleg je Steuersatz) kommen nur einmal ins PDF.
 Was keine PDF-Datei hat (manuell angelegt, XML- oder Bilddatei im Verzeichnis), bleibt außen vor
 und wird in der Liste mit Grund genannt. Als gedruckt vermerkt werden nur Belege, die im PDF stehen.
 

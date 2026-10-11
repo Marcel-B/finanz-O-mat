@@ -740,11 +740,10 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
 
     # Belege eines Monats drucken
     def _monatsbelege(zr: str) -> list[Beleg]:
+        """Nur die Belege der Voranmeldung; ein anderswo zugeordneter Kontoumsatz zieht keinen Beleg herein."""
         jahr, monat = _zeitraum(zr)
-        belege = db.alle_belege()
-        b = berechnen(belege, jahr, monat, umrechner, cfg.versteuerung)
-        umsaetze = [u for u in db.alle_umsaetze() if u.zeitraum == zr]
-        return list(monatsexport.monatsbelege(b, umsaetze, {x.id: x for x in belege if x.id}).values())
+        b = berechnen(db.alle_belege(), jahr, monat, umrechner, cfg.versteuerung)
+        return [z.beleg for z in b.zeilen if z.beleg.id]
 
     @app.get("/api/druck/{zr}")
     def druck_liste(zr: str):
