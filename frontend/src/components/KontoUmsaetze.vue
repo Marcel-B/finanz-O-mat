@@ -230,7 +230,23 @@ async function fehlbuchungSpeichern() {
                 empty-search-message="Kein offener Beleg gefunden"
                 @complete="(e: { query: string }) => suchen(data, e.query)"
                 @option-select="(e: { value: BelegKurz }) => zuordnen(data, e.value.id)"
-              />
+              >
+                <template #option="{ option }">
+                  <span>{{ kandidatLabel(option) }}</span>
+                  <span
+                    v-for="n in option.nummern ?? []"
+                    :key="n.nummer"
+                    class="ml-2 inline-flex items-center gap-1 rounded px-1.5 text-xs"
+                    :class="n.eindeutig ? 'bg-primary text-primary-contrast' : 'bg-surface-200 text-surface-700 dark:bg-surface-700 dark:text-surface-100'"
+                    :title="
+                      n.eindeutig
+                        ? `Die Nummer ${n.nummer} aus dem Verwendungszweck steht nur in diesem Beleg`
+                        : `Die Nummer ${n.nummer} aus dem Verwendungszweck steht in mehreren Belegen (z. B. Kunden- oder Vertragsnummer)`
+                    "
+                    ><i class="pi pi-hashtag text-[0.6rem]" />{{ n.nummer }}</span
+                  >
+                </template>
+              </AutoComplete>
               <Button size="small" severity="secondary" label="Kein Beleg nötig" @click="ignorieren(data)" />
               <Button
                 size="small"

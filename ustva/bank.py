@@ -254,8 +254,9 @@ def _bewertet(u: Umsatz, belege: list[Beleg], vergeben: set[int], nur_passende: 
         im_fenster = b.rechnungsdatum is not None and \
             b.rechnungsdatum - VOR_RECHNUNG <= u.buchungsdatum <= b.rechnungsdatum + NACH_RECHNUNG
         betrag = passt_betrag(u, b, euro)
-        nummer = bool(b.rechnungsnummer) and len(b.rechnungsnummer) >= 4 and \
-            b.rechnungsnummer.lower() in u.verwendungszweck.lower()
+        # Rechnungsnummern stehen auf dem Beleg oft in Gruppen ("720 654 0387"), im Zweck am Stück.
+        rechnungsnummer = re.sub(r"\s", "", b.rechnungsnummer).lower()
+        nummer = len(rechnungsnummer) >= 4 and rechnungsnummer in u.verwendungszweck.lower()
         name = bool(_woerter(f"{b.partner} {b.beschreibung}") & _woerter(f"{u.partner} {u.verwendungszweck}"))
         # Ungefähr passende Beträge nur zusammen mit dem Namen, sonst trifft es zu leicht den falschen Beleg.
         sicher = betrag == "genau" or (betrag == "ungefaehr" and name)
@@ -269,13 +270,16 @@ def _bewertet(u: Umsatz, belege: list[Beleg], vergeben: set[int], nur_passende: 
     return treffer
 
 
-def passt_zur_suche(b: Beleg, suche: str) -> bool:
-    """Alle Suchwörter kommen in Partner, Beschreibung, Rechnungsnummer, Datum oder Betrag vor."""
+def passt_zur_suche(b: Beleg, suche: str, nummern: set[str] | frozenset[str] = frozenset()) -> bool:
+    """Alle Suchwörter kommen in Partner, Beschreibung, Rechnungsnummer, Datum oder Betrag vor.
+
+    Eine längere Zahl darf auch irgendwo im Dokumenttext stehen (``nummern``, siehe belegnummern.py).
+    """
     betrag = f"{abs(b.zahlbetrag()):.2f}"
     datum = f"{b.rechnungsdatum:%d.%m.%Y} {b.rechnungsdatum.isoformat()}" if b.rechnungsdatum else ""
     text = " ".join([b.partner, b.beschreibung, b.rechnungsnummer, b.waehrung, datum, betrag,
                      betrag.replace(".", ",")]).lower()
-    return all(wort in text for wort in suche.lower().split())
+    return all(wort in text or wort in nummern for wort in suche.lower().split())
 
 
 def zuordnen(db: Datenbank, u: Umsatz, b: Beleg | None) -> None:

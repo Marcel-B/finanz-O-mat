@@ -117,6 +117,8 @@ export interface BelegKurz {
   zahlbetrag: string;
   waehrung: string;
   zugeordnet?: string; // Buchungsdatum des Umsatzes, an dem der Beleg schon hängt
+  // Nummern aus dem Verwendungszweck, die im Beleg stehen; eindeutig = nur in diesem Beleg
+  nummern?: { nummer: string; eindeutig: boolean }[];
 }
 
 export interface Umsatz {
