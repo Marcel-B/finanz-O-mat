@@ -54,7 +54,9 @@ RE_DATUM_ISO = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
 RE_DATUM_TEXT_DE = re.compile(r"\b(\d{1,2})\.?\s+([A-Za-zäÄ]{3,9})\.?\s+(\d{4})\b")
 RE_DATUM_TEXT_EN = re.compile(r"\b([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})\b")
 RE_RECHNUNGSNR = re.compile(
-    r"(?:rechnungs?-?\s?(?:nr|nummer)|invoice\s?(?:number|no|#)|beleg-?nr)\.?\s*[:#]?\s*([A-Z0-9][A-Z0-9\-/_.]{2,})",
+    r"(?:rechnungs?-?\s?(?:nr|nummer)|invoice\s?(?:number|no|#)|beleg-?nr)\.?\s*[:#]?\s*"
+    # in Gruppen gesetzte Nummern wie bei der Telekom ("37 1793 3100 0411", "772 634 2750") ganz nehmen
+    r"(\d{2,4}(?:[ \u00a0]\d{3,4})+(?![\d.,])|[A-Z0-9][A-Z0-9\-/_.]{2,})",
     re.IGNORECASE,
 )
 

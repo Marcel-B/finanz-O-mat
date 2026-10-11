@@ -106,4 +106,5 @@ def _uebernehmen(db: Datenbank, alte: list[Beleg], neue: list[Beleg], ergebnis: 
         neu.zahlungsdatum = neu.zahlungsdatum or alt.zahlungsdatum
         neu.pruefen = True
         db.beleg_aktualisieren(neu)
+        db.beleg_nummern_vergessen(neu.id)
         ergebnis.aktualisiert += 1

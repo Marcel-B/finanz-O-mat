@@ -104,6 +104,10 @@ CREATE TABLE IF NOT EXISTS kontakte (
     aliase TEXT NOT NULL DEFAULT '[]',
     ausgeblendet INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS beleg_nummern (
+    beleg_id INTEGER PRIMARY KEY,
+    nummern TEXT NOT NULL  -- Ziffernfolgen aus dem Dokumenttext, durch Leerzeichen getrennt
+);
 CREATE TABLE IF NOT EXISTS kurse (
     waehrung TEXT NOT NULL,
     zeitraum TEXT NOT NULL,
@@ -346,7 +350,27 @@ class Datenbank:
     def beleg_loeschen(self, beleg_id: int) -> None:
         with self._lock, self._con:
             self._con.execute("DELETE FROM belege WHERE id = ?", (beleg_id,))
+            self._con.execute("DELETE FROM beleg_nummern WHERE beleg_id = ?", (beleg_id,))
             self._con.execute("UPDATE umsaetze SET beleg_id = NULL WHERE beleg_id = ?", (beleg_id,))
+
+    # Nummern aus dem Dokumenttext (siehe ustva/belegnummern.py)
+    def beleg_nummern(self) -> dict[int, set[str]]:
+        with self._lock:
+            zeilen = self._con.execute("SELECT beleg_id, nummern FROM beleg_nummern").fetchall()
+        return {z["beleg_id"]: set(z["nummern"].split()) for z in zeilen}
+
+    def beleg_nummern_ids(self) -> set[int]:
+        with self._lock:
+            return {z[0] for z in self._con.execute("SELECT beleg_id FROM beleg_nummern")}
+
+    def beleg_nummern_speichern(self, nummern: dict[int, str]) -> None:
+        with self._lock, self._con:
+            self._con.executemany("INSERT OR REPLACE INTO beleg_nummern VALUES (?, ?)", nummern.items())
+
+    def beleg_nummern_vergessen(self, beleg_id: int) -> None:
+        """Nach dem Neueinlesen liest die Suche den Text noch einmal."""
+        with self._lock, self._con:
+            self._con.execute("DELETE FROM beleg_nummern WHERE beleg_id = ?", (beleg_id,))
 
     # Kontoumsätze
     def umsatz_anlegen(self, u: Umsatz) -> bool:
