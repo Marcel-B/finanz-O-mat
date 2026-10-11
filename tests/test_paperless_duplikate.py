@@ -13,7 +13,7 @@ from ustva.steuerfaelle import Art, Steuerfall
 
 SEVDESK = """sevDesk GmbH, Im Unteren Angel 1, 77652 Offenburg
 Rechnung
-Rechnungsnummer: 92026-313716
+Rechnungsnummer: 92026-000001
 Rechnungsdatum: 11.09.2026
 Buchhaltung 1 Monat
 Netto 25,90 EUR
@@ -37,16 +37,16 @@ def dok(i: int, titel: str, inhalt: str, tags: list[int], korrespondent: int | N
 
 
 DOKUMENTE = [
-    dok(1, "Rechnung-92026-313716", SEVDESK, [1, 3]),
-    dok(2, "92026-313716", SEVDESK.replace("\n", "  \n"), [1, 3]),  # andere Datei, leicht anderer OCR-Text
+    dok(1, "Rechnung-92026-000001", SEVDESK, [1, 3]),
+    dok(2, "92026-000001", SEVDESK.replace("\n", "  \n"), [1, 3]),  # andere Datei, leicht anderer OCR-Text
     dok(3, "Deine sevdesk-Rechnung", SEVDESK, [1, 3, 4]),  # aus der Mail
-    dok(4, "Telekom Juli", telekom("3818177900041"), [1], 2),
-    dok(5, "Telekom zweiter Vertrag", telekom("3818177900099"), [1], 2),  # gleicher Betrag, andere Nummer
+    dok(4, "Telekom Juli", telekom("3800000000041"), [1], 2),
+    dok(5, "Telekom zweiter Vertrag", telekom("3800000000099"), [1], 2),  # gleicher Betrag, andere Nummer
     dok(6, "Kontoauszug", "Kontoauszug September " * 10, [2]),
     dok(7, "Kontoauszug Kopie", "Kontoauszug September " * 10, [2]),  # kein Rechnungs-Tag: bleibt außen vor
 ]
 TAGS = [{"id": 1, "name": "Eingangsrechnung"}, {"id": 2, "name": "Kontoauszug"},
-        {"id": 3, "name": "b-velop"}, {"id": 4, "name": "E-Mail"}]
+        {"id": 3, "name": "Firma"}, {"id": 4, "name": "E-Mail"}]
 
 
 def transport(anfragen: list):
