@@ -9,7 +9,7 @@ import { useToast } from "primevue/usetoast";
 import { computed, ref, watch } from "vue";
 
 import { api, type Beleg, type Bericht, type Kennzahl, type Status, type Steuerfall } from "@/api";
-import { ausIso, betrag, datum, passtZurSuche, suchtext, zeitraumVon } from "@/format";
+import { ausIso, betrag, datum, elsterWert, passtZurSuche, suchtext, zeitraumVon } from "@/format";
 
 import BelegDialog from "./BelegDialog.vue";
 import KarteBox from "./KarteBox.vue";
@@ -17,7 +17,14 @@ import KontoUmsaetze from "./KontoUmsaetze.vue";
 import KursTabelle from "./KursTabelle.vue";
 import SuchFeld from "./SuchFeld.vue";
 
-const props = defineProps<{ status: Status; steuerfaelle: Steuerfall[] }>();
+// Aus dem Monatsabschluss: `springeZu` stellt den Monat ein (n zählt jeden Sprung), `neuLaden` zählt hoch,
+// wenn dort Umsätze oder Belege dazugekommen sind
+const props = defineProps<{
+  status: Status;
+  steuerfaelle: Steuerfall[];
+  springeZu?: { zeitraum: string; n: number } | null;
+  neuLaden?: number;
+}>();
 const toast = useToast();
 
 const monat = ref<Date>(ausIso(`${props.status.frist.zeitraum}-01`) ?? new Date());
@@ -59,6 +66,14 @@ function meldeFehler(e: unknown) {
 }
 
 watch(zeitraum, laden, { immediate: true });
+watch(
+  () => props.springeZu,
+  (ziel) => {
+    if (!ziel) return;
+    if (ziel.zeitraum !== zeitraum.value) monat.value = ausIso(`${ziel.zeitraum}-01`) ?? monat.value;
+  },
+);
+watch(() => props.neuLaden, laden);
 
 async function einlesen() {
   liestEin.value = true;
@@ -100,11 +115,6 @@ async function neuEinlesen() {
   } finally {
     liestNeu.value = false;
   }
-}
-
-function elsterWert(k: Kennzahl): string {
-  const wert = Number(k.betrag);
-  return k.betrag_art === "bemessungsgrundlage" ? String(Math.trunc(wert)) : wert.toFixed(2).replace(".", ",");
 }
 
 async function kopieren(k: Kennzahl) {

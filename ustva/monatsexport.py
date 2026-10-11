@@ -207,6 +207,11 @@ def protokoll_vorhanden(pl: PaperlessClient, tag: str, jahr: int, monat: int) ->
     return bool(_monatsdokumente(pl, tag, jahr, monat, date(pj, pm, 1), protokoll=True))
 
 
+def kontoauszug_vorhanden(pl: PaperlessClient, tag: str, jahr: int, monat: int) -> bool:
+    nj, nm = monat_plus(jahr, monat, 1)
+    return bool(_monatsdokumente(pl, tag, jahr, monat, date(nj, nm, 16)))
+
+
 def _monatsdokumente(pl: PaperlessClient, tag: str, jahr: int, monat: int, bis: date,
                      protokoll: bool = False) -> list[dict]:
     tags = {name.lower(): tid for tid, name in pl.namen("/api/tags/").items()}

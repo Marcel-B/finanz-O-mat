@@ -24,6 +24,7 @@ from . import (
     bank,
     einstellungen,
     export,
+    monatsabschluss,
     monatsexport,
     sevdesk_web,
     stundenzettel,
@@ -218,6 +219,12 @@ class StundenzettelTag(BaseModel):
 
 class StundenzettelMonat(BaseModel):
     tage: list[StundenzettelTag]
+
+
+class MailVorlage(BaseModel):
+    an: str = ""
+    betreff: str = ""
+    text: str = ""
 
 
 class NeuEinlesenAnfrage(BaseModel):
@@ -680,6 +687,46 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         return Response(inhalt, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition":
                                  f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"})
+
+    # Geführter Monatsabschluss
+    @app.get("/api/monatsabschluss/{zr}")
+    def monatsabschluss_stand(zr: str):
+        jahr, monat = _zeitraum(zr)
+        c = aktuell()
+        b = berechnen(db.alle_belege(), jahr, monat, umrechner, cfg.versteuerung)
+        umsaetze = db.alle_umsaetze()
+        if not c.paperless_aktiv:
+            return monatsabschluss.stand(db, b, umsaetze, None, c)
+        with httpx.Client(timeout=10) as client:
+            protokoll = abgegeben_pruefer(c, client)(jahr, monat) if c.paperless_tag_protokoll else None
+            pl = paperless.PaperlessClient(c.paperless_url, c.paperless_token, client)
+            return monatsabschluss.stand(db, b, umsaetze, pl, c, protokoll)
+
+    @app.post("/api/monatsabschluss/{zr}/ablegen/{art}")
+    async def monatsabschluss_ablegen(zr: str, art: str, request: Request, name: str = ""):
+        jahr, monat = _zeitraum(zr)
+        c = aktuell()
+        if not c.paperless_aktiv:
+            raise HTTPException(400, "Paperless ist nicht eingerichtet (Einstellungen).")
+        roh = await request.body()
+
+        def hochladen() -> dict:
+            with httpx.Client(timeout=60) as client:
+                pl = paperless.PaperlessClient(c.paperless_url, c.paperless_token, client)
+                try:
+                    return monatsabschluss.ablegen(pl, c, art, jahr, monat, Path(name).name, roh, _heute())
+                except paperless.PaperlessFehler as e:
+                    raise HTTPException(502, str(e)) from e
+
+        ergebnis = await run_in_threadpool(hochladen)
+        if art == "protokoll":  # die Frist-Anzeige soll es sofort merken
+            for schluessel in [k for k in protokolle if k[2:] == (jahr, monat)]:
+                del protokolle[schluessel]
+        return ergebnis
+
+    @app.put("/api/monatsabschluss/mail")
+    def monatsabschluss_mail(eingabe: MailVorlage):
+        return monatsabschluss.mail_speichern(db, eingabe.model_dump())
 
     # Stundenzettel
     def _jahr(jahr: int) -> int:

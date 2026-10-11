@@ -20,6 +20,12 @@ export const ausIso = (iso: string | null | undefined): Date | null => {
   return new Date(j, m - 1, t ?? 1);
 };
 
+// So wie ELSTER es erwartet: Bemessungsgrundlagen in vollen Euro, Steuerbeträge mit Cent
+export const elsterWert = (k: { betrag: string; betrag_art: string }): string => {
+  const wert = Number(k.betrag);
+  return k.betrag_art === "bemessungsgrundlage" ? String(Math.trunc(wert)) : wert.toFixed(2).replace(".", ",");
+};
+
 export const zeitraumVon = (d: Date): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 
 // Volltextsuche in einer Liste: Jedes eingegebene Wort muss irgendwo vorkommen. Beträge findet man

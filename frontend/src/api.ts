@@ -298,6 +298,37 @@ export interface StundenzettelImport {
   name: string;
 }
 
+export interface MailVorlage {
+  an: string;
+  betreff: string; // Platzhalter {monat} und {jahr}
+  text: string;
+}
+
+export interface MonatsabschlussStand {
+  zeitraum: string;
+  monat: string; // „September 2026“
+  umsaetze: number;
+  letzte_buchung: string | null;
+  ohne_beleg: number;
+  belege: number;
+  pruefen: number;
+  fehlerhaft: number;
+  kontoauszug: boolean | null; // null: ohne Paperless nicht prüfbar
+  protokoll: boolean | null;
+  paperless: boolean;
+  paperless_fehler: string;
+  stundenzettel: string; // eingetragene Stunden im Monat
+  mail: MailVorlage;
+}
+
+export interface Ablage {
+  zustand: "fertig" | "doppelt" | "wartet" | "fehler";
+  dokument: string;
+  fehler: string;
+  titel: string;
+  tag: string;
+}
+
 export type Rolle = "" | "kunde" | "lieferant" | "beides";
 
 export interface KontaktEingabe {
@@ -474,6 +505,15 @@ export const api = {
       body: datei,
       headers: { "Content-Type": "application/octet-stream" },
     }),
+  monatsabschluss: (zeitraum: string) => anfrage<MonatsabschlussStand>(`/api/monatsabschluss/${zeitraum}`),
+  monatsabschlussAblegen: (zeitraum: string, art: "kontoauszug" | "protokoll", datei: File) =>
+    anfrage<Ablage>(`/api/monatsabschluss/${zeitraum}/ablegen/${art}?name=${encodeURIComponent(datei.name)}`, {
+      method: "POST",
+      body: datei,
+      headers: { "Content-Type": "application/pdf" },
+    }),
+  mailVorlageSpeichern: (v: MailVorlage) =>
+    anfrage<MailVorlage>("/api/monatsabschluss/mail", { method: "PUT", body: JSON.stringify(v) }),
   backup: () => anfrage<BackupStatus>("/api/backup"),
   backupStarten: () => post<BackupStatus>("/api/backup"),
 };
