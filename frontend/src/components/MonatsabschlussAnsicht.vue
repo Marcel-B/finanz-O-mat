@@ -14,6 +14,7 @@ import { computed, reactive, ref, watch } from "vue";
 
 import {
   api,
+  belegDrucken,
   belegeDrucken,
   type Bericht,
   type DruckBeleg,
@@ -273,8 +274,9 @@ async function vorlageSpeichern() {
 const druckbar = computed(() => druck.value.filter((b) => !b.grund));
 const ungedruckt = computed(() => druckbar.value.filter((b) => !b.gedruckt));
 
-function drucken(ids?: number[]) {
-  belegeDrucken(zeitraum.value, ids);
+function drucken(ids?: number[], einzeln = false) {
+  if (einzeln && ids) belegDrucken(ids[0]);
+  else belegeDrucken(zeitraum.value, ids);
   // Den Vermerk setzt der Server beim Erzeugen des PDFs; zeigen, sobald man aus dem PDF-Tab zurückkommt
   window.addEventListener(
     "focus",
@@ -589,11 +591,23 @@ const stunden = (wert: string | number) =>
                 <span class="text-xs text-muted-color">{{ b.art === "ausgang" ? "Ausgang" : "Eingang" }}</span>
               </td>
               <td class="py-1.5 text-right">
-                <span v-if="b.grund" class="text-muted-color">{{ b.grund }}</span>
-                <span v-else-if="b.gedruckt" class="text-muted-color">
+                <span v-if="b.gedruckt" class="text-muted-color">
                   <i class="pi pi-print mr-1 text-xs" />gedruckt am {{ zeitpunkt(b.gedruckt) }}
                 </span>
+                <span v-else-if="b.fehler" class="text-red-600 dark:text-red-400">nicht im PDF: {{ b.fehler }}</span>
+                <span v-else-if="b.grund" class="text-muted-color">{{ b.grund }}</span>
                 <span v-else class="text-amber-600 dark:text-amber-400">noch nicht gedruckt</span>
+              </td>
+              <td class="w-10 py-1 text-right">
+                <Button
+                  v-if="b.grund !== 'keine Datei hinterlegt'"
+                  v-tooltip.left="'Nur diesen Beleg drucken (Originaldatei)'"
+                  size="small"
+                  text
+                  icon="pi pi-print"
+                  aria-label="Diesen Beleg drucken"
+                  @click="drucken([b.id], true)"
+                />
               </td>
             </tr>
           </table>

@@ -310,15 +310,25 @@ export interface DruckBeleg {
   rechnungsdatum: string | null;
   gedruckt: string;
   grund: string; // warum nicht druckbar; leer = druckbar
+  fehler: string; // warum er beim letzten Druck nicht ins PDF kam
 }
 
 // Öffnet die Belege des Monats als ein PDF in einem neuen Tab. Ein Formular statt fetch, damit der Browser das
 // PDF selbst anzeigt; der Server vermerkt die enthaltenen Belege als gedruckt.
 export function belegeDrucken(zeitraum: string, ids?: number[]) {
+  imNeuenTab(`/api/druck/${zeitraum}/belege.pdf${ids?.length ? `?ids=${ids.join(",")}` : ""}`);
+}
+
+// Öffnet die Datei eines einzelnen Belegs unverändert zum Drucken (auch geschützte PDFs) und vermerkt den Druck.
+export function belegDrucken(id: number) {
+  imNeuenTab(`/api/belege/${id}/drucken`);
+}
+
+function imNeuenTab(action: string) {
   const formular = document.createElement("form");
   formular.method = "post";
   formular.target = "_blank";
-  formular.action = `/api/druck/${zeitraum}/belege.pdf${ids?.length ? `?ids=${ids.join(",")}` : ""}`;
+  formular.action = action;
   document.body.appendChild(formular);
   formular.submit();
   formular.remove();
