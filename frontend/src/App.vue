@@ -13,6 +13,7 @@ import { onMounted, ref } from "vue";
 import { angemeldet, api, type Status, type Steuerfall } from "./api";
 import AdressbuchAnsicht from "./components/AdressbuchAnsicht.vue";
 import AnmeldeAnsicht from "./components/AnmeldeAnsicht.vue";
+import AppLogo from "./components/AppLogo.vue";
 import BackupHinweis from "./components/BackupHinweis.vue";
 import EinstellungenAnsicht from "./components/EinstellungenAnsicht.vue";
 import TaetigkeitenAnsicht from "./components/TaetigkeitenAnsicht.vue";
@@ -64,9 +65,12 @@ onMounted(starten);
   <Toast />
   <ConfirmDialog />
   <header class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 pt-6 pb-4">
-    <div>
-      <h1 class="text-2xl font-semibold">Finanz-O-Mat</h1>
-      <p class="text-muted-color">Umsatzsteuer-Voranmeldung berechnen, abgeben in Mein ELSTER</p>
+    <div class="flex items-center gap-3">
+      <AppLogo :groesse="48" />
+      <div>
+        <h1 class="text-2xl font-semibold">Finanz-<span class="text-primary">O</span>-Mat</h1>
+        <p class="text-muted-color">Umsatzsteuer-Voranmeldung berechnen, abgeben in Mein ELSTER</p>
+      </div>
     </div>
     <div class="flex items-center gap-3">
       <div
