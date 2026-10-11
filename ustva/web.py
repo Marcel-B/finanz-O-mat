@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 import time
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
@@ -26,6 +26,7 @@ from . import (
     export,
     monatsexport,
     sevdesk_web,
+    stundenzettel,
     taetigkeit,
     uebersicht,
 )
@@ -208,6 +209,15 @@ class TaetigkeitEingabe(BaseModel):
     @classmethod
     def _text(cls, v: str) -> str:
         return v.strip()
+
+
+class StundenzettelTag(BaseModel):
+    datum: date
+    stunden: Decimal
+
+
+class StundenzettelMonat(BaseModel):
+    tage: list[StundenzettelTag]
 
 
 class NeuEinlesenAnfrage(BaseModel):
@@ -670,6 +680,61 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         return Response(inhalt, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition":
                                  f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"})
+
+    # Stundenzettel
+    def _jahr(jahr: int) -> int:
+        if not 2000 <= jahr <= _heute().year:
+            raise HTTPException(400, "Jahr ungültig")
+        return jahr
+
+    @app.get("/api/stundenzettel/einstellungen")
+    def stundenzettel_einstellungen():
+        return stundenzettel.laden(db).to_dict()
+
+    @app.put("/api/stundenzettel/einstellungen")
+    def stundenzettel_einstellungen_speichern(eingabe: dict):
+        return stundenzettel.speichern(db, stundenzettel.Einstellungen.aus_dict(eingabe)).to_dict()
+
+    @app.get("/api/stundenzettel/{jahr:int}")
+    def stundenzettel_jahr(jahr: int):
+        heute_ = _heute()
+        vorher = date(heute_.year, heute_.month, 1) - timedelta(days=1)
+        return {
+            "monate": stundenzettel.monate(db, _jahr(jahr), heute_),
+            "aktuell": f"{heute_:%Y-%m}",
+            "vergangen": f"{vorher:%Y-%m}",
+            "einstellungen": stundenzettel.laden(db).to_dict(),
+        }
+
+    @app.get("/api/stundenzettel/vorschlag/{zr}")
+    def stundenzettel_vorschlag(zr: str):
+        jahr, monat = _zeitraum(zr)
+        return stundenzettel.vorschlag(stundenzettel.laden(db), jahr, monat, aktuell().bundesland)
+
+    @app.put("/api/stundenzettel/monat/{zr}")
+    def stundenzettel_eintragen(zr: str, eingabe: StundenzettelMonat):
+        jahr, _ = _zeitraum(zr)
+        tage = sorted((t.datum, t.stunden) for t in eingabe.tage)
+        stundenzettel.monat_pruefen(zr, tage, _heute())
+        db.stundenzettel_monat_setzen(zr, tage)
+        return stundenzettel.monate(db, jahr, _heute())
+
+    @app.post("/api/stundenzettel/import/{jahr:int}")
+    async def stundenzettel_import(jahr: int, request: Request):
+        roh = await request.body()
+        if len(roh) > 20_000_000:
+            raise HTTPException(413, "Datei zu groß")
+        return stundenzettel.importieren(db, roh, _jahr(jahr)).to_dict()
+
+    @app.get("/api/stundenzettel/{jahr:int}/excel")
+    def stundenzettel_excel(jahr: int):
+        e = stundenzettel.laden(db)
+        bis = len(stundenzettel.monate(db, _jahr(jahr), _heute()))
+        inhalt = stundenzettel.xlsx(e, jahr, db.stundenzettel(jahr), bis)
+        name = stundenzettel.dateiname(e, jahr)
+        return Response(inhalt, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f"attachment; filename=\"Stundenzettel-{jahr}.xlsx\"; "
+                                                        f"filename*=UTF-8''{quote(name)}"})
 
     def _einstellungen() -> dict:
         c = aktuell()

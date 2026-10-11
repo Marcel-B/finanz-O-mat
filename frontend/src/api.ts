@@ -260,6 +260,44 @@ export interface TaetigkeitImport {
   vorlage: string[];
 }
 
+export interface StundenzettelTag {
+  datum: string;
+  stunden: string;
+}
+
+export interface StundenzettelEinstellungen {
+  name: string;
+  stunden: string; // je Monat
+  wochentag: number; // 0 = Montag
+}
+
+export interface StundenzettelMonat {
+  zeitraum: string;
+  name: string;
+  tage: StundenzettelTag[];
+  stunden: string;
+}
+
+export interface StundenzettelJahr {
+  monate: StundenzettelMonat[]; // Januar bis zum letzten Monat, nichts in der Zukunft
+  aktuell: string;
+  vergangen: string;
+  einstellungen: StundenzettelEinstellungen;
+}
+
+export interface StundenzettelVorschlag {
+  tage: StundenzettelTag[];
+  feiertage: { datum: string; name: string }[]; // Arbeitstage, die wegen eines Feiertags fehlen
+}
+
+export interface StundenzettelImport {
+  tage: number;
+  monate: string[];
+  uebersprungen: string[];
+  andere_jahre: string[];
+  name: string;
+}
+
 export type Rolle = "" | "kunde" | "lieferant" | "beides";
 
 export interface KontaktEingabe {
@@ -418,6 +456,20 @@ export const api = {
     anfrage<TaetigkeitVorlage>("/api/taetigkeiten/vorlage", { method: "PUT", body: JSON.stringify(v) }),
   taetigkeitImport: (datei: Blob) =>
     anfrage<TaetigkeitImport>("/api/taetigkeiten/import", {
+      method: "POST",
+      body: datei,
+      headers: { "Content-Type": "application/octet-stream" },
+    }),
+  stundenzettel: (jahr: number) => anfrage<StundenzettelJahr>(`/api/stundenzettel/${jahr}`),
+  stundenzettelVorschlag: (zeitraum: string) =>
+    anfrage<StundenzettelVorschlag>(`/api/stundenzettel/vorschlag/${zeitraum}`),
+  stundenzettelEintragen: (zeitraum: string, tage: StundenzettelTag[]) =>
+    anfrage<StundenzettelMonat[]>(`/api/stundenzettel/monat/${zeitraum}`, { method: "PUT", body: JSON.stringify({ tage }) }),
+  stundenzettelEinstellungen: () => anfrage<StundenzettelEinstellungen>("/api/stundenzettel/einstellungen"),
+  stundenzettelEinstellungenSpeichern: (e: StundenzettelEinstellungen) =>
+    anfrage<StundenzettelEinstellungen>("/api/stundenzettel/einstellungen", { method: "PUT", body: JSON.stringify(e) }),
+  stundenzettelImport: (jahr: number, datei: Blob) =>
+    anfrage<StundenzettelImport>(`/api/stundenzettel/import/${jahr}`, {
       method: "POST",
       body: datei,
       headers: { "Content-Type": "application/octet-stream" },

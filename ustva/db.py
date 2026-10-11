@@ -82,6 +82,10 @@ CREATE TABLE IF NOT EXISTS taetigkeiten (
     leistungsart TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS taetigkeiten_datum ON taetigkeiten(datum);
+CREATE TABLE IF NOT EXISTS stundenzettel (
+    datum TEXT PRIMARY KEY,
+    stunden TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS kontakte (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -421,6 +425,24 @@ class Datenbank:
     def taetigkeit_loeschen(self, taetigkeit_id: int) -> None:
         with self._lock, self._con:
             self._con.execute("DELETE FROM taetigkeiten WHERE id = ?", (taetigkeit_id,))
+
+    # Stundenzettel
+    def stundenzettel(self, jahr: int) -> list[tuple[date, Decimal]]:
+        with self._lock:
+            zeilen = self._con.execute(
+                "SELECT datum, stunden FROM stundenzettel WHERE substr(datum, 1, 4) = ? ORDER BY datum",
+                (f"{jahr:04d}",),
+            ).fetchall()
+        return [(date.fromisoformat(z["datum"]), Decimal(z["stunden"])) for z in zeilen]
+
+    def stundenzettel_monat_setzen(self, zeitraum: str, tage: list[tuple[date, Decimal]]) -> None:
+        """Ersetzt alle Tage eines Monats (JJJJ-MM)."""
+        with self._lock, self._con:
+            self._con.execute("DELETE FROM stundenzettel WHERE substr(datum, 1, 7) = ?", (zeitraum,))
+            self._con.executemany(
+                "INSERT INTO stundenzettel (datum, stunden) VALUES (?, ?)",
+                [(d.isoformat(), str(h)) for d, h in tage],
+            )
 
     # Adressbuch
     def kontakte(self) -> list[Kontakt]:
