@@ -194,7 +194,7 @@ class LokiHandler(logging.Handler):
         self.schlange: queue.Queue = queue.Queue(maxsize=max_zeilen)
         self.client = client or httpx.Client(timeout=5)
         self.warnen = warnen or (lambda text: print(text, file=sys.stderr, flush=True))
-        self._zuletzt_gewarnt = 0.0
+        self._zuletzt_gewarnt: float | None = None  # monotonic() kann kurz nach dem Start unter 300 liegen
         self._stopp = threading.Event()
         self._thread = threading.Thread(target=self._laufen, name="loki-versand", daemon=True)
         self._thread.start()
@@ -241,7 +241,7 @@ class LokiHandler(logging.Handler):
             except httpx.HTTPError as e:
                 LOKI_VERWORFEN.inc(len(zeilen))
                 # Nicht über logging melden, sonst entstünde für jeden Fehlversuch eine neue Zeile
-                if time.monotonic() - self._zuletzt_gewarnt > 300:
+                if self._zuletzt_gewarnt is None or time.monotonic() - self._zuletzt_gewarnt > 300:
                     self._zuletzt_gewarnt = time.monotonic()
                     self.warnen(f"Loki unter {self.url} nicht erreichbar ({e}); Protokollzeilen werden verworfen")
                 return
