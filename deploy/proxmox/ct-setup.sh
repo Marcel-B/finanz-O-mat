@@ -160,6 +160,11 @@ benutzer_und_ordner() {
     if ! grep -q '^BACKUP_VERZEICHNIS=' "$ENV_DATEI"; then
         printf '\n# Backup-Stand in der App (finanz-o-mat-backup)\nBACKUP_VERZEICHNIS="%s"\n' "$BACKUP_DIR" >>"$ENV_DATEI"
     fi
+    if ! grep -q '^LOKI_URL=' "$ENV_DATEI"; then
+        # Monitoring-Container im Tailnet (Marcel-B/scripts, docs/monitoring.md); leer = kein Versand
+        printf '\n# Protokoll an Loki (leer = nur ins Journal), Messwerte unter /metrics\nLOKI_URL="%s"\nLOKI_HOST="%s"\n' \
+            "http://monitoring:3100" "proxmox" >>"$ENV_DATEI"
+    fi
     chown root:"$BENUTZER" "$ENV_DATEI"
     chmod 640 "$ENV_DATEI"
 }

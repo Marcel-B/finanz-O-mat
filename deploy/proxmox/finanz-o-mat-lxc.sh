@@ -32,17 +32,19 @@ hilfe() {
     cat <<EOF
 Finanz-O-Mat in einem Proxmox-LXC-Container installieren oder aktualisieren (auf dem PVE-Host als root).
 
-Aufruf: $AUFRUF [-y | update <CTID> | tailscale <CTID>]
+Aufruf: $AUFRUF [-y | update <CTID> | tailscale <CTID> | monitoring <CTID>]
 
   (ohne)            neuen Container anlegen, fragt die wichtigsten Werte ab
   -y                ohne Rückfragen, Werte aus Umgebungsvariablen
   update <CTID>     App im Container aktualisieren (Datenbank wird vorher gesichert)
   tailscale <CTID>  Tailscale in einem bestehenden Container nachrüsten
+  monitoring <CTID> beim Monitoring-Container anmelden (Prometheus-Ziel, Protokoll an Loki)
 
 Variablen (Vorgabe): CTID (nächste freie), CT_HOSTNAME (finanz-o-mat), CORES (1), MEMORY (1024), DISK (4),
 BRIDGE (vmbr0), IP (dhcp), GATEWAY, CT_STORAGE, TEMPLATE_STORAGE, BELEG_HOST_PATH, PAPERLESS_URL,
 PAPERLESS_TOKEN, APP_BENUTZER (admin), APP_PASSWORT (zufällig), VERSTEUERUNG (ist), BUNDESLAND (NW),
-EIGENE_USTID, PORT (8000), AUTO_UPDATE (nein), TAILSCALE (ja), TAILSCALE_AUTHKEY, TAILSCALE_SERVE (nein), REPO_URL, REPO_BRANCH (main). Details: deploy/proxmox/README.md
+EIGENE_USTID, PORT (8000), AUTO_UPDATE (nein), TAILSCALE (ja), TAILSCALE_AUTHKEY, TAILSCALE_SERVE (nein), REPO_URL, REPO_BRANCH (main),
+LOKI_URL (http://monitoring:3100), MONITORING_CTID (Container namens monitoring). Details: deploy/proxmox/README.md
 EOF
 }
 
@@ -163,6 +165,10 @@ PORT="$PORT"
 # Update-Hinweis in der App; ja = neue Versionen automatisch installieren
 UPDATE_VERZEICHNIS="/var/lib/finanz-o-mat/update"
 AUTO_UPDATE="$AUTO_UPDATE"
+
+# Protokoll an Loki (leer = nur ins Journal), Messwerte unter /metrics
+LOKI_URL="$LOKI_URL"
+LOKI_HOST="proxmox"
 EOF
 }
 
@@ -231,6 +237,7 @@ installieren() {
     TAILSCALE="${TAILSCALE:-ja}"
     TAILSCALE_AUTHKEY="${TAILSCALE_AUTHKEY:-}"
     TAILSCALE_SERVE="${TAILSCALE_SERVE:-nein}"
+    LOKI_URL="${LOKI_URL-http://monitoring:3100}"
 
     [[ -n $CT_STORAGE ]] || abbruch "Kein Speicher für Container gefunden (CT_STORAGE setzen)."
     [[ -n $TEMPLATE_STORAGE ]] || abbruch "Kein Speicher für Vorlagen gefunden (TEMPLATE_STORAGE setzen)."
@@ -280,7 +287,7 @@ installieren() {
         APP_PASSWORT=$(zufall 20)
         PASSWORT_ERZEUGT=1
     fi
-    for v in PAPERLESS_URL PAPERLESS_TOKEN APP_BENUTZER APP_PASSWORT EIGENE_USTID BUNDESLAND; do
+    for v in PAPERLESS_URL PAPERLESS_TOKEN APP_BENUTZER APP_PASSWORT EIGENE_USTID BUNDESLAND LOKI_URL; do
         pruefe_wert "$v" "${!v}"
     done
 
@@ -344,6 +351,9 @@ installieren() {
     info "Richte Python-Umgebung und Dienst ein (dauert ein paar Minuten)"
     im_ct bash "$APP_DIR/deploy/proxmox/ct-setup.sh" install
     [[ $TAILSCALE == ja ]] && tailscale_einrichten
+    if monitoring_ct >/dev/null; then
+        monitoring_einrichten || warn "Anmeldung beim Monitoring fehlgeschlagen, später: $AUFRUF monitoring $CTID"
+    fi
 
     local adresse ts_ip=""
     adresse=$(im_ct hostname -I 2>/dev/null | awk '{print $1}')
@@ -398,6 +408,68 @@ tailscale_nachruesten() {
     tailscale_einrichten
 }
 
+monitoring_ct() {
+    # ID des Monitoring-Containers (Grafana/Prometheus/Loki aus Marcel-B/YuE-UI, deploy/monitoring)
+    local id=${MONITORING_CTID:-}
+    [[ -n $id ]] || id=$(pct list 2>/dev/null | awk -v n="${MONITORING_HOSTNAME:-monitoring}" 'NR > 1 && $NF == n {print $1; exit}')
+    [[ -n $id ]] && pct status "$id" 2>/dev/null | grep -q running && echo "$id"
+}
+
+monitoring_einrichten() {
+    # Prometheus-Ziel im Monitoring-Container anlegen und LOKI_URL in der App setzen
+    local mon adresse loki ts_ip tmp ziel=/opt/monitoring/prometheus/targets/finanzomat.yml
+    mon=$(monitoring_ct) || { warn "Kein laufender Container namens ${MONITORING_HOSTNAME:-monitoring} (MONITORING_CTID setzen)"; return 1; }
+    pct exec "$mon" -- test -d "$(dirname "$ziel")" \
+        || { warn "Container $mon hat kein $(dirname "$ziel"), ist das der Monitoring-Container?"; return 1; }
+    PORT=$(im_ct sed -n 's/^PORT="\{0,1\}\([0-9]*\)"\{0,1\}$/\1/p' "$ENV_DATEI" 2>/dev/null || true)
+    PORT=${PORT:-8000}
+    info "Melde Container $CTID beim Monitoring-Container $mon an"
+
+    # Adresse für Prometheus: voller Tailscale-Name, wenn der Monitoring-Container ihn auflöst, sonst die IP
+    adresse=$(im_ct tailscale status --json 2>/dev/null \
+        | python3 -c 'import json, sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)
+    if [[ -z $adresse ]] || ! pct exec "$mon" -- getent hosts "$adresse" >/dev/null 2>&1; then
+        adresse=$(im_ct tailscale ip -4 2>/dev/null | head -n1 || true)
+        [[ -n $adresse ]] || adresse=$(im_ct hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+    [[ -n $adresse ]] || { warn "Adresse von Container $CTID nicht ermittelbar"; return 1; }
+    tmp=$(mktemp)
+    cat >"$tmp" <<EOF
+# Finanz-O-Mat (Container $CTID), angelegt $(date +%F) von finanz-o-mat-lxc.sh monitoring
+- targets: [$adresse:$PORT]
+  labels:
+    app: finanzomat
+    __scheme__: http
+    __metrics_path__: /metrics
+EOF
+    pct push "$mon" "$tmp" "$ziel" --perms 644
+    rm -f "$tmp"
+    ok "Prometheus-Ziel $adresse:$PORT in $ziel (Container $mon)"
+
+    # Loki: Name "monitoring" im Tailnet, sonst die Tailscale-IP des Monitoring-Containers
+    loki=http://monitoring:3100
+    if ! im_ct getent hosts monitoring >/dev/null 2>&1; then
+        ts_ip=$(pct exec "$mon" -- tailscale ip -4 2>/dev/null | head -n1 || true)
+        [[ -n $ts_ip ]] && loki="http://$ts_ip:3100"
+    fi
+    if im_ct grep -q '^LOKI_URL=' "$ENV_DATEI"; then
+        im_ct sed -i "s|^LOKI_URL=.*|LOKI_URL=\"$loki\"|" "$ENV_DATEI"
+    else
+        im_ct sed -i "\$a LOKI_URL=\"$loki\"\nLOKI_HOST=\"proxmox\"" "$ENV_DATEI"
+    fi
+    im_ct systemctl restart finanz-o-mat
+    ok "Protokoll geht an $loki"
+    echo "  Prüfen: http://${MONITORING_HOSTNAME:-monitoring}:9090/targets (finanzomat = up), in Grafana das Dashboard Finanz-O-Mat"
+}
+
+monitoring_anmelden() {
+    pruefe_host
+    CTID=${1:-}
+    [[ $CTID =~ ^[0-9]+$ ]] || abbruch "Aufruf: $AUFRUF monitoring <CTID>"
+    pct status "$CTID" 2>/dev/null | grep -q running || abbruch "Container $CTID läuft nicht."
+    monitoring_einrichten || abbruch "Anmeldung beim Monitoring fehlgeschlagen"
+}
+
 main() {
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -406,6 +478,7 @@ main() {
             install) ;;
             update) aktualisieren "${2:-}"; return ;;
             tailscale) tailscale_nachruesten "${2:-}"; return ;;
+            monitoring) monitoring_anmelden "${2:-}"; return ;;
             *) abbruch "Unbekannte Option: $1 (siehe --help)" ;;
         esac
         shift

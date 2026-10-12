@@ -162,6 +162,32 @@ Dienst eine Mail.
   Push-URL `https://<kuma>/api/push/<token>?…` eintragen. Läuft Kuma im selben Heimnetz, merkt es einen Ausfall des
   ganzen Netzes allerdings nicht.
 
+## Monitoring
+
+Grafana, Prometheus und Loki laufen in einem eigenen Container namens `monitoring` (Einrichtung und Steckbrief:
+[Marcel-B/scripts → docs/monitoring.md](https://github.com/Marcel-B/scripts/blob/main/docs/monitoring.md)). Die App
+bietet Messwerte unter `/metrics` und schickt ihr Protokoll an Loki (Einzelheiten: Abschnitt „Monitoring“ im
+Haupt-README). Anmelden auf dem Host:
+
+```sh
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Marcel-B/finanz-O-mat/main/deploy/proxmox/finanz-o-mat-lxc.sh)" -- monitoring <CTID>
+```
+
+Das Skript sucht den laufenden Container namens `monitoring` (anderer Name: `MONITORING_HOSTNAME`, feste ID:
+`MONITORING_CTID`) und
+
+- legt dort `/opt/monitoring/prometheus/targets/finanzomat.yml` an: Ziel ist der Tailscale-Name des
+  Finanz-O-Mat-Containers mit Port 8000, oder seine 100.x-Adresse, wenn der Monitoring-Container den Namen nicht
+  auflöst. Prometheus übernimmt die Datei binnen einer Minute ohne Neustart.
+- setzt im Finanz-O-Mat-Container `LOKI_URL` (`http://monitoring:3100`, ohne MagicDNS die 100.x-Adresse des
+  Monitoring-Containers) und startet den Dienst neu.
+
+Bei einer Neuinstallation passiert das von selbst, wenn es den Container `monitoring` schon gibt. Ältere Container
+bekommen beim nächsten Update `LOKI_URL="http://monitoring:3100"` und `LOKI_HOST="proxmox"` in die Konfiguration;
+das Prometheus-Ziel braucht trotzdem einmal den Befehl oben. Prüfen: `http://monitoring:9090/targets` zeigt
+`finanzomat` als `up`, in Grafana `http://monitoring:3000` steht das Dashboard **Finanz-O-Mat**. Ohne Monitoring
+`LOKI_URL=""` setzen; `/metrics` stört dann nicht.
+
 ## Oberfläche (Vue)
 
 Gibt es im Repo ein `frontend/` mit `package.json` (Vue/Vite), baut das Skript die Oberfläche bei Installation und

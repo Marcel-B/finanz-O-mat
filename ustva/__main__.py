@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import sys
 from datetime import date
 from decimal import Decimal
@@ -284,9 +285,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.befehl == "serve":
         import uvicorn
 
+        from .monitoring import log_config
         from .web import create_app
 
-        uvicorn.run(create_app(cfg), host=args.host, port=args.port)
+        # uvicorn gibt SIGTERM nach dem Herunterfahren an den Prozess weiter; ohne eigenen Handler endete er
+        # dann ohne atexit, und die letzten Protokollzeilen kämen nicht mehr bei Loki an
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        uvicorn.run(create_app(cfg), host=args.host, port=args.port,
+                    log_config=log_config(cfg.log_level, cfg.loki_url, cfg.loki_host))
         return 0
     if args.befehl == "passwort":
         return passwort(args, cfg)
