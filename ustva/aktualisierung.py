@@ -11,9 +11,12 @@ Ohne ``UPDATE_VERZEICHNIS`` (z. B. lokal oder mit Docker) ist die Funktion aus.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+
+log = logging.getLogger(__name__)
 
 STATUS_DATEI = "status.json"
 ANFORDERN_DATEI = "anfordern"
@@ -59,6 +62,7 @@ def router(verzeichnis: Path | None) -> APIRouter:
         if status["zustand"] in {"laeuft", "angefordert"}:
             return status
         (verzeichnis / ANFORDERN_DATEI).touch()
+        log.info("Update auf %s in der App angefordert", status.get("neu") or "neueste Version")
         return lesen(verzeichnis)
 
     @r.post("/api/update/pruefen", status_code=202)

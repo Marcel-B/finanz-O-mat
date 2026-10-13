@@ -253,6 +253,37 @@ SameSite=Strict, über HTTPS zusätzlich Secure); in der Datenbank steht nur des
   (`journalctl -u finanz-o-mat`). Ein Neustart des Dienstes hebt eine Sperre auf.
 - Ändernde Anfragen von fremden Webseiten lehnt die App ab, die Seiten lassen sich nicht in fremde Seiten einbetten.
 
+## Monitoring
+
+Die App lässt sich an den gemeinsamen Monitoring-Stack (Grafana, Prometheus, Loki; Steckbrief in
+[Marcel-B/scripts → docs/monitoring.md](https://github.com/Marcel-B/scripts/blob/main/docs/monitoring.md)) anbinden.
+Im Proxmox-Container erledigt das `finanz-o-mat-lxc.sh monitoring <CTID>` (siehe
+[deploy/proxmox/README.md](deploy/proxmox/README.md#monitoring)); in Grafana gibt es dann das Dashboard
+**Finanz-O-Mat**.
+
+**Messwerte:** `GET /metrics` im Format von Prometheus, ohne Anmeldung, damit Prometheus abrufen kann. Deshalb
+stehen dort nur Anzahlen und Laufzeiten, keine Beträge, Namen oder Rechnungsnummern.
+
+| Messwert | Bedeutung |
+|---|---|
+| `finanzomat_http_requests_total{method,route,status}` | Anfragen je Route (Pfadvorlage wie `/api/belege/{beleg_id}`) |
+| `finanzomat_http_request_duration_seconds{route}` | Dauer der Anfragen |
+| `finanzomat_import_belege_total{quelle,ergebnis}` | eingelesene Belege und Kontoumsätze (neu, vorhanden, fehler, …) |
+| `finanzomat_anmeldungen_total{ergebnis}` | Anmeldeversuche: ok, falsch, gesperrt |
+| `finanzomat_log_lines_total{source,level}` | Protokollzeilen, für Warnungen und Fehler im Dashboard |
+| `finanzomat_belege{art}`, `finanzomat_belege_zu_pruefen`, `finanzomat_umsaetze_ohne_beleg` | Bestand beim Abruf |
+| `finanzomat_backup_ok`, `finanzomat_backup_last_success_timestamp_seconds` | Stand des Nextcloud-Backups (nur im Container) |
+| `finanzomat_update_available` | 1, wenn eine neue Version bereitsteht (nur im Container) |
+| `finanzomat_loki_dropped_total` | Zeilen, die Loki nicht erreicht haben |
+| `process_*`, `python_*` | Speicher, CPU und Garbage Collector des Prozesses |
+
+**Protokoll:** Alles, was die App und uvicorn protokollieren (Start, Zugriffe außer `/metrics`, Importe,
+Fehlversuche bei der Anmeldung, Fehler), geht wie bisher ins Journal und mit `LOKI_URL` (z. B.
+`http://monitoring:3100`) zusätzlich an Loki, mit den Labels `app="finanzomat"`, `host` (`LOKI_HOST`), `level` und
+`source` (`server`, `zugriff`, `web`, `paperless`, …). Ein eigener Thread schickt die Zeilen alle zwei Sekunden
+gesammelt; ist Loki nicht erreichbar, verwirft er sie und meldet das höchstens alle fünf Minuten im Journal. Die
+Stufe fürs Protokoll setzt `LOG_LEVEL` (Standard `INFO`).
+
 ## Tätigkeitsnachweis
 
 Im Reiter „Tätigkeiten“ trägst du je Tag ein, wie viele Stunden du für welchen Auftrag was gemacht hast. Ein neuer

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -58,6 +59,11 @@ class Config:
     # Stand des Nextcloud-Backups im Proxmox-Container (siehe ustva/backup.py)
     backup_verzeichnis: Path | None = None
 
+    # Protokoll an Loki (leer = nur ins eigene Log), Label host, Stufe für das eigene Log
+    loki_url: str = ""
+    loki_host: str = ""
+    log_level: str = "INFO"
+
     @classmethod
     def aus_umgebung(cls) -> Config:
         env = os.environ
@@ -88,6 +94,9 @@ class Config:
             app_passwort=env.get("APP_PASSWORT", ""),
             update_verzeichnis=Path(env["UPDATE_VERZEICHNIS"]) if env.get("UPDATE_VERZEICHNIS") else None,
             backup_verzeichnis=Path(env["BACKUP_VERZEICHNIS"]) if env.get("BACKUP_VERZEICHNIS") else None,
+            loki_url=env.get("LOKI_URL", "").strip(),
+            loki_host=env.get("LOKI_HOST", "").strip() or socket.gethostname(),
+            log_level=env.get("LOG_LEVEL", "").strip().upper() or "INFO",
         )
         if cfg.versteuerung not in {"soll", "ist"}:
             raise ValueError("VERSTEUERUNG muss 'soll' oder 'ist' sein")

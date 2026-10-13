@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import mimetypes
 import re
@@ -29,6 +30,7 @@ from . import (
     export,
     monatsabschluss,
     monatsexport,
+    monitoring,
     sevdesk_web,
     stundenzettel,
     taetigkeit,
@@ -55,6 +57,7 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
        "frame-ancestors 'self'")
 # ohne Sitzung erreichbar
 OFFEN = {"/api/anmeldung", "/api/anmelden", "/api/abmelden"}
+log = logging.getLogger(__name__)
 RE_ZEITRAUM = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
 
 
@@ -272,6 +275,16 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
             koepfe.setdefault("Content-Security-Policy", CSP)
         return antwort
 
+    # Nach der Anmeldung eingehängt und damit außen: zählt auch abgelehnte Anfragen
+    app.middleware("http")(monitoring.messen)
+    bestand = monitoring.Bestand(db, cfg.update_verzeichnis, cfg.backup_verzeichnis)
+
+    @app.get("/metrics", include_in_schema=False)
+    def metriken():
+        """Für Prometheus, ohne Anmeldung: nur Anzahlen und Laufzeiten, keine Beträge oder Namen."""
+        inhalt, art = monitoring.metriken(bestand)
+        return Response(inhalt, media_type=art)
+
     def _adresse(request: Request) -> str:
         return request.client.host if request.client else "unbekannt"
 
@@ -282,8 +295,11 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
 
     def _pruefen(benutzer: str, passwort: str, request: Request) -> bool:
         try:
-            return anmeldung.pruefe_gebremst(benutzer, passwort, _adresse(request))
+            ok = anmeldung.pruefe_gebremst(benutzer, passwort, _adresse(request))
+            monitoring.ANMELDUNGEN.labels("ok" if ok else "falsch").inc()
+            return ok
         except einstellungen.Gesperrt as e:
+            monitoring.ANMELDUNGEN.labels("gesperrt").inc()
             minuten = max(1, math.ceil(e.sekunden / 60))
             raise HTTPException(429, f"Zu viele Fehlversuche. Bitte in {minuten} Minute{'n' if minuten > 1 else ''} "
                                      "noch einmal versuchen.", headers={"Retry-After": str(e.sekunden)}) from e
@@ -400,12 +416,22 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         return Response(uebersicht.uebersicht_csv(_uebersicht(jahr)), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="uebersicht-{jahr}.csv"'})
 
+    def _import_melden(name: str, ergebnis: dict, zr: str = "") -> None:
+        monitoring.import_zaehlen(name, ergebnis)
+        zahlen = ", ".join(f"{k} {v}" for k, v in ergebnis.items() if isinstance(v, int) and v)
+        fehler = ergebnis.get("fehler") or []
+        log.info("Import %s%s: %s", name, f" {zr}" if zr else "", zahlen or "nichts Neues")
+        for f in fehler[:20]:
+            log.warning("Import %s: %s", name, f)
+
     @app.post("/api/import/bank")
     async def bank_import(request: Request):
         roh = await request.body()
         if len(roh) > 10_000_000:
             raise HTTPException(413, "Datei zu groß")
-        return bank.importieren(db, aktuell(), roh.decode("utf-8-sig", errors="replace"), umrechner).to_dict()
+        ergebnis = bank.importieren(db, aktuell(), roh.decode("utf-8-sig", errors="replace"), umrechner).to_dict()
+        _import_melden("bank", ergebnis)
+        return ergebnis
 
     @app.post("/api/abgleich")
     def abgleich():
@@ -507,6 +533,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         ergebnis = neu_einlesen.neu_einlesen(db, aktuell(), anfrage.ids)
         if ergebnis.aktualisiert or ergebnis.neu:
             bank.abgleich_ausfuehren(db, umrechner)  # geänderte Beträge können jetzt zu Umsätzen passen
+        _import_melden("neu_einlesen", ergebnis.to_dict())
         return ergebnis.to_dict()
 
     @app.post("/api/belege/{beleg_id}/geprueft")
@@ -584,6 +611,10 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         if not ergebnisse:
             leer = ImportErgebnis(fehler=["Keine Quelle konfiguriert (RECHNUNGS_VERZEICHNIS oder PAPERLESS_URL)"])
             ergebnisse["keine"] = leer.to_dict()
+            log.warning("Import: keine Quelle konfiguriert")
+        else:
+            for name, ergebnis in ergebnisse.items():
+                _import_melden(name, ergebnis, anfrage.zeitraum)
         return ergebnisse
 
     @app.get("/api/kontakte")

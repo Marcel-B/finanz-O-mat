@@ -9,9 +9,12 @@ Ohne ``BACKUP_VERZEICHNIS`` ist die Funktion aus.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+
+log = logging.getLogger(__name__)
 
 STATUS_DATEI = "status.json"
 ANFORDERN_DATEI = "anfordern"
@@ -55,6 +58,7 @@ def router(verzeichnis: Path | None) -> APIRouter:
             raise HTTPException(409, "Backup ist nicht eingerichtet (im Container: finanz-o-mat-backup einrichten)")
         if status["zustand"] not in {"laeuft", "angefordert"}:
             (verzeichnis / ANFORDERN_DATEI).touch()
+            log.info("Backup in der App angefordert")
         return lesen(verzeichnis)
 
     return r
