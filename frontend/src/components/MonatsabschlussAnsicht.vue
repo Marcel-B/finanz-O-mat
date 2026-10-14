@@ -18,12 +18,11 @@ import {
   belegeDrucken,
   type Bericht,
   type DruckBeleg,
-  type Kennzahl,
   type MailVorlage,
   type MonatsabschlussStand,
   type Status,
 } from "@/api";
-import { ausIso, betrag, datum, elsterWert, zeitpunkt, zeitraumVon } from "@/format";
+import { ausIso, datum, zeitpunkt, zeitraumVon } from "@/format";
 
 import KarteBox from "./KarteBox.vue";
 
@@ -35,19 +34,10 @@ const emit = defineEmits<{ oeffnen: [reiter: string, zeitraum: string]; geaender
 const toast = useToast();
 
 const N26 = "https://app.n26.com/";
-const ELSTER = "https://www.elster.de/eportal/login";
 const MONATE = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober",
   "November", "Dezember"];
-// Wo die Kennzahlen im ELSTER-Formular „Umsatzsteuer-Voranmeldung“ stehen (Abschnitte wie im Vordruck USt 1 A)
-const ABSCHNITTE: { titel: string; kz: string[] }[] = [
-  { titel: "Lieferungen und sonstige Leistungen › Steuerpflichtige Umsätze", kz: ["81", "86", "35", "36"] },
-  { titel: "Lieferungen und sonstige Leistungen › Steuerfreie Umsätze mit Vorsteuerabzug", kz: ["41", "43"] },
-  { titel: "Innergemeinschaftliche Erwerbe", kz: ["89", "93"] },
-  { titel: "Ergänzende Angaben zu Umsätzen", kz: ["21", "45"] },
-  { titel: "Leistungsempfänger als Steuerschuldner (§ 13b UStG)", kz: ["46", "47", "84", "85"] },
-  { titel: "Abziehbare Vorsteuerbeträge", kz: ["66", "61", "67"] },
-];
-const SCHRITTE = ["Kontoauszug", "Belege", "Prüfen", "ELSTER", "Protokoll", "Steuerberatung", "Drucken", "Stundenzettel"];
+// Die Voranmeldung gibt die Steuerberatung ab; ELSTER und Protokoll sind deshalb keine Schritte mehr
+const SCHRITTE = ["Kontoauszug", "Belege", "Prüfen", "Steuerberatung", "Drucken", "Stundenzettel"];
 
 // Gestartet ist pro Browser vermerkt, damit ein Neuladen mitten im Abschluss an derselben Stelle weitergeht
 const SPEICHER = "finanzomat.monatsabschluss";
@@ -82,7 +72,7 @@ const zeitraum = computed(() => zeitraumVon(monat.value));
 const monatsname = computed(() => MONATE[monat.value.getMonth()]);
 const jahr = computed(() => monat.value.getFullYear());
 const laeuft = ref(!!alt);
-const schritt = ref(alt?.schritt ?? 1);
+const schritt = ref(alt && alt.schritt <= SCHRITTE.length ? alt.schritt : 1);
 let gestartet = alt?.gestartet ?? Date.now();
 const mailVorbereitet = ref(alt?.mail ?? false);
 
@@ -90,7 +80,7 @@ const stand = ref<MonatsabschlussStand | null>(null);
 const bericht = ref<Bericht | null>(null);
 const druck = ref<DruckBeleg[]>([]);
 const laedt = ref(false);
-const beschaeftigt = reactive({ csv: false, kontoauszug: false, protokoll: false, belege: false, stunden: false, mail: false });
+const beschaeftigt = reactive({ csv: false, kontoauszug: false, belege: false, stunden: false, mail: false });
 const vorlage = reactive<MailVorlage>({ an: "", betreff: "", text: "" });
 const vorlageOffen = ref(false);
 
@@ -146,18 +136,15 @@ const erledigt = computed((): Record<number, boolean> => {
     1: s.umsaetze > 0 && s.kontoauszug !== false,
     2: s.belege > 0,
     3: s.umsaetze > 0 && s.ohne_beleg === 0 && s.pruefen === 0 && s.fehlerhaft === 0,
-    4: s.protokoll === true,
-    5: s.protokoll === true,
-    6: mailVorbereitet.value,
-    7: druckbar.value.length > 0 && ungedruckt.value.length === 0,
-    8: Number(s.stundenzettel) > 0,
+    4: mailVorbereitet.value,
+    5: druckbar.value.length > 0 && ungedruckt.value.length === 0,
+    6: Number(s.stundenzettel) > 0,
   };
 });
 
 // 1. Kontoauszug
 const csvWahl = ref<HTMLInputElement | null>(null);
 const pdfWahl = ref<HTMLInputElement | null>(null);
-const protokollWahl = ref<HTMLInputElement | null>(null);
 
 function datei(event: Event): File | null {
   const eingabe = event.target as HTMLInputElement;
@@ -187,7 +174,7 @@ async function csvHochladen(event: Event) {
   }
 }
 
-async function ablegen(event: Event, art: "kontoauszug" | "protokoll") {
+async function ablegen(event: Event, art: "kontoauszug") {
   const f = datei(event);
   if (!f) return;
   beschaeftigt[art] = true;
@@ -200,7 +187,7 @@ async function ablegen(event: Event, art: "kontoauszug" | "protokoll") {
       fehler: [`Paperless meldet: ${a.fehler}`, "error"],
     } as const;
     const [text, stufe] = texte[a.zustand];
-    toast.add({ severity: stufe, summary: art === "kontoauszug" ? "Kontoauszug" : "ELSTER-Protokoll", detail: text, life: 7000 });
+    toast.add({ severity: stufe, summary: "Kontoauszug", detail: text, life: 7000 });
     emit("geaendert");
     await laden();
   } catch (err) {
@@ -231,20 +218,7 @@ async function belegeEinlesen() {
   }
 }
 
-// 4. ELSTER
-const kennzahlen = computed(() => bericht.value?.kennzahlen.filter((k) => k.kz !== "83") ?? []);
-const abschnitte = computed(() =>
-  ABSCHNITTE.map((a) => ({ titel: a.titel, kennzahlen: kennzahlen.value.filter((k) => a.kz.includes(k.kz)) }))
-    .filter((a) => a.kennzahlen.length),
-);
-const zahllast = computed(() => Number(bericht.value?.zahllast ?? 0));
-
-async function kopieren(k: Kennzahl) {
-  await navigator.clipboard?.writeText(elsterWert(k));
-  toast.add({ severity: "info", summary: `Kz ${k.kz} kopiert`, detail: elsterWert(k), life: 1500 });
-}
-
-// 6. Steuerberatung
+// 4. Steuerberatung
 const ersetzen = (text: string) => text.replaceAll("{monat}", monatsname.value).replaceAll("{jahr}", String(jahr.value));
 const mailLink = computed(() => {
   const betreff = encodeURIComponent(ersetzen(stand.value?.mail.betreff ?? ""));
@@ -270,7 +244,7 @@ async function vorlageSpeichern() {
   }
 }
 
-// 7. Drucken
+// 5. Drucken
 const druckbar = computed(() => druck.value.filter((b) => !b.grund));
 const ungedruckt = computed(() => druckbar.value.filter((b) => !b.gedruckt));
 
@@ -295,7 +269,7 @@ function drucken(ids?: number[], einzeln = false) {
   );
 }
 
-// 8. Stundenzettel
+// 6. Stundenzettel
 async function stundenEintragen() {
   beschaeftigt.stunden = true;
   try {
@@ -324,8 +298,8 @@ const stunden = (wert: string | number) =>
 <template>
   <KarteBox v-if="!laeuft" titel="Monatsabschluss">
     <p class="mb-4 max-w-3xl text-muted-color">
-      Führt Schritt für Schritt durch das Monatsende: Kontoauszug, Belege, Prüfen, Abgabe in ELSTER, Protokoll,
-      Unterlagen an die Steuerberatung und Stundenzettel. Alles bleibt auch wie gewohnt in den anderen Reitern
+      Führt Schritt für Schritt durch das Monatsende: Kontoauszug, Belege, Prüfen, Unterlagen an die
+      Steuerberatung, Belege drucken und Stundenzettel. Alles bleibt auch wie gewohnt in den anderen Reitern
       möglich; Schritte lassen sich überspringen.
     </p>
     <div class="flex flex-wrap items-end gap-2">
@@ -344,7 +318,7 @@ const stunden = (wert: string | number) =>
       <Button label="Beenden" icon="pi pi-times" severity="secondary" text @click="beenden" />
     </template>
     <Message v-if="stand?.paperless_fehler" severity="warn" class="mb-3">
-      Paperless antwortet gerade nicht ({{ stand.paperless_fehler }}). Kontoauszug und Protokoll lassen sich deshalb nicht prüfen.
+      Paperless antwortet gerade nicht ({{ stand.paperless_fehler }}). Der Kontoauszug lässt sich deshalb nicht prüfen.
     </Message>
 
     <Stepper v-model:value="schritt" class="monatsabschluss">
@@ -440,102 +414,16 @@ const stunden = (wert: string | number) =>
                   @click="emit('oeffnen', 'voranmeldung', zeitraum)" />
         </StepPanel>
 
-        <!-- 4. ELSTER -->
+        <!-- 4. Steuerberatung -->
         <StepPanel :value="4">
-          <h3 class="mb-2 font-semibold">In Mein ELSTER eintragen</h3>
-          <ol class="mb-4 list-decimal space-y-1 pl-5">
-            <li>Bei Mein ELSTER anmelden.</li>
-            <li>
-              <strong>Formulare &amp; Leistungen › Alle Formulare › Umsatzsteuer › Umsatzsteuer-Voranmeldung {{ jahr }}</strong>
-              öffnen.
-            </li>
-            <li>Unter <strong>Allgemeine Angaben</strong> Steuernummer und Zeitraum <strong>{{ monatsname }}</strong> wählen.</li>
-            <li>Die Werte unten in die genannten Abschnitte eintragen; alle anderen Felder bleiben leer.</li>
-            <li>
-              Auf <strong>Prüfen</strong> gehen: ELSTER rechnet die Steuer selbst und sollte als Kz 83
-              <strong>{{ betrag(bericht?.zahllast) }} €</strong> zeigen. Dann absenden und das Übertragungsprotokoll (PDF)
-              herunterladen.
-            </li>
-          </ol>
-          <a :href="ELSTER" target="_blank" rel="noopener">
-            <Button label="Mein ELSTER öffnen" icon="pi pi-external-link" class="mb-4" />
-          </a>
-          <Message v-if="bericht && !bericht.vollstaendig" severity="error" size="small" class="mb-3">
-            Die Werte sind unvollständig; erst Schritt 3 erledigen.
-          </Message>
-          <div v-if="bericht && kennzahlen.length === 0" class="text-muted-color">
-            Keine Werte: alle Kennzahlen bleiben leer (Nullmeldung).
-          </div>
-          <div v-for="a in abschnitte" :key="a.titel" class="mb-3">
-            <div class="mb-1 text-sm font-semibold text-muted-color">{{ a.titel }}</div>
-            <table class="w-full text-left">
-              <tr
-                v-for="k in a.kennzahlen"
-                :key="k.id"
-                class="border-b border-surface-100 dark:border-surface-800"
-                :class="k.ist_steuerzeile ? 'text-sm text-muted-color' : ''"
-              >
-                <td class="w-16 py-1.5 pr-2 font-bold">{{ k.ist_steuerzeile ? "" : `Kz ${k.kz}` }}</td>
-                <td class="py-1.5 pr-2">{{ k.titel }}</td>
-                <td class="zahl py-1.5 pr-2 text-right font-semibold whitespace-nowrap">
-                  {{ betrag(k.betrag, k.betrag_art === "bemessungsgrundlage") }} €
-                </td>
-                <td class="w-28 py-1.5 text-right">
-                  <span v-if="k.von_elster_berechnet" class="text-xs text-muted-color">rechnet ELSTER</span>
-                  <Button v-else size="small" text icon="pi pi-copy" label="Kopieren" @click="kopieren(k)" />
-                </td>
-              </tr>
-            </table>
-          </div>
-          <div
-            v-if="bericht"
-            class="mt-3 flex flex-wrap items-baseline justify-between gap-2 rounded-lg bg-surface-100 p-3 dark:bg-surface-800"
-          >
-            <div>
-              <strong>Kz 83</strong> {{ zahllast < 0 ? "Überschuss (Erstattung)" : "Zahllast" }}
-              <div class="text-sm text-muted-color">zum Vergleich, ELSTER rechnet den Wert selbst</div>
-            </div>
-            <div class="zahl text-2xl font-bold">{{ betrag(bericht.zahllast) }} €</div>
-          </div>
-        </StepPanel>
-
-        <!-- 5. Protokoll -->
-        <StepPanel :value="5">
-          <h3 class="mb-2 font-semibold">Übertragungsprotokoll ablegen</h3>
-          <p class="mb-4 text-muted-color">
-            Das PDF, das ELSTER nach dem Absenden anbietet (später auch unter Postfach), hier hochladen. Es landet in
-            Paperless und gehört damit in die Unterlagen für die Steuerberatung; die Karte „Nächste Abgabe“ springt auf den
-            nächsten Monat.
-          </p>
-          <Button
-            label="Protokoll nach Paperless"
-            icon="pi pi-cloud-upload"
-            class="mb-4"
-            :loading="beschaeftigt.protokoll"
-            :disabled="!status.paperless"
-            v-tooltip.top="status.paperless ? '' : 'Paperless ist nicht eingerichtet'"
-            @click="protokollWahl?.click()"
-          />
-          <input ref="protokollWahl" type="file" accept=".pdf,application/pdf" hidden @change="ablegen($event, 'protokoll')" />
-          <p v-if="stand && stand.protokoll !== null" class="status text-sm">
-            <i :class="stand.protokoll ? 'pi pi-check-circle text-green-500' : 'pi pi-circle text-muted-color'" class="mr-2" />
-            ELSTER-Protokoll für {{ monatsname }} {{ stand.protokoll ? "liegt in Paperless" : "noch nicht in Paperless" }}
-          </p>
-        </StepPanel>
-
-        <!-- 6. Steuerberatung -->
-        <StepPanel :value="6">
           <h3 class="mb-2 font-semibold">Unterlagen an die Steuerberatung</h3>
           <ol class="mb-4 list-decimal space-y-1 pl-5">
-            <li>ZIP herunterladen (Belege, Kontoauszug, Protokoll, CSV-Dateien und eine Liste, was fehlt).</li>
+            <li>ZIP herunterladen (Belege, Kontoauszug, CSV-Dateien mit den Kennzahlen und eine Liste, was fehlt).</li>
             <li>
               E-Mail vorbereiten: das Mailprogramm öffnet einen Entwurf mit Empfänger, Betreff und Text. Die ZIP aus dem
               Download-Ordner anhängen und selbst absenden; die App verschickt nichts.
             </li>
           </ol>
-          <Message v-if="stand && stand.protokoll === false" severity="warn" size="small" class="mb-3">
-            Das ELSTER-Protokoll liegt noch nicht in Paperless und fehlt dann in der ZIP.
-          </Message>
           <div class="mb-4 flex flex-wrap gap-2">
             <a :href="`/api/export/${zeitraum}/unterlagen.zip`">
               <Button label="ZIP herunterladen" icon="pi pi-download" severity="secondary" />
@@ -573,8 +461,8 @@ const stunden = (wert: string | number) =>
           </form>
         </StepPanel>
 
-        <!-- 7. Drucken -->
-        <StepPanel :value="7">
+        <!-- 5. Drucken -->
+        <StepPanel :value="5">
           <h3 class="mb-2 font-semibold">Belege drucken</h3>
           <p class="mb-4 text-muted-color">
             Öffnet die Belege von {{ monatsname }} als ein PDF in einem neuen Tab, dort drucken. Gedruckte Belege bekommen
@@ -625,8 +513,8 @@ const stunden = (wert: string | number) =>
           </table>
         </StepPanel>
 
-        <!-- 8. Stundenzettel -->
-        <StepPanel :value="8">
+        <!-- 6. Stundenzettel -->
+        <StepPanel :value="6">
           <h3 class="mb-2 font-semibold">Stundenzettel für den Minijob</h3>
           <p class="mb-4 text-muted-color">
             Trägt die Monatsstunden auf die Arbeitstage von {{ monatsname }} ein (wie im Reiter Stundenzettel). Für Urlaub
