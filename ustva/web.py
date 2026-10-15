@@ -357,6 +357,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
             "versteuerung": cfg.versteuerung,
             "dauerfristverlaengerung": cfg.dauerfristverlaengerung,
             "bundesland": c.bundesland,
+            "eigene_ustid": c.eigene_ustid,
             "verzeichnis": str(cfg.rechnungs_verzeichnis) if cfg.rechnungs_verzeichnis else None,
             "paperless": c.paperless_url if c.paperless_aktiv else None,
             "anmeldung": anmeldung.aktiv,

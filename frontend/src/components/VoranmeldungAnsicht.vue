@@ -10,6 +10,7 @@ import { computed, ref, watch } from "vue";
 
 import { api, belegDrucken, belegeDrucken, type Beleg, type Bericht, type Kennzahl, type Status, type Steuerfall } from "@/api";
 import { ausIso, betrag, datum, elsterWert, passtZurSuche, suchtext, zeitpunkt, zeitraumVon } from "@/format";
+import { inZwischenablage } from "@/zwischenablage";
 
 import BelegDialog from "./BelegDialog.vue";
 import KarteBox from "./KarteBox.vue";
@@ -118,8 +119,11 @@ async function neuEinlesen() {
 }
 
 async function kopieren(k: Kennzahl) {
-  await navigator.clipboard?.writeText(elsterWert(k));
-  toast.add({ severity: "info", summary: `Kz ${k.kz} kopiert`, detail: elsterWert(k), life: 1500 });
+  if (await inZwischenablage(elsterWert(k))) {
+    toast.add({ severity: "info", summary: `Kz ${k.kz} kopiert`, detail: elsterWert(k), life: 1500 });
+  } else {
+    toast.add({ severity: "warn", summary: "Kopieren nicht möglich", detail: elsterWert(k), life: 4000 });
+  }
 }
 
 function bearbeiten(b: Beleg | null) {

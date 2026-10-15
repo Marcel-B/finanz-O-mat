@@ -20,6 +20,7 @@ export interface Status {
   versteuerung: "ist" | "soll";
   dauerfristverlaengerung: boolean;
   bundesland: string;
+  eigene_ustid: string;
   verzeichnis: string | null;
   paperless: string | null;
   anmeldung: boolean;
