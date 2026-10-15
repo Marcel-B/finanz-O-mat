@@ -470,6 +470,7 @@ export const api = {
   belegAendern: (id: number, b: BelegEingabe) =>
     anfrage<Beleg>(`/api/belege/${id}`, { method: "PUT", body: JSON.stringify(b) }),
   belegGeprueft: (id: number) => post<Beleg>(`/api/belege/${id}/geprueft`),
+  belegPruefungZuruecknehmen: (id: number) => anfrage<Beleg>(`/api/belege/${id}/geprueft`, { method: "DELETE" }),
   belegLoeschen: (id: number) => anfrage<null>(`/api/belege/${id}`, { method: "DELETE" }),
   belegeNeuEinlesen: (ids?: number[]) => post<NeuEingelesen>("/api/belege/neu-einlesen", { ids: ids ?? null }),
   einlesen: (zeitraum: string) => post<Record<string, ImportErgebnis>>("/api/import", { quelle: "alle", zeitraum }),

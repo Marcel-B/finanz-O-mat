@@ -83,6 +83,17 @@ def test_import_und_export(client):
     assert belege.splitlines()[1].startswith("05.09.2026;;Eingang;")
 
 
+def test_pruefung_zuruecknehmen(client):
+    beleg_id = client.post("/api/belege", json={"art": "eingang", "steuerfall": "vorsteuer_inland",
+                                                 "rechnungsdatum": "2026-09-05", "netto": "10"}).json()["id"]
+    assert client.get(f"/api/belege/{beleg_id}").json()["pruefen"] is False
+    r = client.delete(f"/api/belege/{beleg_id}/geprueft")
+    assert r.status_code == 200 and r.json()["pruefen"] is True
+    assert client.get(f"/api/belege/{beleg_id}").json()["pruefen"] is True
+    assert client.post(f"/api/belege/{beleg_id}/geprueft").json()["pruefen"] is False
+    assert client.delete("/api/belege/9999/geprueft").status_code == 404
+
+
 def test_offene_belege(client):
     client.post("/api/belege", json={"art": "eingang", "steuerfall": "vorsteuer_inland", "netto": "5"})
     assert len(client.get("/api/offen").json()) == 1

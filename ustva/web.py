@@ -543,6 +543,13 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         b.pruefen = False
         return db.beleg_aktualisieren(b).to_dict()
 
+    @app.delete("/api/belege/{beleg_id}/geprueft")
+    def beleg_pruefung_zuruecknehmen(beleg_id: int):
+        """Markiert den Beleg wieder als „prüfen“, z. B. nach einem versehentlichen OK."""
+        b = _beleg(beleg_id)
+        b.pruefen = True
+        return db.beleg_aktualisieren(b).to_dict()
+
     @app.delete("/api/belege/{beleg_id}", status_code=204)
     def beleg_loeschen(beleg_id: int):
         _beleg(beleg_id)
