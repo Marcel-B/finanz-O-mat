@@ -60,7 +60,8 @@ def test_paperless_einstellungen_ueberschreiben_umgebung(db, umrechner):
     assert e["paperless_token"]["quelle"] == "app"
     assert "neues-token" not in str(e)
     assert (e["bundesland"]["wert"], e["eigene_ustid"]["wert"]) == ("NW", "DE123456789")
-    assert c.get("/api/status").json()["paperless"] == "https://paperless.example"
+    status = c.get("/api/status").json()
+    assert (status["paperless"], status["eigene_ustid"]) == ("https://paperless.example", "DE123456789")
     assert einstellungen.wirksam(cfg, db).paperless_token == "neues-token"
 
     # leerer Wert: wieder die Umgebung

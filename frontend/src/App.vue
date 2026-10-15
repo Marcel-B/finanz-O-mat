@@ -8,6 +8,7 @@ import TabPanel from "primevue/tabpanel";
 import TabPanels from "primevue/tabpanels";
 import Tabs from "primevue/tabs";
 import Toast from "primevue/toast";
+import { useToast } from "primevue/usetoast";
 import { onMounted, ref } from "vue";
 
 import { angemeldet, api, type Status, type Steuerfall } from "./api";
@@ -22,6 +23,7 @@ import TaetigkeitenAnsicht from "./components/TaetigkeitenAnsicht.vue";
 import UebersichtAnsicht from "./components/UebersichtAnsicht.vue";
 import UpdateHinweis from "./components/UpdateHinweis.vue";
 import VoranmeldungAnsicht from "./components/VoranmeldungAnsicht.vue";
+import { inZwischenablage } from "./zwischenablage";
 
 const status = ref<Status | null>(null);
 const steuerfaelle = ref<Steuerfall[]>([]);
@@ -40,6 +42,17 @@ function oeffnen(reiter: string, zeitraum: string) {
   if (reiter === "voranmeldung") voranmeldungZiel.value = { zeitraum, n: (voranmeldungZiel.value?.n ?? 0) + 1 };
   tab.value = reiter;
 }
+const toast = useToast();
+
+async function ustidKopieren() {
+  const ustid = status.value?.eigene_ustid ?? "";
+  if (await inZwischenablage(ustid)) {
+    toast.add({ severity: "info", summary: "USt-IdNr. kopiert", detail: ustid, life: 1500 });
+  } else {
+    toast.add({ severity: "warn", summary: "Kopieren nicht möglich", detail: ustid, life: 4000 });
+  }
+}
+
 // Ist ein Passwort gesetzt? Sonst gibt es nichts abzumelden.
 const mitPasswort = ref(false);
 
@@ -87,7 +100,29 @@ onMounted(starten);
         <p class="text-muted-color">Umsatzsteuer-Voranmeldung berechnen, abgeben in Mein ELSTER</p>
       </div>
     </div>
-    <div class="flex items-center gap-3">
+    <div class="flex flex-wrap items-center gap-3">
+      <div
+        v-if="status && angemeldet"
+        class="flex items-center gap-2 rounded-lg border border-surface-200 bg-surface-0 py-1 pr-1 pl-4 dark:border-surface-700 dark:bg-surface-900"
+      >
+        <div>
+          <div class="text-sm text-muted-color">USt-IdNr.</div>
+          <div v-if="status.eigene_ustid" class="font-mono font-semibold tracking-wide">{{ status.eigene_ustid }}</div>
+          <button v-else type="button" class="text-sm text-primary hover:underline" @click="tab = 'einstellungen'">
+            in den Einstellungen eintragen
+          </button>
+        </div>
+        <Button
+          v-if="status.eigene_ustid"
+          v-tooltip.bottom="'In die Zwischenablage kopieren'"
+          icon="pi pi-copy"
+          severity="secondary"
+          text
+          rounded
+          aria-label="USt-IdNr. kopieren"
+          @click="ustidKopieren"
+        />
+      </div>
       <div
         v-if="status && angemeldet"
         class="rounded-lg border border-surface-200 bg-surface-0 px-4 py-2 dark:border-surface-700 dark:bg-surface-900"
