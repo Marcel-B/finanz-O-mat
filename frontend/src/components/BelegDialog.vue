@@ -38,6 +38,7 @@ const form = reactive<Formular>(leer());
 const fehler = ref("");
 const speichert = ref(false);
 const liestNeu = ref(false);
+const nimmtZurueck = ref(false);
 const neuLesbar = computed(() => !!props.beleg?.pruefen && ["verzeichnis", "paperless"].includes(props.beleg.quelle));
 
 async function neuEinlesen() {
@@ -57,6 +58,22 @@ async function neuEinlesen() {
     fehler.value = (e as Error).message;
   } finally {
     liestNeu.value = false;
+  }
+}
+
+async function pruefungZuruecknehmen() {
+  const b = props.beleg;
+  if (!b) return;
+  nimmtZurueck.value = true;
+  fehler.value = "";
+  try {
+    await api.belegPruefungZuruecknehmen(b.id);
+    sichtbar.value = false;
+    emit("gespeichert");
+  } catch (e) {
+    fehler.value = (e as Error).message;
+  } finally {
+    nimmtZurueck.value = false;
   }
 }
 
@@ -264,6 +281,16 @@ function loeschen() {
         text
       />
       <span class="flex-1" />
+      <Button
+        v-if="beleg && !beleg.pruefen"
+        label="Prüfung zurücknehmen"
+        icon="pi pi-undo"
+        severity="secondary"
+        text
+        :loading="nimmtZurueck"
+        v-tooltip.top="'Markiert den Beleg wieder als „prüfen“. Änderungen in diesem Dialog gehen dabei verloren.'"
+        @click="pruefungZuruecknehmen"
+      />
       <Button label="Abbrechen" severity="secondary" text @click="sichtbar = false" />
       <Button label="Speichern und als geprüft markieren" icon="pi pi-check" :loading="speichert" @click="speichern" />
     </template>

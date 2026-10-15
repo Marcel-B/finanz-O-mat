@@ -148,6 +148,15 @@ async function geprueft(b: Beleg) {
   }
 }
 
+async function pruefungZuruecknehmen(b: Beleg) {
+  try {
+    await api.belegPruefungZuruecknehmen(b.id);
+    await laden();
+  } catch (e) {
+    meldeFehler(e);
+  }
+}
+
 function drucken(id?: number) {
   if (id) belegDrucken(id);
   else belegeDrucken(zeitraum.value);
@@ -383,6 +392,16 @@ const steuerfallKz = (wert: string) => props.steuerfaelle.find((s) => s.wert ===
         <template #body="{ data }">
           <div class="flex gap-1" @click.stop>
             <Button v-if="data.pruefen" size="small" label="OK" severity="secondary" @click="geprueft(data)" />
+            <Button
+              v-else
+              v-tooltip.top="'Prüfung zurücknehmen: Beleg wieder als „prüfen“ markieren'"
+              size="small"
+              text
+              severity="secondary"
+              icon="pi pi-undo"
+              aria-label="Prüfung zurücknehmen"
+              @click="pruefungZuruecknehmen(data)"
+            />
             <a v-if="data.quelle === 'paperless'" :href="data.quelle_link" target="_blank" rel="noopener">
               <Button size="small" text icon="pi pi-external-link" aria-label="In Paperless öffnen" />
             </a>
