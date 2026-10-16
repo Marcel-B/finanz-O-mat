@@ -48,12 +48,15 @@ export interface Einstellungen {
   eigene_ustid: Feld;
   bundesland: Feld;
   bundeslaender: { wert: string; name: string }[];
+  kalender_url: { gesetzt: boolean; quelle: Herkunft; anzeige: string }; // Adresse selbst bleibt auf dem Server
+  kalender_stichwort: Feld;
   anmeldung: { aktiv: boolean; benutzer: string; quelle: Herkunft; min_laenge: number };
 }
 
 export type EinstellungenEingabe = Partial<Record<
   "paperless_url" | "paperless_token" | "paperless_tags_ausgang" | "paperless_tags_eingang" | "eigene_ustid" |
-  "bundesland" | "paperless_tag_kontoauszug" | "paperless_tag_protokoll", string>>;
+  "bundesland" | "paperless_tag_kontoauszug" | "paperless_tag_protokoll" | "kalender_url" | "kalender_stichwort",
+  string>>;
 
 export interface Steuerfall {
   wert: string;
@@ -239,7 +242,9 @@ export interface TaetigkeitenMonat {
   eintraege: Taetigkeit[];
   stunden: string;
   betrag: string;
-  fehlende_tage: string[]; // Werktage bis heute ohne Eintrag
+  fehlende_tage: string[]; // Werktage bis heute ohne Eintrag, ohne Feiertage und Urlaub
+  freie_tage: { datum: string; name: string; art: "feiertag" | "urlaub" }[]; // Werktage im Monat ohne Arbeit
+  kalender: { verknuepft: boolean; fehler: string };
   vorschlag: TaetigkeitEingabe; // Vorbelegung für den nächsten Eintrag
   texte: { taetigkeit: string; auftrag: string; referenz: string }[]; // frühere Tätigkeiten, neueste zuerst
 }
@@ -510,6 +515,8 @@ export const api = {
     anfrage<Einstellungen>("/api/einstellungen", { method: "PUT", body: JSON.stringify(e) }),
   paperlessTesten: (e: { paperless_url?: string; paperless_token?: string }) =>
     post<{ text: string }>("/api/einstellungen/paperless-test", e),
+  kalenderTesten: (e: { kalender_url?: string; kalender_stichwort?: string }) =>
+    post<{ text: string }>("/api/einstellungen/kalender-test", e),
   passwortAendern: (p: { aktuell: string; benutzer: string; neu: string }) =>
     post<Einstellungen["anmeldung"]>("/api/passwort", p),
   uebersicht: (jahr: number) => anfrage<Jahresuebersicht>(`/api/uebersicht/${jahr}`),

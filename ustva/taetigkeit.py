@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -123,24 +124,45 @@ def _monatstage(jahr: int, monat: int) -> list[date]:
     return tage
 
 
-def _werktag(tag: date, bundesland: str) -> bool:
-    return tag.weekday() < 5 and tag not in feiertage(tag.year, bundesland)
+def freie_tage(jahr: int, monat: int, bundesland: str,
+               urlaub: Mapping[date, str] | None = None) -> dict[date, tuple[str, str]]:
+    """Werktage (Mo–Fr) des Monats ohne Arbeit → (Name, "feiertag" oder "urlaub").
+
+    Urlaub kommt aus dem verknüpften Kalender (siehe kalender.py); ein Feiertag geht vor.
+    """
+    feier, urlaub = feiertage(jahr, bundesland), urlaub or {}
+    frei: dict[date, tuple[str, str]] = {}
+    for t in _monatstage(jahr, monat):
+        if t.weekday() >= 5:
+            continue
+        if t in feier:
+            frei[t] = (feier[t], "feiertag")
+        elif t in urlaub:
+            frei[t] = (urlaub[t], "urlaub")
+    return frei
 
 
-def fehlende_tage(eintraege: list[Taetigkeit], jahr: int, monat: int, heute: date, bundesland: str) -> list[date]:
-    """Werktage des Monats bis heute ohne Eintrag (Urlaub erkennt die App natürlich nicht)."""
+def _arbeitstage(jahr: int, monat: int, bundesland: str, urlaub: Mapping[date, str] | None) -> list[date]:
+    frei = freie_tage(jahr, monat, bundesland, urlaub)
+    return [t for t in _monatstage(jahr, monat) if t.weekday() < 5 and t not in frei]
+
+
+def fehlende_tage(eintraege: list[Taetigkeit], jahr: int, monat: int, heute: date, bundesland: str,
+                  urlaub: Mapping[date, str] | None = None) -> list[date]:
+    """Werktage des Monats bis heute ohne Eintrag; Feiertage und Urlaub zählen nicht als fehlend."""
     belegt = {t.datum for t in eintraege}
-    return [t for t in _monatstage(jahr, monat) if t <= heute and _werktag(t, bundesland) and t not in belegt]
+    return [t for t in _arbeitstage(jahr, monat, bundesland, urlaub) if t <= heute and t not in belegt]
 
 
-def vorschlag(db: Datenbank, v: Vorlage, jahr: int, monat: int, bundesland: str) -> dict:
+def vorschlag(db: Datenbank, v: Vorlage, jahr: int, monat: int, bundesland: str,
+              urlaub: Mapping[date, str] | None = None) -> dict:
     """Vorbelegung für den nächsten Eintrag: Felder vom letzten Eintrag, Datum der nächste freie Werktag."""
     im_monat = db.taetigkeiten(f"{jahr:04d}-{monat:02d}")
     alle = im_monat or db.taetigkeiten()
     letzter = alle[-1] if alle else None
     belegt = {t.datum for t in im_monat}
     ab = im_monat[-1].datum if im_monat else date(jahr, monat, 1) - timedelta(days=1)
-    frei = [t for t in _monatstage(jahr, monat) if t > ab and t not in belegt and _werktag(t, bundesland)]
+    frei = [t for t in _arbeitstage(jahr, monat, bundesland, urlaub) if t > ab and t not in belegt]
     datum = frei[0] if frei else (im_monat[-1].datum if im_monat else date(jahr, monat, 1))
     return {
         "datum": datum.isoformat(),
