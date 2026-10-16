@@ -27,6 +27,9 @@ class Config:
     versteuerung: str = "ist"
     dauerfristverlaengerung: bool = False
     bundesland: str = ""  # z. B. "NW"; für Feiertage, die die Frist verschieben
+    # Urlaub: ICS-Adresse eines Kalenders (z. B. geteilter Nextcloud-Kalender), Stichwörter im Titel
+    kalender_url: str = ""
+    kalender_stichwort: str = ""
     eigene_ustid: str = ""
 
     rechnungs_verzeichnis: Path | None = None
@@ -74,6 +77,8 @@ class Config:
             dauerfristverlaengerung=_bool(env.get("DAUERFRISTVERLAENGERUNG")),
             bundesland=env.get("BUNDESLAND", "").strip().upper(),
             eigene_ustid=env.get("EIGENE_USTID", "").replace(" ", "").upper(),
+            kalender_url=env.get("KALENDER_URL", "").strip(),
+            kalender_stichwort=env.get("KALENDER_STICHWORT", "").strip(),
             rechnungs_verzeichnis=Path(verzeichnis) if verzeichnis else None,
             ordner_ausgang=_liste(env.get("ORDNER_AUSGANG"), cls().ordner_ausgang),
             ordner_eingang=_liste(env.get("ORDNER_EINGANG"), cls().ordner_eingang),

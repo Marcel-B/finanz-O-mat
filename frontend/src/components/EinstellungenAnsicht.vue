@@ -29,11 +29,15 @@ const form = reactive({
   paperless_tag_protokoll: "",
   eigene_ustid: "",
   bundesland: "",
+  kalender_url: "",
+  kalender_stichwort: "",
 });
 const zugang = reactive({ benutzer: "", aktuell: "", neu: "", wiederholung: "" });
 const speichert = ref(false);
 const testet = ref(false);
 const testErgebnis = ref<{ ok: boolean; text: string } | null>(null);
+const kalenderTestet = ref(false);
+const kalenderErgebnis = ref<{ ok: boolean; text: string } | null>(null);
 const passwortFehler = ref("");
 const passwortGeaendert = ref(false);
 
@@ -47,6 +51,8 @@ function uebernehmen(e: Einstellungen) {
   form.paperless_tag_protokoll = e.paperless_tag_protokoll.wert;
   form.eigene_ustid = e.eigene_ustid.wert;
   form.bundesland = e.bundesland.wert;
+  form.kalender_url = "";
+  form.kalender_stichwort = e.kalender_stichwort.wert;
   zugang.benutzer = e.anmeldung.benutzer;
 }
 
@@ -71,12 +77,13 @@ async function speichern() {
   const aenderungen: Record<string, string> = {};
   const felder = [
     "paperless_url", "paperless_tags_ausgang", "paperless_tags_eingang", "paperless_tag_kontoauszug",
-    "paperless_tag_protokoll", "eigene_ustid", "bundesland",
+    "paperless_tag_protokoll", "eigene_ustid", "bundesland", "kalender_stichwort",
   ] as const;
   for (const k of felder) {
     if (form[k] !== d[k].wert) aenderungen[k] = form[k] ?? "";
   }
   if (form.paperless_token) aenderungen.paperless_token = form.paperless_token;
+  if (form.kalender_url) aenderungen.kalender_url = form.kalender_url;
   if (!Object.keys(aenderungen).length) {
     toast.add({ severity: "info", summary: "Nichts geändert", life: 3000 });
     return;
@@ -85,6 +92,7 @@ async function speichern() {
   try {
     uebernehmen(await api.einstellungenSpeichern(aenderungen));
     testErgebnis.value = null;
+    kalenderErgebnis.value = null;
     toast.add({ severity: "success", summary: "Einstellungen gespeichert", life: 3000 });
     emit("geaendert");
   } catch (e) {
@@ -100,6 +108,31 @@ async function tokenEntfernen() {
     emit("geaendert");
   } catch (e) {
     fehler(e);
+  }
+}
+
+async function kalenderEntfernen() {
+  try {
+    uebernehmen(await api.einstellungenSpeichern({ kalender_url: "" }));
+    kalenderErgebnis.value = null;
+  } catch (e) {
+    fehler(e);
+  }
+}
+
+async function kalenderTesten() {
+  kalenderTestet.value = true;
+  kalenderErgebnis.value = null;
+  try {
+    const r = await api.kalenderTesten({
+      kalender_url: form.kalender_url || undefined,
+      kalender_stichwort: form.kalender_stichwort,
+    });
+    kalenderErgebnis.value = { ok: true, text: r.text };
+  } catch (e) {
+    kalenderErgebnis.value = { ok: false, text: (e as Error).message };
+  } finally {
+    kalenderTestet.value = false;
   }
 }
 
@@ -279,11 +312,68 @@ async function passwortSpeichern() {
               show-clear
               fluid
             />
-            <span class="text-xs text-muted-color">Landesfeiertage verschieben die Abgabefrist.</span>
+            <span class="text-xs text-muted-color">
+              Landesfeiertage verschieben die Abgabefrist und fehlen nicht im Tätigkeitsnachweis.
+            </span>
           </label>
         </div>
         <div>
           <Button type="submit" label="Speichern" icon="pi pi-save" :loading="speichert" />
+        </div>
+      </form>
+    </KarteBox>
+
+    <KarteBox titel="Kalender für Urlaub">
+      <form class="flex flex-col gap-3" @submit.prevent="speichern">
+        <p class="text-sm text-muted-color">
+          Ganztägige Termine aus diesem Kalender gelten im Tätigkeitsnachweis als frei und nicht als fehlender Tag.
+          Termine mit Uhrzeit und Serien (z. B. Geburtstage) zählen nicht.
+        </p>
+        <label class="flex flex-col gap-1 text-sm">
+          <span class="flex items-center gap-2">
+            Adresse
+            <Tag
+              v-if="daten!.kalender_url.gesetzt"
+              severity="success"
+              icon="pi pi-check"
+              :value="`${daten!.kalender_url.anzeige} ${herkunftText[daten!.kalender_url.quelle]}`"
+            />
+          </span>
+          <Password
+            v-model="form.kalender_url"
+            :feedback="false"
+            toggle-mask
+            fluid
+            autocomplete="off"
+            :placeholder="daten!.kalender_url.gesetzt ? 'leer lassen, um den verknüpften Kalender zu behalten' : 'https://cloud.example.de/apps/calendar/p/…'"
+          />
+          <span class="text-xs text-muted-color">
+            Nextcloud: im Kalender „Teilen“ → „Link teilen“ und den Link hier einfügen. Andere Kalender: ICS- oder
+            webcal-Adresse. Die Adresse wird nicht wieder angezeigt.
+          </span>
+        </label>
+        <label class="flex flex-col gap-1 text-sm">
+          Nur Termine mit
+          <InputText v-model="form.kalender_stichwort" placeholder="alle ganztägigen Termine" fluid />
+          <span class="text-xs text-muted-color">
+            Wörter im Titel, durch Komma getrennt, z. B. „Urlaub, Krank, Brückentag“. Leer lassen bei einem eigenen
+            Urlaubskalender.
+          </span>
+        </label>
+        <Message v-if="kalenderErgebnis" :severity="kalenderErgebnis.ok ? 'success' : 'error'" size="small">
+          {{ kalenderErgebnis.text }}
+        </Message>
+        <div class="flex flex-wrap gap-2">
+          <Button type="submit" label="Speichern" icon="pi pi-save" :loading="speichert" />
+          <Button label="Kalender testen" icon="pi pi-calendar" severity="secondary" :loading="kalenderTestet" @click="kalenderTesten" />
+          <span class="flex-1" />
+          <Button
+            v-if="daten!.kalender_url.quelle === 'app'"
+            label="Kalender trennen"
+            severity="danger"
+            text
+            @click="kalenderEntfernen"
+          />
         </div>
       </form>
     </KarteBox>

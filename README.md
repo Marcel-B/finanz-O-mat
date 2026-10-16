@@ -289,7 +289,14 @@ Stufe fürs Protokoll setzt `LOG_LEVEL` (Standard `INFO`).
 Im Reiter „Tätigkeiten“ trägst du je Tag ein, wie viele Stunden du für welchen Auftrag was gemacht hast. Ein neuer
 Eintrag ist mit dem letzten vorbelegt (Auftrag, Ticket, Tätigkeit, Rolle, Ort, Leistungsart), das Datum springt auf den
 nächsten freien Werktag. Frühere Tätigkeiten schlägt das Feld beim Tippen vor, Werktage ohne Eintrag stehen unter dem
-Formular. Mit „Excel erstellen“ gibt es den Monat als .xlsx im Layout des bisherigen Nachweises (Satz × Menge,
+Formular. Feiertage (bundesweit und im eingestellten Bundesland) und Urlaub zählen dabei nicht als fehlend, sondern
+stehen darunter als „Frei“.
+
+Urlaub kommt aus einem verknüpften Kalender (Einstellungen → „Kalender für Urlaub“, oder `KALENDER_URL`): in Nextcloud
+im Kalender „Teilen“ → „Link teilen“ und den Link einfügen, die App macht daraus die Export-Adresse; sonst geht jede
+ICS- oder webcal-Adresse. Es zählen nur ganztägige Termine ohne Wiederholung, Termine mit Uhrzeit (Besprechungen) und
+Serien (Geburtstage) nicht. Mit Stichwörtern („Urlaub, Krank“) lässt sich auch der normale Kalender nehmen. Die App
+liest den Kalender höchstens alle 15 Minuten; „Kalender testen“ liest ihn sofort neu. Mit „Excel erstellen“ gibt es den Monat als .xlsx im Layout des bisherigen Nachweises (Satz × Menge,
 Summen, geleistete Stunden, Feld für die Unterschrift des Kunden).
 
 Was gleich bleibt, steht in der Vorlage (Reiter „Tätigkeiten“ → „Vorlage“ oder unter „Einstellungen“): Stundensatz,

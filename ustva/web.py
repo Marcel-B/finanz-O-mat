@@ -28,6 +28,7 @@ from . import (
     belegnummern,
     einstellungen,
     export,
+    kalender,
     monatsabschluss,
     monatsexport,
     monitoring,
@@ -169,6 +170,8 @@ class EinstellungenEingabe(BaseModel):
     paperless_tags_eingang: str | None = None
     eigene_ustid: str | None = None
     bundesland: str | None = None
+    kalender_url: str | None = None
+    kalender_stichwort: str | None = None
     paperless_tag_kontoauszug: str | None = None
     paperless_tag_protokoll: str | None = None
 
@@ -176,6 +179,11 @@ class EinstellungenEingabe(BaseModel):
 class PaperlessTestEingabe(BaseModel):
     paperless_url: str | None = None
     paperless_token: str | None = None
+
+
+class KalenderTestEingabe(BaseModel):
+    kalender_url: str | None = None
+    kalender_stichwort: str | None = None
 
 
 class AnmeldeEingabe(BaseModel):
@@ -238,10 +246,12 @@ class NeuEinlesenAnfrage(BaseModel):
 
 
 def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner: Umrechner | None = None,
-               heute=None, sevdesk_ordner: Path | None = None) -> FastAPI:
+               heute=None, sevdesk_ordner: Path | None = None,
+               urlaubskalender: kalender.Kalender | None = None) -> FastAPI:
     cfg = cfg or Config.aus_umgebung()
     db = db or Datenbank(cfg.datenbank)
     umrechner = umrechner or Umrechner(db, cfg.ezb_kurse)
+    urlaubskalender = urlaubskalender or kalender.Kalender()
     app = FastAPI(title="Finanz-O-Mat", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
     def _heute() -> date:
@@ -711,7 +721,9 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     def taetigkeiten(zeitraum: str):
         jahr, monat = _zeitraum(zeitraum)
         v = taetigkeit.vorlage_laden(db)
-        bundesland = aktuell().bundesland
+        c = aktuell()
+        bundesland = c.bundesland
+        urlaub, kalender_fehler = urlaubskalender.tage(c.kalender_url, c.kalender_stichwort)
         eintraege = db.taetigkeiten(zeitraum)
         betraege = [taetigkeit.betrag(t, v) for t in eintraege]
         return {
@@ -720,8 +732,11 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
             "stunden": str(sum((t.stunden for t in eintraege), Decimal(0))),
             "betrag": str(sum((b for b in betraege if b is not None), Decimal(0)).quantize(CENT)),
             "fehlende_tage": [t.isoformat() for t in
-                              taetigkeit.fehlende_tage(eintraege, jahr, monat, _heute(), bundesland)],
-            "vorschlag": taetigkeit.vorschlag(db, v, jahr, monat, bundesland),
+                              taetigkeit.fehlende_tage(eintraege, jahr, monat, _heute(), bundesland, urlaub)],
+            "freie_tage": [{"datum": t.isoformat(), "name": name, "art": art}
+                           for t, (name, art) in taetigkeit.freie_tage(jahr, monat, bundesland, urlaub).items()],
+            "kalender": {"verknuepft": bool(c.kalender_url), "fehler": kalender_fehler},
+            "vorschlag": taetigkeit.vorschlag(db, v, jahr, monat, bundesland, urlaub),
             "texte": taetigkeit.fruehere_texte(db),
         }
 
@@ -926,6 +941,10 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
             "eigene_ustid": feld("eigene_ustid", c.eigene_ustid),
             "bundesland": feld("bundesland", c.bundesland),
             "bundeslaender": [{"wert": k, "name": v} for k, v in einstellungen.BUNDESLAENDER.items()],
+            # Die Adresse kann Freigabe-Token oder App-Passwort enthalten, daher nur der Server.
+            "kalender_url": {"gesetzt": bool(c.kalender_url), "quelle": einstellungen.quelle(cfg, db, "kalender_url"),
+                             "anzeige": kalender.anzeige(c.kalender_url) if c.kalender_url else ""},
+            "kalender_stichwort": feld("kalender_stichwort", c.kalender_stichwort),
             "anmeldung": {"aktiv": anmeldung.aktiv, "benutzer": benutzer, "quelle": anmeldung.quelle(),
                           "min_laenge": einstellungen.MIN_PASSWORT},
         }
@@ -955,6 +974,28 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
         except paperless.PaperlessFehler as e:
             raise HTTPException(400, str(e)) from e
         return {"text": f"Verbindung klappt, {len(tags)} Tags gefunden."}
+
+    @app.post("/api/einstellungen/kalender-test")
+    def kalender_testen(eingabe: KalenderTestEingabe):
+        c = aktuell()
+        url = einstellungen.pruefen("kalender_url", eingabe.kalender_url or c.kalender_url)
+        if not url:
+            raise HTTPException(400, "Bitte die Adresse des Kalenders angeben.")
+        stichwort = c.kalender_stichwort if eingabe.kalender_stichwort is None else eingabe.kalender_stichwort
+        try:
+            termine = urlaubskalender.laden(url)
+        except kalender.KalenderFehler as e:
+            raise HTTPException(400, str(e)) from e
+        heute = _heute()
+        kommend = sorted((t, name) for t, name in kalender.freie_tage(termine, stichwort).items()
+                         if t >= heute and t.weekday() < 5)
+        text = f"Kalender gelesen, {len(termine)} ganztägige Termine."
+        if kommend:
+            t, name = kommend[0]
+            text += f" Nächster freier Werktag: {t:%d.%m.%Y} ({name}), {len(kommend)} insgesamt ab heute."
+        else:
+            text += " Ab heute steht kein passender freier Werktag darin."
+        return {"text": text}
 
     @app.post("/api/passwort")
     def passwort_aendern(eingabe: PasswortEingabe, request: Request, response: Response):

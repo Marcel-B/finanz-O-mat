@@ -64,6 +64,18 @@ const leistungsarten = computed(() => liste(vorlage.value?.leistungsarten, "leis
 const tage = computed(() => new Set(daten.value?.eintraege.map((e) => e.datum)).size);
 const ohneSatz = computed(() => vorlage.value && vorlage.value.stundensatz == null);
 
+// Freie Werktage mit demselben Namen zu Abschnitten zusammenfassen, auch über ein Wochenende hinweg
+const freieAbschnitte = computed(() => {
+  const abschnitte: { von: string; bis: string; name: string; art: string }[] = [];
+  for (const f of daten.value?.freie_tage ?? []) {
+    const letzter = abschnitte.at(-1);
+    const abstand = letzter ? ((ausIso(f.datum)?.getTime() ?? 0) - (ausIso(letzter.bis)?.getTime() ?? 0)) / 864e5 : 0;
+    if (letzter && letzter.name === f.name && letzter.art === f.art && abstand <= 3) letzter.bis = f.datum;
+    else abschnitte.push({ von: f.datum, bis: f.datum, name: f.name, art: f.art });
+  }
+  return abschnitte;
+});
+
 function fehler(e: unknown) {
   toast.add({ severity: "error", summary: "Fehler", detail: (e as Error).message, life: 6000 });
 }
@@ -310,8 +322,12 @@ async function importiert() {
     </KarteBox>
   </div>
 
-  <Message v-if="daten?.fehlende_tage.length" severity="secondary" class="mb-4">
-    <div class="flex flex-wrap items-center gap-1">
+  <Message v-if="daten?.kalender.fehler" severity="warn" class="mb-4">
+    {{ daten.kalender.fehler }} Urlaub fehlt deshalb womöglich.
+  </Message>
+
+  <Message v-if="daten && (daten.fehlende_tage.length || freieAbschnitte.length)" severity="secondary" class="mb-4">
+    <div v-if="daten.fehlende_tage.length" class="flex flex-wrap items-center gap-1">
       <span class="mr-1">Werktage ohne Eintrag:</span>
       <Button
         v-for="t in daten.fehlende_tage"
@@ -323,6 +339,25 @@ async function importiert() {
         class="!px-2 !py-0.5"
         @click="bearbeitet = null; form.datum = ausIso(t); zumFormular()"
       />
+    </div>
+    <div
+      v-if="freieAbschnitte.length"
+      class="flex flex-wrap items-center gap-x-3 gap-y-1"
+      :class="{ 'mt-2': daten.fehlende_tage.length }"
+    >
+      <span>Frei:</span>
+      <span v-for="a in freieAbschnitte" :key="a.von" class="inline-flex items-center gap-1">
+        <i
+          :class="a.art === 'feiertag' ? 'pi pi-flag' : 'pi pi-sun'"
+          class="text-xs text-muted-color"
+          :title="a.art === 'feiertag' ? 'Feiertag' : 'aus dem Kalender'"
+        />
+        {{ a.von === a.bis ? tagKurz(a.von) : `${tagKurz(a.von)} – ${tagKurz(a.bis)}` }}
+        <span class="text-muted-color">{{ a.name }}</span>
+      </span>
+    </div>
+    <div v-if="!daten.kalender.verknuepft && daten.fehlende_tage.length" class="mt-2 text-xs text-muted-color">
+      Urlaub erkennt die App, wenn unter „Einstellungen“ ein Kalender verknüpft ist.
     </div>
   </Message>
 
