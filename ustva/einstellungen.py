@@ -7,6 +7,11 @@ bzw. entfernter Wert in der Datenbank lässt wieder die Umgebungsvariable gelten
 Das Passwort für die Anmeldung wird nur als PBKDF2-Hash gespeichert. Ist ein
 Hash hinterlegt, gilt er statt ``APP_PASSWORT``. Angemeldet wird über ein
 Formular in der Oberfläche; danach trägt der Browser ein Sitzungs-Cookie.
+
+Ist ``IDENTITY_AUTHORITY`` gesetzt, meldet man sich stattdessen über den Identity-Server an
+(ustva/identity.py); das Passwort gilt dann nicht. Das Finanztool lässt nur Konten mit der Rolle
+``IDENTITY_ROLLE`` herein und merkt sich beim ersten Mal das Konto (``sub``); danach kommt nur
+noch dieses Konto herein (zurücksetzen mit ``python -m ustva identity --zuruecksetzen``).
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import time
 from dataclasses import replace
 from functools import lru_cache
 
+from . import identity as oidc
 from .config import Config
 from .db import Datenbank
 
@@ -33,6 +39,8 @@ LISTEN = ("paperless_tags_ausgang", "paperless_tags_eingang")
 BENUTZER = "app_benutzer"
 PASSWORT_HASH = "app_passwort_hash"
 SITZUNG_SALZ = "sitzung_salz"
+ART_PASSWORT, ART_IDENTITY = "passwort", "identity"  # Art der Anmeldung
+IDENTITY_SUB = "identity_sub"  # Konto, an das die App beim ersten Identity-Login gebunden wurde
 
 BUNDESLAENDER = {
     "BW": "Baden-Württemberg", "BY": "Bayern", "BE": "Berlin", "BB": "Brandenburg", "HB": "Bremen",
@@ -51,6 +59,7 @@ FEHLVERSUCHE = 5  # je Adresse innerhalb von SPERRFENSTER, dann SPERRDAUER gespe
 FEHLVERSUCHE_GESAMT = 20  # von allen Adressen zusammen
 SPERRFENSTER = 15 * 60
 SPERRDAUER = 15 * 60
+ABGLEICH = 15 * 60  # so oft prüft eine Identity-Sitzung beim Server, ob das Konto noch darf
 
 log = logging.getLogger(__name__)
 # Uhren; in Tests ersetzbar
@@ -196,11 +205,20 @@ class Anmeldung:
     die Kommandozeile oder die Env-Datei).
     """
 
-    def __init__(self, cfg: Config, db: Datenbank, uhr=None):
+    def __init__(self, cfg: Config, db: Datenbank, uhr=None, identity: oidc.Identity | None = None):
         self.cfg, self.db, self._uhr = cfg, db, uhr or _jetzt
         self.sperre = Sperre()
+        self._abgleich = threading.Lock()
         if not db.einstellungen().get(SITZUNG_SALZ):
             db.einstellung_setzen(SITZUNG_SALZ, base64.b64encode(secrets.token_bytes(16)).decode())
+        if identity is None and cfg.identity_aktiv:
+            salz = db.einstellungen()[SITZUNG_SALZ]
+            identity = oidc.Identity(cfg, hashlib.sha256(f"vorgang:{salz}".encode()).digest())
+        self.identity = identity
+
+    @property
+    def art(self) -> str:
+        return ART_IDENTITY if self.identity else ART_PASSWORT
 
     def zugang(self) -> tuple[str, str | None, str | None]:
         """(Benutzer, Hash, Klartext aus der Umgebung); ohne Passwort ist die Anmeldung aus."""
@@ -214,6 +232,8 @@ class Anmeldung:
 
     @property
     def aktiv(self) -> bool:
+        if self.identity:
+            return True
         _, h, klartext = self.zugang()
         return bool(h or klartext)
 
@@ -246,15 +266,76 @@ class Anmeldung:
         return False
 
     def _stand(self) -> str:
-        return _stand(*self.zugang(), self.db.einstellungen()[SITZUNG_SALZ])
+        e = self.db.einstellungen()
+        if self.identity:  # Wechsel des Servers, Clients oder gebundenen Kontos beendet alle Sitzungen
+            i = self.identity
+            return hashlib.sha256(f"identity:{i.authority}:{i.client_id}:{e.get(IDENTITY_SUB, '')}:"
+                                  f"{e[SITZUNG_SALZ]}".encode()).hexdigest()
+        return _stand(*self.zugang(), e[SITZUNG_SALZ])
 
-    def sitzung_anlegen(self) -> str:
+    def sitzung_anlegen(self, tokens: oidc.Tokens | None = None) -> str:
         """Legt eine Sitzung an und gibt den Wert für das Cookie zurück."""
         jetzt = self._uhr()
         self.db.sitzungen_loeschen(erstellt_vor=jetzt - SITZUNG_HOECHSTENS, zuletzt_vor=jetzt - SITZUNG_LEERLAUF)
         wert = secrets.token_urlsafe(32)
-        self.db.sitzung_anlegen(_schluessel(wert), self.zugang()[0], self._stand(), jetzt)
+        if tokens:
+            self.db.sitzung_anlegen(_schluessel(wert), tokens.name, self._stand(), jetzt, sub=tokens.sub,
+                                    id_token=tokens.id_token, refresh_token=tokens.refresh_token)
+        else:
+            self.db.sitzung_anlegen(_schluessel(wert), self.zugang()[0], self._stand(), jetzt)
         return wert
+
+    # Identity-Server
+
+    def zugriff_pruefen(self, tokens: oidc.Tokens) -> None:
+        """Wirft KeinZugriff, wenn dem Konto die Rolle fehlt oder die App an ein anderes gebunden ist."""
+        rolle = self.cfg.identity_rolle
+        if rolle not in tokens.rollen:
+            raise oidc.KeinZugriff(f"Dem Konto {tokens.name} fehlt die Rolle „{rolle}“ im Identity-Server.")
+        gebunden = self.db.einstellungen().get(IDENTITY_SUB)
+        if gebunden and not hmac.compare_digest(gebunden, tokens.sub):
+            raise oidc.KeinZugriff(f"Das Finanztool ist an ein anderes Konto gebunden als {tokens.name}.")
+
+    def identity_anmelden(self, tokens: oidc.Tokens) -> str:
+        """Prüft das Konto, bindet die App beim ersten Mal daran und legt die Sitzung an."""
+        self.zugriff_pruefen(tokens)
+        if not self.db.einstellungen().get(IDENTITY_SUB):
+            self.db.einstellung_setzen(IDENTITY_SUB, tokens.sub)
+            log.warning("Finanztool an das Konto %s (sub %s) gebunden", tokens.name, tokens.sub)
+        return self.sitzung_anlegen(tokens)
+
+    def identity_loesen(self) -> None:
+        """Hebt die Bindung an ein Konto auf; das nächste berechtigte Konto bindet die App neu."""
+        self.db.einstellung_setzen(IDENTITY_SUB, None)
+        self.db.sitzungen_loeschen()
+
+    def gebunden(self) -> str:
+        return self.db.einstellungen().get(IDENTITY_SUB, "")
+
+    def _abgleichen(self, schluessel: str) -> bool:
+        """Erneuert die Tokens einer Sitzung; False, wenn der Server das Konto nicht mehr zulässt."""
+        with self._abgleich:  # parallele Anfragen sollen das Refresh Token nicht doppelt einlösen
+            s = self.db.sitzung(schluessel)
+            jetzt = self._uhr()
+            if not s:
+                return False
+            if jetzt - s["abgeglichen"] <= ABGLEICH:
+                return True
+            try:
+                t = self.identity.erneuern(s["refresh_token"])
+                self.zugriff_pruefen(t)
+            except (oidc.Abgelaufen, oidc.Ungueltig, oidc.KeinZugriff) as e:
+                log.warning("Sitzung von %s beendet: %s", s["benutzer"], e)
+                self.db.sitzungen_loeschen(schluessel)
+                return False
+            except oidc.IdentityFehler as e:
+                # Server weg: Sitzung behalten, in einer Minute wieder versuchen
+                log.warning("Abgleich mit dem Identity-Server nicht möglich: %s", e)
+                self.db.sitzung_abgleichen(schluessel, jetzt - ABGLEICH + 60)
+                return True
+            self.db.sitzung_abgleichen(schluessel, jetzt, benutzer=t.name, id_token=t.id_token or None,
+                                       refresh_token=t.refresh_token)
+            return True
 
     def sitzung_gueltig(self, wert: str | None) -> bool:
         if not self.aktiv:
@@ -266,13 +347,23 @@ class Anmeldung:
         if (not s or not hmac.compare_digest(s["stand"], self._stand())
                 or jetzt - s["zuletzt"] > SITZUNG_LEERLAUF or jetzt - s["erstellt"] > SITZUNG_HOECHSTENS):
             return False
+        if self.identity and jetzt - s["abgeglichen"] > ABGLEICH and not self._abgleichen(s["schluessel"]):
+            return False
         if jetzt - s["zuletzt"] > 60:
             self.db.sitzung_beruehren(s["schluessel"], jetzt)
         return True
 
-    def abmelden(self, wert: str | None) -> None:
-        if wert:
-            self.db.sitzungen_loeschen(_schluessel(wert))
+    def sitzung(self, wert: str | None) -> dict | None:
+        """Die Sitzung zum Cookie, ohne Gültigkeitsprüfung."""
+        return self.db.sitzung(_schluessel(wert)) if wert else None
+
+    def abmelden(self, wert: str | None) -> dict | None:
+        """Beendet die Sitzung und gibt sie zurück (für den Logout beim Identity-Server)."""
+        if not wert:
+            return None
+        s = self.sitzung(wert)
+        self.db.sitzungen_loeschen(_schluessel(wert))
+        return s
 
     def setzen(self, benutzer: str, passwort: str) -> None:
         if len(passwort) < MIN_PASSWORT:

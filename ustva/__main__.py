@@ -6,6 +6,8 @@
     python -m ustva bericht --zeitraum 2026-09
     python -m ustva passwort                  Passwort der Weboberfläche neu setzen
     python -m ustva passwort --zuruecksetzen  wieder APP_BENUTZER/APP_PASSWORT verwenden
+    python -m ustva identity                  Anmeldung über den Identity-Server: gebundenes Konto zeigen
+    python -m ustva identity --zuruecksetzen  Bindung lösen; das nächste Konto mit der Rolle bindet neu
     python -m ustva sevdesk sichern --ordner DIR        alles aus sevDesk sichern (Token in SEVDESK_TOKEN)
     python -m ustva sevdesk importieren --ordner DIR    Sicherung oder Export übernehmen (erst mit --trocken)
     python -m ustva sevdesk abgleich --erwartet CSV     Zahllast je Monat gegen abgegebene Werte
@@ -90,6 +92,22 @@ def passwort(args, cfg: Config) -> int:
         print(e, file=sys.stderr)
         return 1
     print(f"Passwort für {benutzer} gespeichert. Ein laufender Dienst übernimmt es sofort.")
+    return 0
+
+
+def identity_befehl(args, cfg: Config) -> int:
+    anmeldung = einstellungen.Anmeldung(cfg, Datenbank(cfg.datenbank))
+    if args.zuruecksetzen:
+        anmeldung.identity_loesen()
+        print("Bindung gelöst und alle Sitzungen beendet. Das nächste Konto mit der Rolle "
+              f"„{cfg.identity_rolle}“, das sich anmeldet, wird neu gebunden.")
+        return 0
+    if not cfg.identity_aktiv:
+        print("Die Anmeldung über den Identity-Server ist aus (IDENTITY_AUTHORITY nicht gesetzt).")
+    else:
+        print(f"Identity-Server: {cfg.identity_authority}, Client {cfg.identity_client_id}, "
+              f"Rolle {cfg.identity_rolle}")
+    print(f"Gebunden an sub: {anmeldung.gebunden() or '(noch keins)'}")
     return 0
 
 
@@ -257,6 +275,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("passwort", help="Passwort der Weboberfläche setzen (z. B. wenn vergessen)")
     p.add_argument("--benutzer", help="Benutzername, Standard: der bisherige")
     p.add_argument("--zuruecksetzen", action="store_true", help="Passwort aus der App entfernen")
+    i = sub.add_parser("identity", help="Anmeldung über den Identity-Server: Kontobindung zeigen oder lösen")
+    i.add_argument("--zuruecksetzen", action="store_true", help="Bindung an das Konto lösen")
     sd = sub.add_parser("sevdesk", help="Umzug aus sevDesk (siehe docs/sevdesk-migration.md)")
     sd_sub = sd.add_subparsers(dest="schritt", required=True)
     s1 = sd_sub.add_parser("sichern", help="alle Daten und Dateien aus sevDesk in einen Ordner sichern")
@@ -296,6 +316,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.befehl == "passwort":
         return passwort(args, cfg)
+    if args.befehl == "identity":
+        return identity_befehl(args, cfg)
     if args.befehl == "paperless":
         db = Datenbank(cfg.datenbank)
         return duplikate_befehl(args, einstellungen.wirksam(cfg, db), db)

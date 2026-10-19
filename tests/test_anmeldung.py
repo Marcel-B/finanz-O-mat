@@ -55,7 +55,8 @@ def test_ohne_anmeldung_nur_seite_und_anmeldung(app):
     assert c.get("/").status_code == 200
     assert c.get("/api/status").status_code == 401
     assert c.get("/api/docs").status_code == 401
-    assert c.get("/api/anmeldung").json() == {"aktiv": True, "angemeldet": False}
+    assert c.get("/api/anmeldung").json() == {"aktiv": True, "art": einstellungen.ART_PASSWORT,
+                                                  "angemeldet": False}
     # Basic Auth gilt nicht mehr, der Browser soll auch nicht danach fragen
     r = c.get("/api/status", auth=("marcel", PW))
     assert r.status_code == 401 and "www-authenticate" not in r.headers

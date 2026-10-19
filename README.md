@@ -253,6 +253,41 @@ SameSite=Strict, über HTTPS zusätzlich Secure); in der Datenbank steht nur des
   (`journalctl -u finanz-o-mat`). Ein Neustart des Dienstes hebt eine Sperre auf.
 - Ändernde Anfragen von fremden Webseiten lehnt die App ab, die Seiten lassen sich nicht in fremde Seiten einbetten.
 
+### Anmeldung über den Identity-Server
+
+Statt mit Passwort meldet man sich über den eigenen Identity-Server an (OpenID Connect,
+[Marcel-B/Identity](https://github.com/Marcel-B/Identity), Anleitung dort in `docs/login-integration.md`). Das
+Backend ist ein vertraulicher Client: Es macht den Authorization Code Flow mit PKCE, prüft das ID-Token und gibt dem
+Browser danach wie oben nur das Sitzungs-Cookie. Tokens sieht der Browser nie.
+
+Einrichten im Identity-Server (Verwaltung unter `<Issuer>/Admin`):
+
+| Was | Wert |
+| --- | --- |
+| Rolle | `finanzen` anlegen und dem eigenen Konto geben |
+| Client-ID | `finanz-o-mat`, vertraulich (Secret erzeugen), Zustimmung `implicit` |
+| Grant Types | `authorization_code`, `refresh_token` |
+| Redirect-URI | `https://finanz-o-mat.<tailnet>.ts.net/api/identity/rueckruf` |
+| Post-Logout-Redirect-URI | `https://finanz-o-mat.<tailnet>.ts.net/` |
+| Scopes | keine zusätzlichen (`openid profile email roles offline_access` sind automatisch erlaubt) |
+
+Dann in der `.env` bzw. `/etc/finanz-o-mat/finanz-o-mat.env` `IDENTITY_AUTHORITY`, `IDENTITY_CLIENT_SECRET` und
+`APP_ADRESSE` setzen (siehe `.env.example`) und den Dienst neu starten. Die App muss unter `APP_ADRESSE` per HTTPS
+erreichbar sein (`TAILSCALE_SERVE=ja`) und den Identity-Server erreichen. Wer die App über `http://<IP>:8000` öffnet,
+wird zum Anmelden auf die HTTPS-Adresse geschickt.
+
+- Herein kommen nur Konten mit der Rolle `IDENTITY_ROLLE` (Standard `finanzen`). Beim ersten Mal merkt sich die App
+  das Konto (`sub`); danach kommt nur noch dieses Konto herein, auch wenn ein anderes die Rolle bekommt.
+  `python -m ustva identity` zeigt die Bindung, `python -m ustva identity --zuruecksetzen` löst sie.
+- Alle 15 Minuten gleicht die App eine Sitzung über das Refresh Token mit dem Server ab. Ist das Konto gesperrt, das
+  Passwort geändert, die Rolle entzogen oder „überall abmelden“ gewählt, endet die Sitzung. Ist der Server nur nicht
+  erreichbar, bleibt sie bestehen.
+- Abmelden beendet die Sitzung, widerruft das Refresh Token und meldet auch beim Identity-Server ab.
+- Passwort, Zwei-Faktor-Anmeldung und Passkeys verwaltet man im Identity-Server; das Passwort der App gilt nicht.
+- **Notausgang:** Ist der Identity-Server kaputt, `IDENTITY_AUTHORITY` in der Env-Datei auskommentieren und den Dienst
+  neu starten (`systemctl restart finanz-o-mat`). Dann gelten wieder Passwort bzw. `APP_BENUTZER`/`APP_PASSWORT`.
+  Jeder Wechsel beendet alle Sitzungen.
+
 ## Monitoring
 
 Die App lässt sich an den gemeinsamen Monitoring-Stack (Grafana, Prometheus, Loki; Steckbrief in

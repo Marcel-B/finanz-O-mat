@@ -37,7 +37,7 @@ bash finanz-o-mat-lxc.sh -y
 | `TIMEZONE` | `Europe/Berlin` | wichtig für Fristen und „heute“ |
 | `BELEG_HOST_PATH` | – | Ordner auf dem Host mit `ausgang/` und `eingang/`, nur lesend unter `/srv/rechnungen` |
 | `PAPERLESS_URL`, `PAPERLESS_TOKEN` | – | Paperless-ngx |
-| `APP_BENUTZER`, `APP_PASSWORT` | `admin`, zufällig | Anmeldung an der Weboberfläche |
+| `APP_BENUTZER`, `APP_PASSWORT` | `admin`, zufällig | Anmeldung an der Weboberfläche (Notausgang, wenn der Identity-Server genutzt wird) |
 | `VERSTEUERUNG` | `ist` | `ist` oder `soll` |
 | `BUNDESLAND`, `EIGENE_USTID` | `NW`, – | wie in `.env.example` |
 | `PORT` | 8000 | Port im Container |
@@ -233,6 +233,21 @@ Standardmäßig kommt Tailscale mit in den Container, damit die App im eigenen T
   ```
 
 Den Key-Ablauf für den Container in der Admin-Konsole abschalten, sonst muss er sich nach 180 Tagen neu anmelden.
+
+### Anmeldung über den Identity-Server
+
+Voraussetzung: `TAILSCALE_SERVE=ja` (HTTPS-Adresse) und Client und Rolle im Identity-Server angelegt (siehe
+[README](../../README.md#anmeldung-über-den-identity-server)). Im Container prüfen, ob der Server erreichbar ist, dann
+die Werte eintragen:
+
+```sh
+curl -fsS https://identity.<tailnet>.ts.net/.well-known/openid-configuration >/dev/null && echo erreichbar
+nano /etc/finanz-o-mat/finanz-o-mat.env   # IDENTITY_AUTHORITY, IDENTITY_CLIENT_SECRET, APP_ADRESSE
+systemctl restart finanz-o-mat
+```
+
+Notausgang, falls der Identity-Server ausfällt: `IDENTITY_AUTHORITY` auskommentieren und den Dienst neu starten; dann
+gilt wieder das Passwort.
 
 ## Erreichbarkeit
 

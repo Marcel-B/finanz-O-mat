@@ -9,13 +9,14 @@ import re
 import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from html import escape
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
@@ -28,6 +29,7 @@ from . import (
     belegnummern,
     einstellungen,
     export,
+    identity,
     kalender,
     monatsabschluss,
     monatsexport,
@@ -57,7 +59,8 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
        "font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; "
        "frame-ancestors 'self'")
 # ohne Sitzung erreichbar
-OFFEN = {"/api/anmeldung", "/api/anmelden", "/api/abmelden"}
+OFFEN = {"/api/anmeldung", "/api/anmelden", "/api/abmelden", "/api/identity/anmelden", identity.RUECKRUF}
+VORGANG_COOKIE = "finanzomat_anmeldevorgang"
 log = logging.getLogger(__name__)
 RE_ZEITRAUM = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
 
@@ -247,7 +250,8 @@ class NeuEinlesenAnfrage(BaseModel):
 
 def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner: Umrechner | None = None,
                heute=None, sevdesk_ordner: Path | None = None,
-               urlaubskalender: kalender.Kalender | None = None) -> FastAPI:
+               urlaubskalender: kalender.Kalender | None = None,
+               identity_server: identity.Identity | None = None) -> FastAPI:
     cfg = cfg or Config.aus_umgebung()
     db = db or Datenbank(cfg.datenbank)
     umrechner = umrechner or Umrechner(db, cfg.ezb_kurse)
@@ -257,7 +261,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     def _heute() -> date:
         return heute() if callable(heute) else (heute or date.today())
 
-    anmeldung = einstellungen.Anmeldung(cfg, db)
+    anmeldung = einstellungen.Anmeldung(cfg, db, identity=identity_server)
 
     def aktuell() -> Config:
         """Konfiguration inklusive der Einstellungen aus der Oberfläche."""
@@ -298,10 +302,13 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     def _adresse(request: Request) -> str:
         return request.client.host if request.client else "unbekannt"
 
+    def _https(request: Request) -> bool:
+        return request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+
     def _cookie_setzen(request: Request, response: Response, wert: str) -> None:
         # Secure nur bei HTTPS (z. B. tailscale serve), sonst ginge die Anmeldung über http:// im Heimnetz nicht
-        https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
-        response.set_cookie(einstellungen.COOKIE, wert, httponly=True, samesite="strict", secure=https, path="/")
+        response.set_cookie(einstellungen.COOKIE, wert, httponly=True, samesite="strict", secure=_https(request),
+                            path="/")
 
     def _pruefen(benutzer: str, passwort: str, request: Request) -> bool:
         try:
@@ -316,11 +323,13 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
 
     @app.get("/api/anmeldung")
     def anmeldung_lesen(request: Request):
-        return {"aktiv": anmeldung.aktiv,
+        return {"aktiv": anmeldung.aktiv, "art": anmeldung.art,
                 "angemeldet": anmeldung.sitzung_gueltig(request.cookies.get(einstellungen.COOKIE))}
 
     @app.post("/api/anmelden")
     def anmelden(eingabe: AnmeldeEingabe, request: Request, response: Response):
+        if anmeldung.identity:
+            raise HTTPException(404, "Die Anmeldung läuft über den Identity-Server.")
         if anmeldung.aktiv:
             if not _pruefen(eingabe.benutzer.strip(), eingabe.passwort, request):
                 raise HTTPException(401, "Benutzername oder Passwort stimmt nicht.")
@@ -329,9 +338,75 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
 
     @app.post("/api/abmelden", status_code=204)
     def abmelden(request: Request):
-        anmeldung.abmelden(request.cookies.get(einstellungen.COOKIE))
+        sitzung = anmeldung.abmelden(request.cookies.get(einstellungen.COOKIE))
         antwort = Response(status_code=204)
+        if anmeldung.identity and sitzung and sitzung["sub"]:
+            # Auch beim Identity-Server abmelden: die Oberfläche leitet auf diese Adresse weiter
+            anmeldung.identity.widerrufen(sitzung["refresh_token"])
+            antwort = JSONResponse({"weiter": anmeldung.identity.abmelde_url(sitzung["id_token"])})
         antwort.delete_cookie(einstellungen.COOKIE, path="/", httponly=True, samesite="strict")
+        return antwort
+
+    def _seite(titel: str, text: str, *, weiter: str = "", status_code: int = 200) -> HTMLResponse:
+        kopf = f'<meta http-equiv="refresh" content="0;url={escape(weiter)}">' if weiter else ""
+        links = ('<p><a href="/api/identity/anmelden">Erneut anmelden</a> · <a href="/">Zur App</a></p>'
+                 if not weiter else f'<p><a href="{escape(weiter)}">Weiter</a></p>')
+        return HTMLResponse(
+            f'<!doctype html><html lang="de"><meta charset="utf-8">{kopf}<title>Finanz-O-Mat</title>'
+            f'<body style="font-family:sans-serif;max-width:40rem;margin:3rem auto;line-height:1.5">'
+            f"<h1>{escape(titel)}</h1><p>{escape(text)}</p>{links}</body></html>", status_code=status_code)
+
+    def _identity() -> identity.Identity:
+        if not anmeldung.identity:
+            raise HTTPException(404, "Die Anmeldung über den Identity-Server ist nicht eingerichtet.")
+        return anmeldung.identity
+
+    @app.get("/api/identity/anmelden")
+    def identity_anmelden(request: Request):
+        idp = _identity()
+        # Rückruf und Cookie gehören zur HTTPS-Adresse; von http://<IP>:8000 erst dorthin wechseln
+        ziel = urlsplit(cfg.app_adresse)
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+        if host != ziel.netloc or (ziel.scheme == "https") != _https(request):
+            return RedirectResponse(cfg.app_adresse + "/api/identity/anmelden", status_code=303)
+        try:
+            url, vorgang = idp.start()
+        except identity.IdentityFehler as e:
+            log.warning("Identity-Anmeldung nicht möglich: %s", e)
+            monitoring.ANMELDUNGEN.labels("fehler").inc()
+            return _seite("Anmeldung nicht möglich", str(e), status_code=502)
+        antwort = RedirectResponse(url, status_code=303)
+        # Lax, weil der Rückruf als Weiterleitung vom Identity-Server kommt; nur für /api/identity
+        antwort.set_cookie(VORGANG_COOKIE, vorgang, max_age=identity.VORGANG_GUELTIG, httponly=True,
+                           samesite="lax", secure=_https(request), path="/api/identity")
+        return antwort
+
+    @app.get(identity.RUECKRUF)
+    def identity_rueckruf(request: Request, code: str = "", state: str = "", error: str = "",
+                          error_description: str = ""):
+        idp = _identity()
+        try:
+            if error:
+                raise identity.Ungueltig(f"Der Identity-Server meldet: {error_description or error}")
+            vorgang = idp.vorgang(request.cookies.get(VORGANG_COOKIE))
+            tokens = idp.einloesen(code, state, vorgang)
+            wert = anmeldung.identity_anmelden(tokens)
+        except identity.KeinZugriff as e:
+            log.warning("Identity-Anmeldung abgelehnt: %s", e)
+            monitoring.ANMELDUNGEN.labels("kein_zugriff").inc()
+            antwort = _seite("Kein Zugriff", str(e), status_code=403)
+        except (identity.Ungueltig, identity.IdentityFehler) as e:
+            log.warning("Identity-Anmeldung fehlgeschlagen: %s", e)
+            monitoring.ANMELDUNGEN.labels("fehler").inc()
+            antwort = _seite("Anmeldung fehlgeschlagen", str(e), status_code=400)
+        else:
+            log.info("Angemeldet über den Identity-Server: %s", tokens.name)
+            monitoring.ANMELDUNGEN.labels("ok").inc()
+            # Seite statt 302: nach einer Weiterleitungskette von fremder Seite schickt der Browser
+            # ein SameSite=Strict-Cookie sonst erst beim nächsten Klick mit
+            antwort = _seite("Angemeldet", "Weiter zur App …", weiter="/")
+            _cookie_setzen(request, antwort, wert)
+        antwort.delete_cookie(VORGANG_COOKIE, path="/api/identity", httponly=True, samesite="lax")
         return antwort
 
     # Gefundene Protokolle ändern sich nicht mehr; "noch keins" wird nach ein paar Minuten neu gefragt
@@ -922,13 +997,16 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
                         headers={"Content-Disposition": f"attachment; filename=\"Stundenzettel-{jahr}.xlsx\"; "
                                                         f"filename*=UTF-8''{quote(name)}"})
 
-    def _einstellungen() -> dict:
+    def _einstellungen(request: Request) -> dict:
         c = aktuell()
 
         def feld(name: str, wert: str) -> dict:
             return {"wert": wert, "quelle": einstellungen.quelle(cfg, db, name)}
 
         benutzer = anmeldung.zugang()[0]
+        if anmeldung.identity:
+            s = anmeldung.sitzung(request.cookies.get(einstellungen.COOKIE))
+            benutzer = s["benutzer"] if s else ""
         return {
             "paperless_url": feld("paperless_url", c.paperless_url),
             # Das Token selbst wird nie an den Browser zurückgegeben.
@@ -946,20 +1024,21 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
                              "anzeige": kalender.anzeige(c.kalender_url) if c.kalender_url else ""},
             "kalender_stichwort": feld("kalender_stichwort", c.kalender_stichwort),
             "anmeldung": {"aktiv": anmeldung.aktiv, "benutzer": benutzer, "quelle": anmeldung.quelle(),
-                          "min_laenge": einstellungen.MIN_PASSWORT},
+                          "min_laenge": einstellungen.MIN_PASSWORT, "art": anmeldung.art,
+                          "konto_url": anmeldung.identity.konto_url if anmeldung.identity else ""},
         }
 
     @app.get("/api/einstellungen")
-    def einstellungen_lesen():
-        return _einstellungen()
+    def einstellungen_lesen(request: Request):
+        return _einstellungen(request)
 
     @app.put("/api/einstellungen")
-    def einstellungen_speichern(eingabe: EinstellungenEingabe):
+    def einstellungen_speichern(eingabe: EinstellungenEingabe, request: Request):
         neu = {k: v for k, v in eingabe.model_dump().items() if v is not None}
         geprueft = {k: einstellungen.pruefen(k, v) for k, v in neu.items()}
         for schluessel, wert in geprueft.items():
             db.einstellung_setzen(schluessel, wert or None)
-        return _einstellungen()
+        return _einstellungen(request)
 
     @app.post("/api/einstellungen/paperless-test")
     def paperless_testen(eingabe: PaperlessTestEingabe):
@@ -999,12 +1078,14 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
 
     @app.post("/api/passwort")
     def passwort_aendern(eingabe: PasswortEingabe, request: Request, response: Response):
+        if anmeldung.identity:
+            raise HTTPException(409, "Das Passwort wird im Identity-Server geändert.")
         if anmeldung.aktiv and not _pruefen(anmeldung.zugang()[0], eingabe.aktuell, request):
             raise HTTPException(403, "Das aktuelle Passwort stimmt nicht.")
         anmeldung.setzen(eingabe.benutzer or anmeldung.zugang()[0], eingabe.neu)
         # Alle anderen Sitzungen sind damit beendet; dieser Browser bleibt angemeldet
         _cookie_setzen(request, response, anmeldung.sitzung_anlegen())
-        return _einstellungen()["anmeldung"]
+        return _einstellungen(request)["anmeldung"]
 
     app.include_router(aktualisierung.router(cfg.update_verzeichnis))
     app.include_router(backup.router(cfg.backup_verzeichnis))

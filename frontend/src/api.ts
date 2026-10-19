@@ -26,8 +26,11 @@ export interface Status {
   anmeldung: boolean;
 }
 
+export type AnmeldeArt = "passwort" | "identity";
+
 export interface Anmeldung {
   aktiv: boolean; // ohne Passwort ist die App offen
+  art: AnmeldeArt; // identity: Anmeldung über den Identity-Server
   angemeldet: boolean;
 }
 
@@ -50,7 +53,14 @@ export interface Einstellungen {
   bundeslaender: { wert: string; name: string }[];
   kalender_url: { gesetzt: boolean; quelle: Herkunft; anzeige: string }; // Adresse selbst bleibt auf dem Server
   kalender_stichwort: Feld;
-  anmeldung: { aktiv: boolean; benutzer: string; quelle: Herkunft; min_laenge: number };
+  anmeldung: {
+    aktiv: boolean;
+    benutzer: string;
+    quelle: Herkunft;
+    min_laenge: number;
+    art: AnmeldeArt;
+    konto_url: string; // Konto beim Identity-Server (Passwort, 2FA, Passkeys)
+  };
 }
 
 export type EinstellungenEingabe = Partial<Record<
@@ -465,7 +475,8 @@ const post = <T>(pfad: string, daten?: unknown) =>
 export const api = {
   anmeldung: () => anfrage<Anmeldung>("/api/anmeldung"),
   anmelden: (benutzer: string, passwort: string) => post<Anmeldung>("/api/anmelden", { benutzer, passwort }),
-  abmelden: () => post<null>("/api/abmelden"),
+  // Bei Identity-Anmeldung kommt die Adresse zum Abmelden beim Identity-Server zurück
+  abmelden: () => post<{ weiter: string } | null>("/api/abmelden"),
   status: () => anfrage<Status>("/api/status"),
   steuerfaelle: () => anfrage<Steuerfall[]>("/api/steuerfaelle"),
   bericht: (zeitraum: string) => anfrage<Bericht>(`/api/bericht/${zeitraum}`),
