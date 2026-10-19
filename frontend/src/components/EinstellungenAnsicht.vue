@@ -250,7 +250,32 @@ async function passwortSpeichern() {
       </form>
     </KarteBox>
 
-    <KarteBox titel="Anmeldung">
+    <KarteBox v-if="daten!.anmeldung.art === 'identity'" titel="Anmeldung">
+      <div class="flex flex-col gap-3 text-sm">
+        <p>
+          Angemeldet über den Identity-Server als <strong>{{ daten!.anmeldung.benutzer }}</strong>. Passwort,
+          Zwei-Faktor-Anmeldung und Passkeys verwaltest du dort.
+        </p>
+        <span class="text-xs text-muted-color">
+          Zugang haben nur Konten mit der passenden Rolle, und nur das Konto, das sich als erstes angemeldet hat.
+          Bindung lösen: im Container <code>python -m ustva identity --zuruecksetzen</code>. Ist der Identity-Server
+          nicht erreichbar, <code>IDENTITY_AUTHORITY</code> in der Env-Datei auskommentieren; dann gilt wieder das
+          Passwort.
+        </span>
+        <div>
+          <Button
+            as="a"
+            :href="daten!.anmeldung.konto_url"
+            target="_blank"
+            rel="noopener"
+            label="Konto verwalten"
+            icon="pi pi-external-link"
+            severity="secondary"
+          />
+        </div>
+      </div>
+    </KarteBox>
+    <KarteBox v-else titel="Anmeldung">
       <Message v-if="passwortGeaendert" severity="success" class="mb-3">
         Passwort geändert. Andere Geräte und Browser sind damit abgemeldet.
       </Message>

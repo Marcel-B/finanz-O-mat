@@ -5,9 +5,10 @@ import Message from "primevue/message";
 import Password from "primevue/password";
 import { reactive, ref } from "vue";
 
-import { api } from "@/api";
+import { type AnmeldeArt, api } from "@/api";
 import AppLogo from "@/components/AppLogo.vue";
 
+defineProps<{ art: AnmeldeArt }>();
 const emit = defineEmits<{ angemeldet: [] }>();
 
 const zugang = reactive({ benutzer: "", passwort: "" });
@@ -27,6 +28,12 @@ async function anmelden() {
     laeuft.value = false;
   }
 }
+
+// Das Backend leitet zum Identity-Server weiter und nach der Anmeldung zurück zur App
+function identityAnmelden() {
+  laeuft.value = true;
+  window.location.href = "/api/identity/anmelden";
+}
 </script>
 
 <template>
@@ -37,7 +44,11 @@ async function anmelden() {
       <AppLogo :groesse="64" />
       <h2 class="text-lg font-semibold">Anmelden</h2>
     </div>
-    <form class="flex flex-col gap-3" @submit.prevent="anmelden">
+    <div v-if="art === 'identity'" class="flex flex-col gap-3">
+      <p class="text-center text-sm text-muted-color">Die Anmeldung läuft über den Identity-Server.</p>
+      <Button label="Mit Identity anmelden" icon="pi pi-sign-in" :loading="laeuft" autofocus @click="identityAnmelden" />
+    </div>
+    <form v-else class="flex flex-col gap-3" @submit.prevent="anmelden">
       <label class="flex flex-col gap-1 text-sm">
         Benutzername
         <InputText v-model="zugang.benutzer" name="username" autocomplete="username" autofocus fluid />

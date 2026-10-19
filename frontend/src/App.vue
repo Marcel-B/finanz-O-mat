@@ -11,7 +11,7 @@ import Toast from "primevue/toast";
 import { useToast } from "primevue/usetoast";
 import { onMounted, ref } from "vue";
 
-import { angemeldet, api, type Status, type Steuerfall } from "./api";
+import { type AnmeldeArt, angemeldet, api, type Status, type Steuerfall } from "./api";
 import AdressbuchAnsicht from "./components/AdressbuchAnsicht.vue";
 import AnmeldeAnsicht from "./components/AnmeldeAnsicht.vue";
 import AppLogo from "./components/AppLogo.vue";
@@ -55,6 +55,7 @@ async function ustidKopieren() {
 
 // Ist ein Passwort gesetzt? Sonst gibt es nichts abzumelden.
 const mitPasswort = ref(false);
+const anmeldeArt = ref<AnmeldeArt>("passwort");
 
 async function statusLaden() {
   try {
@@ -70,6 +71,7 @@ async function starten() {
   try {
     const a = await api.anmeldung();
     mitPasswort.value = a.aktiv;
+    anmeldeArt.value = a.art;
     angemeldet.value = a.angemeldet;
     if (!a.angemeldet) return;
     [status.value, steuerfaelle.value] = await Promise.all([api.status(), api.steuerfaelle()]);
@@ -80,7 +82,11 @@ async function starten() {
 
 async function abmelden() {
   try {
-    await api.abmelden();
+    const r = await api.abmelden();
+    if (r?.weiter) {
+      window.location.href = r.weiter;
+      return;
+    }
   } finally {
     angemeldet.value = false;
   }
@@ -156,7 +162,7 @@ onMounted(starten);
   </header>
 
   <main v-if="angemeldet === false" class="mx-auto max-w-7xl px-4 pb-8">
-    <AnmeldeAnsicht @angemeldet="starten" />
+    <AnmeldeAnsicht :art="anmeldeArt" @angemeldet="starten" />
   </main>
   <main v-else class="mx-auto max-w-7xl px-4 pb-8">
     <template v-if="angemeldet">

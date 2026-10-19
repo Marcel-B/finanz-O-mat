@@ -121,7 +121,11 @@ CREATE TABLE IF NOT EXISTS sitzungen (
     benutzer TEXT NOT NULL,
     stand TEXT NOT NULL,          -- Fingerabdruck der Zugangsdaten bei der Anmeldung
     erstellt REAL NOT NULL,
-    zuletzt REAL NOT NULL
+    zuletzt REAL NOT NULL,
+    sub TEXT NOT NULL DEFAULT '',            -- nur bei Anmeldung über den Identity-Server
+    id_token TEXT NOT NULL DEFAULT '',
+    refresh_token TEXT NOT NULL DEFAULT '',
+    abgeglichen REAL NOT NULL DEFAULT 0      -- letzter Abgleich mit dem Identity-Server
 );
 """
 
@@ -273,6 +277,12 @@ class Datenbank:
                 self._con.execute("ALTER TABLE belege ADD COLUMN erechnung TEXT NOT NULL DEFAULT ''")
             if "gedruckt" not in spalten:  # Datenbanken von vor dem Belegdruck
                 self._con.execute("ALTER TABLE belege ADD COLUMN gedruckt TEXT NOT NULL DEFAULT ''")
+            spalten = {z["name"] for z in self._con.execute("PRAGMA table_info(sitzungen)")}
+            for spalte in ("sub", "id_token", "refresh_token"):  # Datenbanken von vor dem Identity-Server
+                if spalte not in spalten:
+                    self._con.execute(f"ALTER TABLE sitzungen ADD COLUMN {spalte} TEXT NOT NULL DEFAULT ''")
+            if "abgeglichen" not in spalten:
+                self._con.execute("ALTER TABLE sitzungen ADD COLUMN abgeglichen REAL NOT NULL DEFAULT 0")
 
     # Einstellungen aus der Oberfläche (überschreiben die Umgebungsvariablen)
     def einstellungen(self) -> dict[str, str]:
@@ -297,10 +307,22 @@ class Datenbank:
             z = self._con.execute("SELECT * FROM sitzungen WHERE schluessel = ?", (schluessel,)).fetchone()
         return dict(z) if z else None
 
-    def sitzung_anlegen(self, schluessel: str, benutzer: str, stand: str, jetzt: float) -> None:
+    def sitzung_anlegen(self, schluessel: str, benutzer: str, stand: str, jetzt: float, *, sub: str = "",
+                        id_token: str = "", refresh_token: str = "") -> None:
         with self._lock, self._con:
-            self._con.execute("INSERT INTO sitzungen VALUES (?, ?, ?, ?, ?)",
-                              (schluessel, benutzer, stand, jetzt, jetzt))
+            self._con.execute(
+                "INSERT INTO sitzungen (schluessel, benutzer, stand, erstellt, zuletzt, sub, id_token, "
+                "refresh_token, abgeglichen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (schluessel, benutzer, stand, jetzt, jetzt, sub, id_token, refresh_token, jetzt))
+
+    def sitzung_abgleichen(self, schluessel: str, jetzt: float, *, benutzer: str | None = None,
+                           id_token: str | None = None, refresh_token: str | None = None) -> None:
+        """Merkt den Abgleich mit dem Identity-Server und die neuen Tokens (None: unverändert)."""
+        with self._lock, self._con:
+            self._con.execute(
+                "UPDATE sitzungen SET abgeglichen = ?, benutzer = COALESCE(?, benutzer), "
+                "id_token = COALESCE(?, id_token), refresh_token = COALESCE(?, refresh_token) "
+                "WHERE schluessel = ?", (jetzt, benutzer, id_token, refresh_token, schluessel))
 
     def sitzung_beruehren(self, schluessel: str, jetzt: float) -> None:
         with self._lock, self._con:

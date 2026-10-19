@@ -117,7 +117,8 @@ def test_passwort_ohne_bisherige_anmeldung(db, umrechner):
     app = create_app(Config(), db, umrechner, heute=date(2026, 10, 10))
     c = TestClient(app)
     assert c.get("/api/status").json()["anmeldung"] is False
-    assert c.get("/api/anmeldung").json() == {"aktiv": False, "angemeldet": True}
+    assert c.get("/api/anmeldung").json() == {"aktiv": False, "art": einstellungen.ART_PASSWORT,
+                                                  "angemeldet": True}
     c.post("/api/passwort", json={"benutzer": "marcel", "neu": PW_ERST})
     # wer das erste Passwort setzt, bleibt angemeldet; ein anderer Browser nicht
     assert c.get("/api/status").status_code == 200
