@@ -122,14 +122,15 @@ def betrag(t: Taetigkeit, v: Vorlage) -> Decimal | None:
 
 # Auftragsliste einfügen
 
-# Spaltenköpfe, wie sie in kopierten Auftragslisten vorkommen (klein geschrieben, ohne Satzzeichen)
-KOPF_NUMMER = {"auftragsnummer", "auftragsnr", "nummer", "nr", "bestellnummer", "bestellnr", "po", "ponummer",
-               "projektnummer", "projektnr", "id", "kennung", "kostenstelle", "psp", "pspelement"}
-KOPF_NAME = {"auftrag", "auftragsname", "auftragsbezeichnung", "bezeichnung", "name", "titel", "beschreibung",
-             "projekt", "projektname", "leistung"}
-KOPF_STATUS = {"status", "aktiv", "zustand", "state"}
-KOPF_INAKTIV = {"inaktiv", "gesperrt", "deaktiviert"}
-KOPF_ENDE = {"gültigbis", "bis", "ende", "enddatum", "laufzeitbis", "endedatum", "ablauf"}
+# Spaltenköpfe bzw. JSON-Felder, wie sie in Auftragslisten vorkommen (klein geschrieben, ohne Satzzeichen),
+# der bevorzugte zuerst
+KOPF_NUMMER = ("auftragsnummer", "auftragsnr", "nummer", "nr", "bestellnummer", "bestellnr", "po", "ponummer",
+               "projektnummer", "projektnr", "kennung", "kostenstelle", "psp", "pspelement", "id")
+KOPF_NAME = ("auftrag", "auftragsname", "auftragsbezeichnung", "bezeichnung", "name", "titel", "projekt",
+             "projektname", "leistung", "beschreibung")
+KOPF_STATUS = ("status", "aktiv", "zustand", "state")
+KOPF_INAKTIV = ("inaktiv", "gesperrt", "deaktiviert")
+KOPF_ENDE = ("gültigbis", "bis", "ende", "enddatum", "laufzeitbis", "endedatum", "ablauf")
 INAKTIV = {"inaktiv", "nein", "n", "false", "0", "geschlossen", "beendet", "abgeschlossen", "erledigt", "closed",
            "inactive", "deaktiviert", "gesperrt", "storniert", "abgelaufen", "archiviert"}
 AKTIV = {"aktiv", "ja", "j", "true", "1", "offen", "open", "active", "laufend", "läuft", "in bearbeitung"}
@@ -174,25 +175,52 @@ def _wie_nummer(wert: str) -> bool:
     return bool(wert) and " " not in wert.strip() and any(c.isdigit() for c in wert)
 
 
-def auftraege_lesen(text: str, heute: date | None = None) -> list[Auftrag]:
-    """Liest eine eingefügte Auftragsliste: aus Excel kopiert (Tabulator), CSV mit Semikolon oder eine Zeile je Auftrag.
+def _json_tabelle(text: str) -> list[list[str]]:
+    """JSON-Liste von Objekten (oder ein Objekt mit so einer Liste) als Tabelle mit den Feldnamen als Kopfzeile."""
+    try:
+        daten = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Die Auftragsliste ist kein gültiges JSON (Zeile {e.lineno}, Spalte {e.colno}).") from e
+    if isinstance(daten, dict):
+        daten = next((w for w in daten.values() if isinstance(w, list)), [daten])
+    if not isinstance(daten, list) or not all(isinstance(d, dict) for d in daten):
+        raise ValueError("Im JSON wird eine Liste von Aufträgen erwartet, z. B. [{\"auftragsnummer\": …}].")
+    felder = list(dict.fromkeys(k for d in daten for k in d))
+    zelle = {True: "aktiv", False: "inaktiv", None: ""}
+    return [felder] + [[zelle.get(w, str(w)) if isinstance(w, bool | None) else str(w).strip()
+                        for w in (d.get(f) for f in felder)] for d in daten]
 
-    Mit Kopfzeile werden die Spalten am Namen erkannt (Auftrag/Bezeichnung, Auftragsnummer, Status oder
-    Gültig bis). Ohne Kopfzeile gilt die Spalte, die nach Nummern aussieht, als Auftragsnummer.
+
+def auftraege_lesen(text: str, heute: date | None = None) -> list[Auftrag]:
+    """Liest eine eingefügte Auftragsliste: JSON, aus Excel kopiert (Tabulator), CSV mit Semikolon oder eine Zeile
+    je Auftrag.
+
+    Mit Kopfzeile bzw. JSON-Feldern werden die Spalten am Namen erkannt (Auftrag/Auftragsname, Auftragsnummer,
+    Status oder Gültig bis). Ohne Kopfzeile gilt die Spalte, die nach Nummern aussieht, als Auftragsnummer.
     """
     heute = heute or date.today()
-    zeilen = [z for z in text.replace("\r\n", "\n").replace("\r", "\n").split("\n") if z.strip()]
-    if not zeilen:
-        raise ValueError("Die Auftragsliste ist leer.")
-    trenner = "\t" if any("\t" in z for z in zeilen) else ";" if any(";" in z for z in zeilen) else None
-    tabelle = [[c.strip().strip('"').strip() for c in (z.split(trenner) if trenner else [z])] for z in zeilen]
+    ist_json = text.strip().startswith(("[", "{"))
+    if ist_json:
+        tabelle = _json_tabelle(text)
+        if len(tabelle) < 2:
+            raise ValueError("In der Auftragsliste steht kein Auftrag.")
+    else:
+        zeilen = [z for z in text.replace("\r\n", "\n").replace("\r", "\n").split("\n") if z.strip()]
+        if not zeilen:
+            raise ValueError("Die Auftragsliste ist leer.")
+        trenner = "\t" if any("\t" in z for z in zeilen) else ";" if any(";" in z for z in zeilen) else None
+        tabelle = [[c.strip().strip('"').strip() for c in (z.split(trenner) if trenner else [z])] for z in zeilen]
 
     kopf = [_kopfname(k) for k in tabelle[0]]
     spalte = {}
     for art, namen in (("nummer", KOPF_NUMMER), ("name", KOPF_NAME), ("status", KOPF_STATUS),
                        ("inaktiv", KOPF_INAKTIV), ("ende", KOPF_ENDE)):
-        spalte[art] = next((i for i, k in enumerate(kopf) if k in namen), None)
-    if spalte["name"] is None and spalte["nummer"] is not None:
+        spalte[art] = next((kopf.index(n) for n in namen if n in kopf), None)
+    if ist_json and spalte["name"] is None:
+        if spalte["nummer"] is None:
+            raise ValueError("Im JSON fehlt ein Feld für den Auftrag (z. B. auftragsname oder auftragsnummer).")
+        spalte["name"] = spalte["nummer"]
+    elif spalte["name"] is None and spalte["nummer"] is not None:
         # "Auftrag" fehlt, aber eine andere Textspalte steht neben der Nummer
         spalte["name"] = next((i for i, k in enumerate(kopf) if i not in spalte.values()), None)
     if spalte["name"] is not None:
