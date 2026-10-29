@@ -33,6 +33,7 @@ BREITEN = [11.5, 16.5, 24.5, 28.16, 23.16, 18.16, 19.5, 10.5, 11.16, 15.83, 42.5
 class Auftrag:
     name: str
     nummer: str = ""
+    aktiv: bool = True  # inaktive Aufträge stehen bei der Erfassung nur auf Wunsch zur Auswahl
 
 
 @dataclass
@@ -55,6 +56,10 @@ class Vorlage:
     def auftragsnummer(self, auftrag: str) -> str:
         return next((a.nummer for a in self.auftraege if a.name == auftrag), "")
 
+    def ist_aktiv(self, auftrag: str) -> bool:
+        """Unbekannte Aufträge (nur in alten Einträgen) gelten als aktiv."""
+        return next((a.aktiv for a in self.auftraege if a.name == auftrag), True)
+
     def to_dict(self) -> dict:
         d = asdict(self)
         d["stundensatz"] = None if self.stundensatz is None else str(self.stundensatz)
@@ -73,7 +78,8 @@ class Vorlage:
         v.kopf = texte(d.get("kopf"))
         v.stundensatz = _dezimal(d.get("stundensatz"))
         v.stunden = _dezimal(d.get("stunden")) or v.stunden
-        v.auftraege = [Auftrag(str(a.get("name", "")).strip(), str(a.get("nummer") or "").strip())
+        v.auftraege = [Auftrag(str(a.get("name", "")).strip(), str(a.get("nummer") or "").strip(),
+                               a.get("aktiv") is not False)
                        for a in d.get("auftraege") or [] if str(a.get("name", "")).strip()]
         for liste in ("rollen", "orte", "leistungsarten"):
             if liste in d:
@@ -112,6 +118,159 @@ def betrag(t: Taetigkeit, v: Vorlage) -> Decimal | None:
     """Ungerundet wie die Formel in der Excel-Datei; gerundet wird erst die Anzeige."""
     s = satz(t, v)
     return None if s is None else s * t.stunden
+
+
+# Auftragsliste einfügen
+
+# Spaltenköpfe, wie sie in kopierten Auftragslisten vorkommen (klein geschrieben, ohne Satzzeichen)
+KOPF_NUMMER = {"auftragsnummer", "auftragsnr", "nummer", "nr", "bestellnummer", "bestellnr", "po", "ponummer",
+               "projektnummer", "projektnr", "id", "kennung", "kostenstelle", "psp", "pspelement"}
+KOPF_NAME = {"auftrag", "auftragsname", "auftragsbezeichnung", "bezeichnung", "name", "titel", "beschreibung",
+             "projekt", "projektname", "leistung"}
+KOPF_STATUS = {"status", "aktiv", "zustand", "state"}
+KOPF_INAKTIV = {"inaktiv", "gesperrt", "deaktiviert"}
+KOPF_ENDE = {"gültigbis", "bis", "ende", "enddatum", "laufzeitbis", "endedatum", "ablauf"}
+INAKTIV = {"inaktiv", "nein", "n", "false", "0", "geschlossen", "beendet", "abgeschlossen", "erledigt", "closed",
+           "inactive", "deaktiviert", "gesperrt", "storniert", "abgelaufen", "archiviert"}
+AKTIV = {"aktiv", "ja", "j", "true", "1", "offen", "open", "active", "laufend", "läuft", "in bearbeitung"}
+
+
+@dataclass
+class AuftragsImport:
+    neu: list[str] = field(default_factory=list)
+    vorhanden: list[str] = field(default_factory=list)  # schon in der Vorlage, unverändert gelassen
+    status_geaendert: list[str] = field(default_factory=list)
+    inaktiv: int = 0  # neu angelegte, die laut Liste inaktiv sind
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def _kopfname(wert: str) -> str:
+    return "".join(c for c in wert.lower() if c.isalnum())
+
+
+def _zelle_aktiv(wert: str) -> bool | None:
+    w = wert.strip().lower()
+    if w in INAKTIV:
+        return False
+    if w in AKTIV:
+        return True
+    return None
+
+
+def _datum_vorbei(wert: str, heute: date) -> bool | None:
+    w = wert.strip()
+    for muster in ("%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(w, muster).date() < heute
+        except ValueError:
+            continue
+    return None
+
+
+def _wie_nummer(wert: str) -> bool:
+    """Auftragsnummern sind kurz, ohne Leerzeichen und enthalten Ziffern."""
+    return bool(wert) and " " not in wert.strip() and any(c.isdigit() for c in wert)
+
+
+def auftraege_lesen(text: str, heute: date | None = None) -> list[Auftrag]:
+    """Liest eine eingefügte Auftragsliste: aus Excel kopiert (Tabulator), CSV mit Semikolon oder eine Zeile je Auftrag.
+
+    Mit Kopfzeile werden die Spalten am Namen erkannt (Auftrag/Bezeichnung, Auftragsnummer, Status oder
+    Gültig bis). Ohne Kopfzeile gilt die Spalte, die nach Nummern aussieht, als Auftragsnummer.
+    """
+    heute = heute or date.today()
+    zeilen = [z for z in text.replace("\r\n", "\n").replace("\r", "\n").split("\n") if z.strip()]
+    if not zeilen:
+        raise ValueError("Die Auftragsliste ist leer.")
+    trenner = "\t" if any("\t" in z for z in zeilen) else ";" if any(";" in z for z in zeilen) else None
+    tabelle = [[c.strip().strip('"').strip() for c in (z.split(trenner) if trenner else [z])] for z in zeilen]
+
+    kopf = [_kopfname(k) for k in tabelle[0]]
+    spalte = {}
+    for art, namen in (("nummer", KOPF_NUMMER), ("name", KOPF_NAME), ("status", KOPF_STATUS),
+                       ("inaktiv", KOPF_INAKTIV), ("ende", KOPF_ENDE)):
+        spalte[art] = next((i for i, k in enumerate(kopf) if k in namen), None)
+    if spalte["name"] is None and spalte["nummer"] is not None:
+        # "Auftrag" fehlt, aber eine andere Textspalte steht neben der Nummer
+        spalte["name"] = next((i for i, k in enumerate(kopf) if i not in spalte.values()), None)
+    if spalte["name"] is not None:
+        daten = tabelle[1:]
+    else:
+        daten = tabelle
+        breite = max(len(z) for z in daten)
+        if breite == 1:
+            spalte["name"] = 0
+        else:
+            def anteil(i: int, pruefen) -> float:
+                werte = [z[i] for z in daten if i < len(z) and z[i]]
+                return sum(1 for w in werte if pruefen(w)) / len(werte) if werte else 0
+
+            status = [i for i in range(breite) if anteil(i, lambda w: _zelle_aktiv(w) is not None) > 0.8]
+            spalte["status"] = status[0] if status else None
+            uebrig = [i for i in range(breite) if i not in status]
+            nummern = [i for i in uebrig if anteil(i, _wie_nummer) > 0.8]
+            spalte["nummer"] = nummern[0] if nummern and len(uebrig) > 1 else None
+            texte = [i for i in uebrig if i != spalte["nummer"]]
+            spalte["name"] = texte[0] if texte else uebrig[0]
+
+    def zelle(z: list[str], art: str) -> str:
+        i = spalte.get(art)
+        return z[i] if i is not None and i < len(z) else ""
+
+    auftraege: list[Auftrag] = []
+    for z in daten:
+        name = zelle(z, "name")
+        if not name:
+            continue
+        aktiv = True
+        if spalte["status"] is not None:
+            aktiv = _zelle_aktiv(zelle(z, "status")) is not False
+        elif spalte["inaktiv"] is not None:  # angekreuzt (x, ja) heißt inaktiv
+            markiert = zelle(z, "inaktiv")
+            aktiv = not markiert or _zelle_aktiv(markiert) is False
+        if aktiv and spalte["ende"] is not None and _datum_vorbei(zelle(z, "ende"), heute):
+            aktiv = False
+        auftraege.append(Auftrag(name, zelle(z, "nummer"), aktiv))
+    if not auftraege:
+        raise ValueError("In der Auftragsliste steht kein Auftrag.")
+    return auftraege
+
+
+def _gleich(a: Auftrag, b: Auftrag) -> bool:
+    if a.nummer and b.nummer:
+        return a.nummer.lower() == b.nummer.lower()
+    return a.name.lower() == b.name.lower()
+
+
+def auftraege_ergaenzen(v: Vorlage, neue: list[Auftrag], status_uebernehmen: bool = False) -> AuftragsImport:
+    """Hängt unbekannte Aufträge an; vorhandene behalten Name und Nummer.
+
+    Erfasste Tätigkeiten verweisen über den Namen auf den Auftrag, deshalb wird ein vorhandener
+    Auftrag nie umbenannt. Den Status übernimmt der Import nur auf ausdrücklichen Wunsch.
+    """
+    ergebnis = AuftragsImport()
+    for a in neue:
+        alt = next((x for x in v.auftraege if _gleich(x, a)), None)
+        if alt is None:
+            v.auftraege.append(a)
+            ergebnis.neu.append(a.name)
+            ergebnis.inaktiv += not a.aktiv
+        elif alt.name not in ergebnis.vorhanden:
+            ergebnis.vorhanden.append(alt.name)
+            if status_uebernehmen and alt.aktiv != a.aktiv:
+                alt.aktiv = a.aktiv
+                ergebnis.status_geaendert.append(alt.name)
+    return ergebnis
+
+
+def auftraege_importieren(db: Datenbank, text: str, status_uebernehmen: bool = False,
+                          heute: date | None = None) -> AuftragsImport:
+    v = vorlage_laden(db)
+    ergebnis = auftraege_ergaenzen(v, auftraege_lesen(text, heute), status_uebernehmen)
+    vorlage_speichern(db, v)
+    return ergebnis
 
 
 # Vorschläge für die Erfassung
@@ -166,7 +325,8 @@ def vorschlag(db: Datenbank, v: Vorlage, jahr: int, monat: int, bundesland: str,
     datum = frei[0] if frei else (im_monat[-1].datum if im_monat else date(jahr, monat, 1))
     return {
         "datum": datum.isoformat(),
-        "auftrag": letzter.auftrag if letzter else (v.auftraege[0].name if v.auftraege else ""),
+        "auftrag": letzter.auftrag if letzter and v.ist_aktiv(letzter.auftrag) else next(
+            (a.name for a in v.auftraege if a.aktiv), ""),
         "referenz": letzter.referenz if letzter else "",
         "taetigkeit": letzter.taetigkeit if letzter else "",
         "stunden": str(v.stunden),
@@ -369,8 +529,8 @@ def _werte_lesen(ws, v: Vorlage, ergebnis: ImportErgebnis) -> None:
             a, n = kopf.index("auftrag"), kopf.index("auftragsnummer")
             auftraege = [Auftrag(_text(z[a]), _text(z[n])) for z in daten if _text(z[a])]
             if auftraege:
-                v.auftraege = auftraege
-                ergebnis.vorlage.append(f"{len(auftraege)} Aufträge")
+                neu = auftraege_ergaenzen(v, auftraege).neu  # vorhandene Aufträge bleiben, wie sie sind
+                ergebnis.vorlage.append(f"{len(neu)} neue Aufträge" if neu else "Aufträge schon vorhanden")
         for name, liste in (("rolle", "rollen"), ("ort", "orte"), ("leistungsart", "leistungsarten")):
             if name in kopf:
                 werte = [_text(z[kopf.index(name)]) for z in daten if _text(z[kopf.index(name)])]

@@ -259,6 +259,19 @@ export interface TaetigkeitenMonat {
   texte: { taetigkeit: string; auftrag: string; referenz: string }[]; // frühere Tätigkeiten, neueste zuerst
 }
 
+export interface Auftrag {
+  name: string;
+  nummer: string;
+  aktiv: boolean; // inaktive stehen bei der Erfassung nur mit Schalter zur Auswahl
+}
+
+export interface AuftragsImport {
+  neu: string[];
+  vorhanden: string[]; // schon in der Vorlage, unverändert
+  status_geaendert: string[];
+  inaktiv: number; // davon neu und laut Liste inaktiv
+}
+
 export interface TaetigkeitVorlage {
   titel: string;
   name: string;
@@ -266,7 +279,7 @@ export interface TaetigkeitVorlage {
   kopf: string[];
   stundensatz: string | null;
   stunden: string;
-  auftraege: { name: string; nummer: string }[];
+  auftraege: Auftrag[];
   rollen: string[];
   orte: string[];
   leistungsarten: string[];
@@ -542,6 +555,11 @@ export const api = {
   taetigkeitVorlage: () => anfrage<TaetigkeitVorlage>("/api/taetigkeiten/vorlage"),
   taetigkeitVorlageSpeichern: (v: TaetigkeitVorlage) =>
     anfrage<TaetigkeitVorlage>("/api/taetigkeiten/vorlage", { method: "PUT", body: JSON.stringify(v) }),
+  auftraegeImportieren: (text: string, statusUebernehmen: boolean) =>
+    anfrage<AuftragsImport>("/api/taetigkeiten/auftraege", {
+      method: "POST",
+      body: JSON.stringify({ text, status_uebernehmen: statusUebernehmen }),
+    }),
   taetigkeitImport: (datei: Blob) =>
     anfrage<TaetigkeitImport>("/api/taetigkeiten/import", {
       method: "POST",
