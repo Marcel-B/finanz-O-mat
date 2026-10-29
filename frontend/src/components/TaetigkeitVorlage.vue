@@ -261,8 +261,9 @@ async function einlesen(event: Event) {
     <div class="flex flex-col gap-3 text-sm">
       <span>
         Liste aus Excel oder dem Kundenportal kopieren und hier einfügen, gern mit Kopfzeile (z. B. Auftrag,
-        Auftragsnummer, Status oder Gültig bis). Neue Aufträge kommen dazu, vorhandene behalten Name und Nummer, damit
-        erfasste Tätigkeiten ihren Auftrag behalten.
+        Auftragsnummer, Status oder Gültig bis), oder als JSON mit Feldern wie auftragsnummer, auftragsname und status
+        (AKTIV/INAKTIV). Neue Aufträge kommen dazu, vorhandene behalten Name und Nummer, damit erfasste Tätigkeiten ihren
+        Auftrag behalten.
       </span>
       <Textarea
         v-model="liste"

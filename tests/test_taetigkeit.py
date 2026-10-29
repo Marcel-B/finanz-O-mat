@@ -267,6 +267,33 @@ def test_auftragsliste_spalte_inaktiv_angekreuzt():
     assert [a.aktiv for a in taetigkeit.auftraege_lesen(text)] == [False, True]
 
 
+def test_auftragsliste_als_json():
+    text = """[
+      {"typ": "Sammler", "auftragsnummer": "MUS-OPS", "auftragsname": "Muster / Betrieb",
+       "beschreibung": "Betrieb & Support", "status": "AKTIV", "epic": 4711, "antragDurch": null, "budget": null},
+      {"typ": "Projekt", "auftragsnummer": "2026001", "auftragsname": "Muster / Altes Vorhaben",
+       "beschreibung": "Abgeschlossen", "status": "INAKTIV", "epic": 4712, "antragDurch": "Erika", "budget": "123"},
+      {"typ": "Projekt", "auftragsnummer": "MUS-NEU", "auftragsname": "Muster / Neues Vorhaben", "status": "aktiv"}
+    ]"""
+    assert taetigkeit.auftraege_lesen(text) == [
+        taetigkeit.Auftrag("Muster / Betrieb", "MUS-OPS", True),
+        taetigkeit.Auftrag("Muster / Altes Vorhaben", "2026001", False),
+        taetigkeit.Auftrag("Muster / Neues Vorhaben", "MUS-NEU", True),
+    ]
+    # auch als Objekt mit Liste und mit aktiv als Wahrheitswert
+    assert taetigkeit.auftraege_lesen('{"auftraege": [{"name": "Muster", "nummer": "M-1", "aktiv": false}]}') == [
+        taetigkeit.Auftrag("Muster", "M-1", False)]
+
+
+def test_auftragsliste_json_fehler():
+    with pytest.raises(ValueError, match="kein gültiges JSON"):
+        taetigkeit.auftraege_lesen('[{"auftragsname": "Muster",}]')
+    with pytest.raises(ValueError, match="Feld für den Auftrag"):
+        taetigkeit.auftraege_lesen('[{"typ": "Projekt", "epic": 1}]')
+    with pytest.raises(ValueError, match="kein Auftrag"):
+        taetigkeit.auftraege_lesen("[]")
+
+
 def test_auftragsliste_leer():
     with pytest.raises(ValueError):
         taetigkeit.auftraege_lesen("  \n\n")
