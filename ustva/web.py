@@ -229,6 +229,11 @@ class TaetigkeitEingabe(BaseModel):
         return v.strip()
 
 
+class AuftragslisteEingabe(BaseModel):
+    text: str
+    status_uebernehmen: bool = False  # Status vorhandener Aufträge aus der Liste setzen
+
+
 class StundenzettelTag(BaseModel):
     datum: date
     stunden: Decimal
@@ -849,6 +854,12 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     @app.put("/api/taetigkeiten/vorlage")
     def taetigkeit_vorlage_speichern(eingabe: dict):
         return taetigkeit.vorlage_speichern(db, taetigkeit.Vorlage.aus_dict(eingabe)).to_dict()
+
+    @app.post("/api/taetigkeiten/auftraege")
+    def taetigkeit_auftraege_importieren(eingabe: AuftragslisteEingabe):
+        if len(eingabe.text) > 1_000_000:
+            raise HTTPException(413, "Auftragsliste zu lang")
+        return taetigkeit.auftraege_importieren(db, eingabe.text, eingabe.status_uebernehmen, _heute()).to_dict()
 
     @app.post("/api/taetigkeiten/import")
     async def taetigkeit_import(request: Request):

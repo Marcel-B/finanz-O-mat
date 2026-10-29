@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import Button from "primevue/button";
+import Checkbox from "primevue/checkbox";
+import Dialog from "primevue/dialog";
 import InputNumber from "primevue/inputnumber";
 import InputText from "primevue/inputtext";
 import Textarea from "primevue/textarea";
+import ToggleSwitch from "primevue/toggleswitch";
 import { useToast } from "primevue/usetoast";
 import { onMounted, reactive, ref } from "vue";
 
-import { api, type TaetigkeitVorlage } from "@/api";
+import { api, type Auftrag, type TaetigkeitVorlage } from "@/api";
 
 // Was im Tätigkeitsnachweis jeden Monat gleich bleibt: Kopf, Stundensatz, Aufträge und Auswahllisten.
 const emit = defineEmits<{ gespeichert: [TaetigkeitVorlage]; importiert: [] }>();
@@ -19,7 +22,7 @@ const form = reactive({
   kopf: "",
   stundensatz: null as number | null,
   stunden: 8 as number | null,
-  auftraege: [] as { name: string; nummer: string }[],
+  auftraege: [] as Auftrag[],
   rollen: "",
   orte: "",
   leistungsarten: "",
@@ -28,6 +31,10 @@ const geladen = ref(false);
 const speichert = ref(false);
 const liestEin = ref(false);
 const datei = ref<HTMLInputElement | null>(null);
+const listeOffen = ref(false);
+const liste = ref("");
+const statusUebernehmen = ref(false);
+const listeLaeuft = ref(false);
 
 const zeilen = (text: string) => text.split("\n").map((z) => z.trim()).filter(Boolean);
 
@@ -79,6 +86,28 @@ async function speichern() {
     fehler(e);
   } finally {
     speichert.value = false;
+  }
+}
+
+// Eingefügte Auftragsliste: nur neue Aufträge kommen dazu, vorhandene bleiben unverändert
+async function listeUebernehmen() {
+  listeLaeuft.value = true;
+  try {
+    const e = await api.auftraegeImportieren(liste.value, statusUebernehmen.value);
+    const teile = [
+      `${e.neu.length} neu${e.inaktiv ? `, davon ${e.inaktiv} inaktiv` : ""}`,
+      e.vorhanden.length ? `${e.vorhanden.length} schon vorhanden` : "",
+      e.status_geaendert.length ? `Status geändert: ${e.status_geaendert.join(", ")}` : "",
+    ];
+    toast.add({ severity: "success", summary: "Auftragsliste übernommen", detail: teile.filter(Boolean).join(" · "), life: 8000 });
+    uebernehmen(await api.taetigkeitVorlage());
+    emit("importiert");
+    listeOffen.value = false;
+    liste.value = "";
+  } catch (err) {
+    fehler(err);
+  } finally {
+    listeLaeuft.value = false;
   }
 }
 
@@ -170,9 +199,13 @@ async function einlesen(event: Event) {
 
     <div class="flex flex-col gap-1 text-sm">
       Aufträge
-      <div v-for="(a, i) in form.auftraege" :key="i" class="flex gap-2">
-        <InputText v-model="a.name" placeholder="Auftrag" class="flex-[2]" />
-        <InputText v-model="a.nummer" placeholder="Auftragsnummer" class="flex-1" />
+      <div v-for="(a, i) in form.auftraege" :key="i" class="flex items-center gap-2">
+        <InputText v-model="a.name" placeholder="Auftrag" class="flex-[2]" :class="{ 'opacity-60': !a.aktiv }" />
+        <InputText v-model="a.nummer" placeholder="Auftragsnummer" class="flex-1" :class="{ 'opacity-60': !a.aktiv }" />
+        <label class="flex w-20 items-center gap-1 text-xs text-muted-color">
+          <ToggleSwitch v-model="a.aktiv" class="scale-75" />
+          {{ a.aktiv ? "aktiv" : "inaktiv" }}
+        </label>
         <Button
           icon="pi pi-trash"
           severity="secondary"
@@ -188,7 +221,15 @@ async function einlesen(event: Event) {
           size="small"
           severity="secondary"
           text
-          @click="form.auftraege.push({ name: '', nummer: '' })"
+          @click="form.auftraege.push({ name: '', nummer: '', aktiv: true })"
+        />
+        <Button
+          label="Auftragsliste einfügen"
+          icon="pi pi-clipboard"
+          size="small"
+          severity="secondary"
+          text
+          @click="listeOffen = true"
         />
       </div>
     </div>
@@ -215,4 +256,38 @@ async function einlesen(event: Event) {
       <Button type="submit" label="Speichern" icon="pi pi-save" :loading="speichert" />
     </div>
   </form>
+
+  <Dialog v-model:visible="listeOffen" header="Auftragsliste einfügen" modal :style="{ width: '44rem' }">
+    <div class="flex flex-col gap-3 text-sm">
+      <span>
+        Liste aus Excel oder dem Kundenportal kopieren und hier einfügen, gern mit Kopfzeile (z. B. Auftrag,
+        Auftragsnummer, Status oder Gültig bis). Neue Aufträge kommen dazu, vorhandene behalten Name und Nummer, damit
+        erfasste Tätigkeiten ihren Auftrag behalten.
+      </span>
+      <Textarea
+        v-model="liste"
+        rows="10"
+        fluid
+        class="font-mono text-xs"
+        placeholder="Auftragsnummer&#9;Auftrag&#9;Status"
+      />
+      <label class="flex items-center gap-2">
+        <Checkbox v-model="statusUebernehmen" binary />
+        Status vorhandener Aufträge (aktiv/inaktiv) aus der Liste übernehmen
+      </label>
+      <span class="text-xs text-muted-color">
+        Ungespeicherte Änderungen an der Vorlage gehen dabei verloren, vorher also speichern.
+      </span>
+    </div>
+    <template #footer>
+      <Button label="Abbrechen" severity="secondary" text @click="listeOffen = false" />
+      <Button
+        label="Übernehmen"
+        icon="pi pi-check"
+        :loading="listeLaeuft"
+        :disabled="!liste.trim()"
+        @click="listeUebernehmen"
+      />
+    </template>
+  </Dialog>
 </template>

@@ -44,7 +44,8 @@ def test_vorlage_standard_und_speichern(client):
     assert v["orte"] == ["Remote", "vor Ort"]
     v = vorlage_setzen(client, stundensatz="99,75")
     assert v["stundensatz"] == "99.75"
-    assert client.get("/api/taetigkeiten/vorlage").json()["auftraege"][0] == {"name": "Projekt A", "nummer": "PA-1"}
+    assert client.get("/api/taetigkeiten/vorlage").json()["auftraege"][0] == {
+        "name": "Projekt A", "nummer": "PA-1", "aktiv": True}
     assert client.put("/api/taetigkeiten/vorlage", json={"stundensatz": "-1"}).status_code == 400
 
 
@@ -186,7 +187,8 @@ def test_import_aus_bestehender_datei(client, db):
     assert (v["name"], v["vorname"]) == ("Muster", "Max")
     assert v["kopf"] == ["Agentur GmbH", "Straße 1"]
     assert v["stundensatz"] == "99.75"
-    assert v["auftraege"] == [{"name": "Projekt A", "nummer": "PA-1"}, {"name": "Betrieb", "nummer": "OPS"}]
+    assert v["auftraege"] == [{"name": "Projekt A", "nummer": "PA-1", "aktiv": True},
+                              {"name": "Betrieb", "nummer": "OPS", "aktiv": True}]
     assert v["leistungsarten"] == ["Entwicklung", "Betrieb", "Support"]
     assert v["orte"] == ["Remote", "vor Ort"]
 
@@ -200,6 +202,16 @@ def test_import_aus_bestehender_datei(client, db):
     assert erg["eintraege"] == 0
     assert erg["uebersprungen"] == ["2026-08", "2026-09"]
     assert len(db.taetigkeiten()) == 4
+
+
+def test_excel_import_behaelt_vorhandene_auftraege(client):
+    vorlage_setzen(client, auftraege=[{"name": "Projekt A", "nummer": "PA-1", "aktiv": False},
+                                      {"name": "Eigener Auftrag", "nummer": "EA-9"}])
+    r = client.post("/api/taetigkeiten/import", content=bestehende_datei())
+    assert "1 neue Aufträge" in r.json()["vorlage"]
+    v = client.get("/api/taetigkeiten/vorlage").json()
+    assert [(a["name"], a["aktiv"]) for a in v["auftraege"]] == [
+        ("Projekt A", False), ("Eigener Auftrag", True), ("Betrieb", True)]
 
 
 def test_import_ohne_excel(client):
@@ -217,3 +229,90 @@ def test_betrag_ohne_satz():
     t = Taetigkeit(datum=date(2026, 10, 1), stunden=Decimal(8))
     assert taetigkeit.betrag(t, taetigkeit.Vorlage()) is None
     assert taetigkeit.betrag(t, taetigkeit.Vorlage(stundensatz=Decimal("99.75"))) == Decimal("798.00")
+
+
+# Auftragsliste einfügen (nur erfundene Aufträge)
+
+def test_auftragsliste_aus_excel_kopiert():
+    text = ("Auftragsnummer\tBezeichnung\tStatus\n"
+            "4500001234\tMusterportal Weiterentwicklung\tAktiv\n"
+            "4500005678\tAltsystem Wartung\tInaktiv\n"
+            "\n"
+            "4500009999\tNeues Vorhaben\toffen\n")
+    assert taetigkeit.auftraege_lesen(text) == [
+        taetigkeit.Auftrag("Musterportal Weiterentwicklung", "4500001234", True),
+        taetigkeit.Auftrag("Altsystem Wartung", "4500005678", False),
+        taetigkeit.Auftrag("Neues Vorhaben", "4500009999", True),
+    ]
+
+
+def test_auftragsliste_csv_mit_gueltig_bis():
+    text = ('Projekt;Nr.;Gültig bis\r\n"Kunde Muster, Phase 2";P-200;31.12.2026\r\n'
+            "Kunde Muster, Phase 1;P-100;30.06.2026\r\n")
+    assert taetigkeit.auftraege_lesen(text, heute=date(2026, 10, 29)) == [
+        taetigkeit.Auftrag("Kunde Muster, Phase 2", "P-200", True),
+        taetigkeit.Auftrag("Kunde Muster, Phase 1", "P-100", False),
+    ]
+
+
+def test_auftragsliste_ohne_kopfzeile():
+    assert taetigkeit.auftraege_lesen("Beispielprojekt\tBP-01\tnein\nZweites Projekt\tBP-02\tja") == [
+        taetigkeit.Auftrag("Beispielprojekt", "BP-01", False), taetigkeit.Auftrag("Zweites Projekt", "BP-02", True)]
+    assert taetigkeit.auftraege_lesen("Nur ein Name\nNoch einer\n") == [
+        taetigkeit.Auftrag("Nur ein Name"), taetigkeit.Auftrag("Noch einer")]
+
+
+def test_auftragsliste_spalte_inaktiv_angekreuzt():
+    text = "Auftrag\tAuftragsnummer\tInaktiv\nAlt\tA-1\tx\nNeu\tA-2\t\n"
+    assert [a.aktiv for a in taetigkeit.auftraege_lesen(text)] == [False, True]
+
+
+def test_auftragsliste_leer():
+    with pytest.raises(ValueError):
+        taetigkeit.auftraege_lesen("  \n\n")
+
+
+def test_auftragsliste_ergaenzt_ohne_zu_ueberschreiben(client, db):
+    vorlage_setzen(client)
+    eintrag(client, "2026-10-01", auftrag="Projekt A")
+    text = ("Auftrag\tAuftragsnummer\tStatus\n"
+            "Projekt A (umbenannt)\tPA-1\tinaktiv\n"  # gleiche Nummer: bleibt wie in der Vorlage
+            "betrieb\t\taktiv\n"  # gleicher Name ohne Nummer
+            "Projekt C\tPC-3\tinaktiv\n"
+            "Projekt D\tPD-4\taktiv\n")
+    r = client.post("/api/taetigkeiten/auftraege", json={"text": text})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"neu": ["Projekt C", "Projekt D"], "vorhanden": ["Projekt A", "Betrieb"],
+                        "status_geaendert": [], "inaktiv": 1}
+    v = client.get("/api/taetigkeiten/vorlage").json()
+    assert v["auftraege"] == [
+        {"name": "Projekt A", "nummer": "PA-1", "aktiv": True},
+        {"name": "Betrieb", "nummer": "OPS", "aktiv": True},
+        {"name": "Projekt C", "nummer": "PC-3", "aktiv": False},
+        {"name": "Projekt D", "nummer": "PD-4", "aktiv": True},
+    ]
+    # erfasste Tätigkeiten bleiben unberührt, die Auftragsnummer im Nachweis auch
+    assert [t.auftrag for t in db.taetigkeiten()] == ["Projekt A"]
+    assert taetigkeit.vorlage_laden(db).auftragsnummer("Projekt A") == "PA-1"
+
+    # zweites Einfügen legt nichts doppelt an; Status nur auf Wunsch
+    r = client.post("/api/taetigkeiten/auftraege", json={"text": text, "status_uebernehmen": True}).json()
+    assert r["neu"] == [] and r["status_geaendert"] == ["Projekt A"]
+    v = client.get("/api/taetigkeiten/vorlage").json()
+    assert len(v["auftraege"]) == 4
+    assert v["auftraege"][0] == {"name": "Projekt A", "nummer": "PA-1", "aktiv": False}
+
+
+def test_auftragsliste_fehler(client):
+    r = client.post("/api/taetigkeiten/auftraege", json={"text": "\n"})
+    assert r.status_code == 400
+
+
+def test_vorschlag_nimmt_keinen_inaktiven_auftrag(client):
+    vorlage_setzen(client, auftraege=[{"name": "Projekt A", "nummer": "PA-1", "aktiv": False},
+                                      {"name": "Betrieb", "nummer": "OPS"}])
+    assert client.get("/api/taetigkeiten?zeitraum=2026-10").json()["vorschlag"]["auftrag"] == "Betrieb"
+    eintrag(client, "2026-10-01", auftrag="Projekt A")  # mit dem Schalter weiterhin möglich
+    assert client.get("/api/taetigkeiten?zeitraum=2026-10").json()["vorschlag"]["auftrag"] == "Betrieb"
+    eintrag(client, "2026-10-02", auftrag="Betrieb")
+    assert client.get("/api/taetigkeiten?zeitraum=2026-10").json()["vorschlag"]["auftrag"] == "Betrieb"

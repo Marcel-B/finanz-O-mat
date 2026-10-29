@@ -9,6 +9,7 @@ import InputNumber from "primevue/inputnumber";
 import InputText from "primevue/inputtext";
 import Message from "primevue/message";
 import Select from "primevue/select";
+import ToggleSwitch from "primevue/toggleswitch";
 import { useConfirm } from "primevue/useconfirm";
 import { useToast } from "primevue/usetoast";
 import { computed, onMounted, reactive, ref, watch } from "vue";
@@ -31,6 +32,7 @@ const vorlageOffen = ref(false);
 const speichert = ref(false);
 const bearbeitet = ref<number | null>(null);
 const vorschlaege = ref<string[]>([]);
+const inaktiveZeigen = ref(false);
 const formular = ref<HTMLElement | null>(null);
 
 const form = reactive({
@@ -57,7 +59,13 @@ function liste(ausVorlage: string[] | undefined, feld: "auftrag" | "rolle" | "or
   if (form[feld]) werte.add(form[feld]);
   return [...werte];
 }
-const auftraege = computed(() => liste(vorlage.value?.auftraege.map((a) => a.name), "auftrag"));
+// Inaktive Aufträge nur mit dem Schalter; der Auftrag des gerade bearbeiteten Eintrags bleibt immer sichtbar
+const inaktiv = computed(() => new Set(vorlage.value?.auftraege.filter((a) => !a.aktiv).map((a) => a.name)));
+const auftraege = computed(() => {
+  const alle = liste(vorlage.value?.auftraege.map((a) => a.name), "auftrag");
+  if (inaktiveZeigen.value) return alle;
+  return alle.filter((a) => !inaktiv.value.has(a) || a === form.auftrag);
+});
 const rollen = computed(() => liste(vorlage.value?.rollen, "rolle"));
 const orte = computed(() => liste(vorlage.value?.orte, "ort"));
 const leistungsarten = computed(() => liste(vorlage.value?.leistungsarten, "leistungsart"));
@@ -124,7 +132,7 @@ function suchen(event: { query: string }) {
 function textGewaehlt(event: { value: string }) {
   const t = daten.value?.texte.find((x) => x.taetigkeit === event.value);
   if (!t) return;
-  if (t.auftrag) form.auftrag = t.auftrag;
+  if (t.auftrag && (inaktiveZeigen.value || !inaktiv.value.has(t.auftrag))) form.auftrag = t.auftrag;
   form.referenz = t.referenz;
 }
 
@@ -270,10 +278,16 @@ async function importiert() {
               fluid
             />
           </label>
-          <label class="flex flex-col gap-1 text-sm">
-            Auftrag
-            <Select v-model="form.auftrag" :options="auftraege" editable fluid />
-          </label>
+          <div class="flex flex-col gap-1 text-sm">
+            <div class="flex items-center gap-2">
+              <label for="auftrag" class="flex-1">Auftrag</label>
+              <label v-if="inaktiv.size" class="flex items-center gap-1 text-xs text-muted-color">
+                <ToggleSwitch v-model="inaktiveZeigen" class="scale-75" />
+                inaktive
+              </label>
+            </div>
+            <Select v-model="form.auftrag" input-id="auftrag" :options="auftraege" editable fluid />
+          </div>
           <label class="flex flex-col gap-1 text-sm">
             Referenz
             <InputText v-model="form.referenz" placeholder="Ticket" fluid />
