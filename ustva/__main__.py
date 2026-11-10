@@ -17,6 +17,7 @@
     python -m ustva bank konten                         verbundene Konten, Freigabe, letzter Abruf
     python -m ustva bank konto DE… --an [--name N26]    Konto für den Abruf ein-/ausschalten, umbenennen
     python -m ustva bank abrufen [--von JJJJ-MM-TT]     Umsätze der eingeschalteten Konten holen und abgleichen
+    python -m ustva bank abrufen --konto DE… --trocken  Probelauf für ein Konto: zeigen, nichts speichern
 """
 
 from __future__ import annotations
@@ -335,12 +336,16 @@ def bank_befehl(args, cfg: Config, db: Datenbank, eingabe=input, client=None) ->
                       f"  python -m ustva bank konto {neu[0].iban or neu[0].schluessel} --an [--name {neu[0].konto}]")
             return 0
         von = date.fromisoformat(args.von) if args.von else None
-        ergebnis = ka.abrufen(db, cfg, eb, von, jetzt=jetzt, umrechner=Umrechner(db, cfg.ezb_kurse))
+        ergebnis = ka.abrufen(db, cfg, eb, von, jetzt=jetzt, umrechner=Umrechner(db, cfg.ezb_kurse),
+                              trocken=args.trocken, nur=args.konto or "")
     except ka.KontoabrufFehler as e:
         print(f"Fehler: {e}", file=sys.stderr)
         return 1
     if not ergebnis.konten:
-        print("Kein Konto eingeschaltet („bank konten“, „bank konto … --an“).")
+        print(f"Kein verbundenes Konto {args.konto}." if args.konto
+              else "Kein Konto eingeschaltet („bank konten“, „bank konto … --an“).")
+    if args.trocken:
+        print("PROBELAUF – es wurde nichts gespeichert.\n")
     for a in ergebnis.konten:
         if a.fehler:
             continue
@@ -350,6 +355,12 @@ def bank_befehl(args, cfg: Config, db: Datenbank, eingabe=input, client=None) ->
               + (f", {a.vorgemerkt} vorgemerkt (noch nicht gebucht)" if a.vorgemerkt else ""))
         if tage is not None and tage <= 14:
             print(f"  Freigabe läuft in {tage} Tagen ab: „bank verbinden --bank {a.konto.bank}“")
+        if args.trocken:
+            for u in a.umsaetze:
+                fremd = f" ({_euro(u.original_betrag)} {u.original_waehrung})" if u.original_betrag is not None else ""
+                markiert = f"  [kein Beleg nötig: {u.ignoriert_grund}]" if u.ignoriert else ""
+                print(f"  {u.buchungsdatum:%d.%m.%Y} {_euro(u.betrag):>12} €{fremd}  {u.partner[:40]}"
+                      f"  {u.verwendungszweck[:50]}{markiert}".rstrip())
     if ergebnis.zugeordnet:
         print(f"{ergebnis.zugeordnet} Umsätze automatisch Belegen zugeordnet.")
     for f in ergebnis.fehler:
@@ -412,6 +423,8 @@ def main(argv: list[str] | None = None) -> int:
     b4.add_argument("--name", help="Kontoname der Umsätze (wie „N26“ beim CSV-Import)")
     b5 = bk_sub.add_parser("abrufen", help="Umsätze der eingeschalteten Konten holen")
     b5.add_argument("--von", help="ab Buchungstag JJJJ-MM-TT (Standard: seit dem letzten Abruf, sonst 90 Tage)")
+    b5.add_argument("--konto", help="nur dieses Konto (IBAN), auch wenn es aus ist")
+    b5.add_argument("--trocken", action="store_true", help="Probelauf: Umsätze nur zeigen, nichts speichern")
     args = parser.parse_args(argv)
 
     cfg = Config.aus_umgebung()

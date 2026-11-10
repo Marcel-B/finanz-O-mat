@@ -201,6 +201,7 @@ Verbinden und abrufen (im Container mit `finanz-o-mat …`, sonst `python -m ust
 ```sh
 finanz-o-mat bank banken --suche ing         # genauen Namen der Bank finden
 finanz-o-mat bank verbinden --bank N26       # Adresse öffnen, bei der Bank freigeben, Rückleitungsadresse einfügen
+finanz-o-mat bank abrufen --konto DE… --trocken  # Probelauf: Umsätze nur zeigen, nichts speichern
 finanz-o-mat bank konto DE… --an             # Konto einschalten (neue Konten sind aus)
 finanz-o-mat bank konto DE… --name ING       # Name, unter dem die Umsätze erscheinen
 finanz-o-mat bank abrufen                    # gebuchte Umsätze holen und mit den Belegen abgleichen

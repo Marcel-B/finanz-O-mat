@@ -365,6 +365,7 @@ class Abruf:
     aus_csv: int = 0
     vorgemerkt: int = 0
     fehler: str = ""
+    umsaetze: list[Umsatz] = field(default_factory=list)  # neue Umsätze (beim Probelauf nur gezeigt)
 
 
 @dataclass
@@ -378,14 +379,19 @@ class Abrufe:
 
 
 def abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, von: date | None = None, heute: date | None = None,
-            jetzt: datetime | None = None, umrechner=None) -> Abrufe:
+            jetzt: datetime | None = None, umrechner=None, trocken: bool = False, nur: str = "") -> Abrufe:
+    """Holt die Umsätze der eingeschalteten Konten (``nur``: nur dieses, auch wenn es aus ist).
+
+    ``trocken``: Probelauf, der nichts speichert; die neuen Umsätze stehen in ``Abruf.umsaetze``.
+    """
     from .bank import abgleich_ausfuehren, ignorier_grund
 
     heute = heute or date.today()
     jetzt = jetzt or datetime.now(UTC)
     ergebnis = Abrufe()
     regeln = db.bank_regeln()
-    for k in (k for k in db.bank_konten() if k.aktiv):
+    nur = nur.replace(" ", "").upper()
+    for k in (k for k in db.bank_konten() if (nur in (k.schluessel.upper(), k.iban) if nur else k.aktiv)):
         a = Abruf(k)
         ergebnis.konten.append(a)
         tage = tage_gueltig(k, jetzt)
@@ -413,19 +419,24 @@ def abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, von: date | None = No
             if (alt := schon_per_csv(db, u, vergeben)) is not None:
                 # Die CSV-Zeile bleibt mit Zuordnung und Markierung, bekommt aber die Prüfsumme der Schnittstelle
                 alt.pruefsumme = u.pruefsumme
-                db.umsatz_aktualisieren(alt)
+                if not trocken:
+                    db.umsatz_aktualisieren(alt)
                 vergeben.add(alt.id)
                 a.aus_csv += 1
                 continue
             if grund := ignorier_grund(u, regeln, cfg.bank_ignorieren):
                 u.ignoriert, u.ignoriert_grund = True, grund
-            db.umsatz_anlegen(u)
+            if not trocken:
+                db.umsatz_anlegen(u)
+            a.umsaetze.append(u)
             a.neu += 1
+        if trocken:
+            continue
         letzte = max((u.buchungsdatum for _, u in buchungen), default=None)
         if letzte and (not k.bis or letzte.isoformat() > k.bis):
             k.bis = letzte.isoformat()
         k.abgerufen = jetzt.isoformat(timespec="seconds")
         db.bank_konto_speichern(k)
-    if any(a.neu for a in ergebnis.konten):
+    if not trocken and any(a.neu for a in ergebnis.konten):
         ergebnis.zugeordnet = abgleich_ausfuehren(db, umrechner)
     return ergebnis

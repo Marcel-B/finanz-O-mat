@@ -283,3 +283,23 @@ def test_abgelaufene_freigabe_und_fehler(db, eb):
     db.bank_konto_speichern(k)
     e = ka.abrufen(db, Config(), eb, heute=date(2026, 11, 10), jetzt=JETZT)
     assert "404" in e.fehler[0] and "unbekannt" in e.fehler[0]
+
+
+def test_probelauf_speichert_nichts(db, eb):
+    db.bank_konto_speichern(konto(aktiv=False))  # aus, aber ausdrücklich gewählt
+    assert not ka.abrufen(db, Config(), eb, heute=date(2026, 11, 10), jetzt=JETZT, trocken=True).konten
+    e = ka.abrufen(db, Config(), eb, heute=date(2026, 11, 10), jetzt=JETZT, trocken=True, nur=IBAN.lower())
+    a = e.konten[0]
+    assert (a.neu, len(a.umsaetze), a.vorgemerkt) == (6, 6, 1)
+    assert not db.alle_umsaetze()
+    k = db.bank_konto(IBAN)
+    assert (k.abgerufen, k.bis) == ("", "")
+
+
+def test_probelauf_befehl(db, eb, capsys, monkeypatch):
+    db.bank_konto_speichern(konto(aktiv=False))
+    monkeypatch.setattr(ka.EnableBanking, "aus_config", classmethod(lambda cls, cfg, client=None: eb))
+    assert bank_befehl(args(schritt="abrufen", von=None, konto=IBAN, trocken=True), Config(), db) == 0
+    ausgabe = capsys.readouterr().out
+    assert "PROBELAUF" in ausgabe and "Hosting GmbH" in ausgabe and "-17,32 € (-20,00 USD)" in ausgabe
+    assert not db.alle_umsaetze()
