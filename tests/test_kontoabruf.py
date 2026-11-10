@@ -304,13 +304,47 @@ def test_einschalten_uebernimmt_aus_uebersicht(db, eb):
     assert (a.neu, a.vorhanden) == (0, 2)
 
 
-def test_hintergrund(db, eb):
-    h = ka.Hintergrundabruf(db, Config(), stunden=6)
-    assert h.einmal(eb) is None  # noch keine Konten
+def test_hintergrund_zu_festen_zeiten(db, eb):
+    from zoneinfo import ZoneInfo
+
+    h = ka.Hintergrundabruf(db, Config(), ["09:00", "12:30", "16:00", "19:30"], tz=ZoneInfo("Europe/Berlin"))
+    assert h.einmal(eb, jetzt=JETZT) is None  # noch keine Konten
     db.bank_konto_speichern(konto())
-    e = h.einmal(eb)
+    e = h.einmal(eb, jetzt=JETZT + timedelta(minutes=1))  # 9:01 Uhr deutscher Zeit
     assert e.konten[0].uebersicht == 6
-    assert not h.einmal(eb).konten  # gerade erst abgerufen
+    assert h.einmal(eb, jetzt=JETZT + timedelta(minutes=2)) is None  # 9:00 schon erledigt
+    assert h.einmal(eb, jetzt=JETZT + timedelta(hours=2)) is None  # 11:00, keine Abrufzeit
+    assert h.einmal(eb, jetzt=JETZT.replace(hour=21)) is None  # 22:00, nachts nicht
+
+    # Neustart des Dienstes um 9:30: das Konto ist seit 9:00 schon abgerufen
+    h2 = ka.Hintergrundabruf(db, Config(), ["09:00", "12:30"], tz=ZoneInfo("Europe/Berlin"))
+    assert not h2.einmal(eb, jetzt=JETZT + timedelta(minutes=30)).konten
+    # 12:30 verpasst, um 13:15 nachgeholt; 16:00 um 17:15 nicht mehr
+    assert h2.einmal(eb, jetzt=JETZT.replace(hour=12, minute=15)).konten[0].uebersprungen == ""
+    assert len(db.bank_konto(IBAN).abrufe.split()) == 2
+    h3 = ka.Hintergrundabruf(db, Config(), ["16:00"], tz=ZoneInfo("Europe/Berlin"))
+    assert h3.einmal(eb, jetzt=JETZT.replace(hour=16, minute=15)) is None  # 17:15
+
+
+def test_faellige_zeit():
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("Europe/Berlin")
+    zeiten = ["09:00", "12:30", "16:00", "19:30"]
+    assert ka.faellige_zeit(zeiten, datetime(2026, 11, 10, 8, 59, tzinfo=tz)) is None
+    assert ka.faellige_zeit(zeiten, datetime(2026, 11, 10, 9, 0, tzinfo=tz)).hour == 9
+    assert ka.faellige_zeit(zeiten, datetime(2026, 11, 10, 12, 45, tzinfo=tz)).minute == 30
+    assert ka.faellige_zeit(zeiten, datetime(2026, 11, 10, 20, 31, tzinfo=tz)) is None
+    assert ka.faellige_zeit([], datetime(2026, 11, 10, 9, 0, tzinfo=tz)) is None
+
+
+def test_abrufzeiten_aus_umgebung(monkeypatch):
+    monkeypatch.delenv("KONTOABRUF_ZEITEN", raising=False)
+    assert Config.aus_umgebung().kontoabruf_zeiten == ["09:00", "12:30", "16:00", "19:30"]
+    monkeypatch.setenv("KONTOABRUF_ZEITEN", "19:30, 9:00 Uhr;12.30, 25:00, quatsch")
+    assert Config.aus_umgebung().kontoabruf_zeiten == ["09:00", "12:30", "19:30"]
+    monkeypatch.setenv("KONTOABRUF_ZEITEN", "aus")
+    assert Config.aus_umgebung().kontoabruf_zeiten == []
 
 
 def test_alte_datenbank_bekommt_neue_spalten(tmp_path):

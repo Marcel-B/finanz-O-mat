@@ -31,10 +31,11 @@ import threading
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 import jwt
@@ -51,6 +52,8 @@ UEBERLAPPUNG = timedelta(days=7)  # späte Buchungen mit älterem Buchungstag mi
 CSV_TAGE = 3  # Abstand Buchungstag CSV ↔ Schnittstelle, in dem ein Umsatz als derselbe gilt
 SEITEN = 100  # höchstens so viele Seiten Umsätze je Abruf
 ABRUFE_JE_TAG = 4  # PSD2 (RTS Art. 36 Abs. 5): ohne Anmeldung bei der Bank höchstens 4-mal in 24 Stunden
+ZEITZONE = "Europe/Berlin"  # für die festen Abrufzeiten im Dienst
+NACHHOLEN = timedelta(hours=1)  # verpasste Abrufzeit (Dienst war aus) so lange nachholen
 # Bevorzugte Saldoarten: gebucht (Zwischenstand, Tagesende), dann erwartet und verfügbar
 SALDO_ARTEN = ["ITBD", "CLBD", "XPCD", "ITAV", "CLAV", "OPBD"]
 # Kurznamen der Banken, unter denen die Umsätze erscheinen. N26 wie beim CSV-Import, damit beides zusammenpasst.
@@ -557,32 +560,63 @@ def _konto_abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, k: BankKonto, 
     k.abgerufen = jetzt.isoformat(timespec="seconds")
 
 
-class Hintergrundabruf:
-    """Ruft im Dienst regelmäßig ab, alle ``stunden`` Stunden je Konto (Standard 6, also 4-mal am Tag)."""
+def zeitzone() -> tzinfo | None:
+    """Zeitzone der Abrufzeiten; ohne Zeitzonendaten im System die Ortszeit."""
+    try:
+        return ZoneInfo(ZEITZONE)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
 
-    def __init__(self, db: Datenbank, cfg: Config, stunden: float, takt: float = 600):
+
+def faellige_zeit(zeiten: list[str], jetzt: datetime, nachholen: timedelta = NACHHOLEN) -> datetime | None:
+    """Letzte Abrufzeit von heute, die schon erreicht und höchstens ``nachholen`` her ist (``jetzt`` in Ortszeit)."""
+    faellig = None
+    for z in zeiten:
+        stunde, minute = (int(t) for t in z.split(":"))
+        punkt = jetzt.replace(hour=stunde, minute=minute, second=0, microsecond=0)
+        if punkt <= jetzt and jetzt - punkt <= nachholen and (faellig is None or punkt > faellig):
+            faellig = punkt
+    return faellig
+
+
+class Hintergrundabruf:
+    """Ruft im Dienst zu festen Uhrzeiten ab (``KONTOABRUF_ZEITEN``, Standard 9:00, 12:30, 16:00, 19:30).
+
+    Nachts nicht. Ist der Dienst zur Abrufzeit aus, holt er den Abruf bis zu einer Stunde später nach. Konten, die
+    seit der Abrufzeit schon abgerufen wurden (Knopf, Kommandozeile, Neustart), lässt er aus.
+    """
+
+    def __init__(self, db: Datenbank, cfg: Config, zeiten: list[str], takt: float = 60, tz: tzinfo | None = None):
         self.db, self.cfg = db, cfg
-        self.intervall = timedelta(hours=stunden)
+        self.zeiten = zeiten
         self.takt = takt
+        self.tz = tz or zeitzone()
         self._halt = threading.Event()
         self._faden: threading.Thread | None = None
+        self._eb: EnableBanking | None = None
+        self._erledigt: datetime | None = None  # zuletzt bearbeitete Abrufzeit
 
-    def einmal(self, eb: EnableBanking | None = None) -> Abrufe | None:
+    def einmal(self, eb: EnableBanking | None = None, jetzt: datetime | None = None) -> Abrufe | None:
         from .einstellungen import wirksam
 
-        if not self.db.bank_konten():
+        jetzt = jetzt or datetime.now(UTC)
+        punkt = faellige_zeit(self.zeiten, jetzt.astimezone(self.tz))
+        if punkt is None or punkt == self._erledigt or not self.db.bank_konten():
             return None
+        self._erledigt = punkt
         try:
-            eb = eb or EnableBanking.aus_config(self.cfg)
-            # Kleine Toleranz: der Takt soll einen Abruf nicht knapp verpassen und erst eine Runde später holen
-            e = abrufen(self.db, wirksam(self.cfg, self.db), eb, faellig_nach=self.intervall - timedelta(minutes=15))
+            eb = eb or self._eb or EnableBanking.aus_config(self.cfg)
+            self._eb = eb
+            e = abrufen(self.db, wirksam(self.cfg, self.db), eb, jetzt=jetzt, faellig_nach=jetzt - punkt)
         except Exception:  # der Faden darf nicht sterben
             log.exception("Kontoabruf im Hintergrund fehlgeschlagen")
             return None
         for a in e.konten:
             if a.fehler:
                 log.warning("Kontoabruf %s: %s", a.konto.iban or a.konto.schluessel, a.fehler)
-            elif not a.uebersprungen:
+            elif a.uebersprungen:
+                log.info("Kontoabruf %s: %s", a.konto.iban or a.konto.schluessel, a.uebersprungen)
+            else:
                 log.info("Kontoabruf %s: %d neu in der Übersicht, %d in der Buchhaltung",
                          a.konto.iban or a.konto.schluessel, a.uebersicht, a.neu)
         return e

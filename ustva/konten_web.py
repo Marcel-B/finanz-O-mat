@@ -57,9 +57,10 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
         for k in db.bank_konten():
             if k.saldo:
                 summen[k.waehrung] = summen.get(k.waehrung, Decimal(0)) + Decimal(k.saldo)
+        eingerichtet = bool(cfg.enable_banking_app_id and cfg.enable_banking_schluessel)
         return {
-            "eingerichtet": bool(cfg.enable_banking_app_id and cfg.enable_banking_schluessel),
-            "intervall_stunden": cfg.kontoabruf_stunden,
+            "eingerichtet": eingerichtet,
+            "zeiten": cfg.kontoabruf_zeiten if eingerichtet else [],
             "abrufe_je_tag": ka.ABRUFE_JE_TAG,
             "summen": {w: str(b) for w, b in summen.items()},
             "konten": sorted(liste, key=lambda k: (k["bank"].lower(), k["name"].lower(), k["iban"])),

@@ -267,10 +267,10 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
 
     @asynccontextmanager
     async def lebenszyklus(_app: FastAPI):
-        # Kontoumsätze regelmäßig über Enable Banking abrufen (ustva/kontoabruf.py)
+        # Kontoumsätze zu festen Uhrzeiten über Enable Banking abrufen (ustva/kontoabruf.py)
         hintergrund = None
-        if cfg.enable_banking_app_id and cfg.enable_banking_schluessel and cfg.kontoabruf_stunden > 0:
-            hintergrund = kontoabruf.Hintergrundabruf(db, cfg, cfg.kontoabruf_stunden)
+        if cfg.enable_banking_app_id and cfg.enable_banking_schluessel and cfg.kontoabruf_zeiten:
+            hintergrund = kontoabruf.Hintergrundabruf(db, cfg, cfg.kontoabruf_zeiten)
             hintergrund.starten()
         yield
         if hintergrund:

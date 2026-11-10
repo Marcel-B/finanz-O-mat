@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +20,21 @@ def _liste(value: str | None, default: list[str]) -> list[str]:
     if not value:
         return default
     return [v.strip() for v in value.split(",") if v.strip()]
+
+
+ABRUFZEITEN = ("09:00", "12:30", "16:00", "19:30")
+
+
+def _uhrzeiten(value: str | None) -> list[str]:
+    """``9:00, 12:30`` → ``["09:00", "12:30"]``; leer = Standard, ``aus`` = keine. Ungültiges fällt weg."""
+    if value is None or not value.strip():
+        return list(ABRUFZEITEN)
+    zeiten = set()
+    for teil in value.replace(";", ",").split(","):
+        m = re.fullmatch(r"\s*(\d{1,2})[:.](\d{2})\s*(?:Uhr)?\s*", teil)
+        if m and int(m[1]) < 24 and int(m[2]) < 60:
+            zeiten.add(f"{int(m[1]):02d}:{m[2]}")
+    return sorted(zeiten)
 
 
 def _sicher(adresse: str) -> bool:
@@ -64,7 +80,8 @@ class Config:
     # Kontoumsätze automatisch über Enable Banking abrufen (siehe ustva/kontoabruf.py)
     enable_banking_app_id: str = ""
     enable_banking_schluessel: Path | None = None  # privater Schlüssel der Anwendung (.pem)
-    kontoabruf_stunden: float = 6  # im Dienst je Konto alle so viele Stunden abrufen, 0 = nie
+    # Im Dienst zu diesen Uhrzeiten abrufen (Europe/Berlin), leer = nur von Hand. PSD2 erlaubt 4 Abrufe in 24 Stunden.
+    kontoabruf_zeiten: list[str] = field(default_factory=lambda: list(ABRUFZEITEN))
 
     ezb_kurse: bool = True  # Monatsmittel der EZB-Referenzkurse abrufen, wenn kein Kurs hinterlegt ist
 
@@ -119,7 +136,7 @@ class Config:
             enable_banking_app_id=env.get("ENABLE_BANKING_APP_ID", "").strip(),
             enable_banking_schluessel=Path(env["ENABLE_BANKING_SCHLUESSEL"])
             if env.get("ENABLE_BANKING_SCHLUESSEL", "").strip() else None,
-            kontoabruf_stunden=float(env.get("KONTOABRUF_STUNDEN", "").strip().replace(",", ".") or 6),
+            kontoabruf_zeiten=_uhrzeiten(env.get("KONTOABRUF_ZEITEN")),
             ezb_kurse=_bool(env.get("EZB_KURSE"), True),
             app_benutzer=env.get("APP_BENUTZER", ""),
             app_passwort=env.get("APP_PASSWORT", ""),

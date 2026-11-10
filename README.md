@@ -221,9 +221,11 @@ finanz-o-mat bank konten                     # Konten, Saldo, Freigabe, letzter 
   Name und Schalter der Konten bleiben. `bank abrufen` warnt zwei Wochen vorher.
 - Der erste Abruf holt 90 Tage, danach ab einer Woche vor dem letzten Buchungstag (`--von JJJJ-MM-TT` für mehr, soweit
   die Bank liefert). Vorgemerkte Umsätze kommen erst, wenn die Bank sie bucht.
-- Der Dienst ruft selbst ab, je Konto alle `KONTOABRUF_STUNDEN` Stunden (Standard 6, `0` = nur von Hand). Ohne
-  Anmeldung bei der Bank erlaubt PSD2 höchstens vier Abrufe je Konto in 24 Stunden; die App zählt mit und lässt
-  weitere aus, auch beim Knopf „Jetzt abrufen“ im Reiter „Konten“ und bei `bank abrufen`.
+- Der Dienst ruft selbst ab, zu den Uhrzeiten in `KONTOABRUF_ZEITEN` (Standard `09:00,12:30,16:00,19:30`, deutsche
+  Zeit, nachts nicht; `aus` = nur von Hand). War der Dienst zur Abrufzeit aus, holt er den Abruf bis zu einer Stunde
+  später nach. Ohne Anmeldung bei der Bank erlaubt PSD2 höchstens vier Abrufe je Konto in 24 Stunden; die App zählt
+  mit und lässt weitere aus, auch beim Knopf „Jetzt abrufen“ im Reiter „Konten“ und bei `bank abrufen`. Ein Klick auf
+  den Knopf verbraucht also einen der vier, dann fällt der nächste geplante Abruf unter Umständen aus.
 - Schon per CSV eingelesene Umsätze werden nicht doppelt angelegt (gleiches Konto, gleicher Betrag, Buchungstag bis
   drei Tage auseinander); Zuordnung und Markierung bleiben. Umgekehrt überspringt der CSV-Import abgerufene Umsätze.
 

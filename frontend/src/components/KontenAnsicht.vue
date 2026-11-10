@@ -91,6 +91,11 @@ const summe = computed(() => Object.entries(daten.value?.summen ?? {}));
 const letzterAbruf = computed(() =>
   konten.value.map((k) => k.abgerufen).filter(Boolean).sort().at(-1) ?? "",
 );
+// „9:00, 12:30, 16:00 und 19:30“
+const abrufzeiten = computed(() => {
+  const z = (daten.value?.zeiten ?? []).map((t) => t.replace(/^0(\d)/, "$1"));
+  return z.length > 1 ? `${z.slice(0, -1).join(", ")} und ${z.at(-1)}` : (z[0] ?? "");
+});
 // Knopf nur, wenn noch mindestens ein Konto einen Abruf frei hat (PSD2: 4 in 24 Stunden)
 const abrufFrei = computed(() => konten.value.some((k) => k.abrufe_frei > 0));
 
@@ -191,9 +196,7 @@ const gefiltert = computed(() =>
               Saldo vom {{ zeit(gewaehlt.saldo_stand) }} · Freigabe bis {{ zeit(gewaehlt.freigabe_bis.slice(0, 10)) }}
             </template>
             <template v-else>Zuletzt abgerufen: {{ zeit(letzterAbruf) }}</template>
-            <template v-if="daten && daten.intervall_stunden > 0">
-              · automatisch alle {{ String(daten.intervall_stunden).replace(".", ",") }} Std.
-            </template>
+            <template v-if="abrufzeiten"> · automatisch um {{ abrufzeiten }} Uhr</template>
           </div>
         </div>
         <div class="flex items-center gap-3">

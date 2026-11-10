@@ -481,7 +481,7 @@ export interface BankKonto {
 
 export interface KontenUebersicht {
   eingerichtet: boolean;
-  intervall_stunden: number;
+  zeiten: string[]; // feste Abrufzeiten im Dienst (HH:MM, Europe/Berlin)
   abrufe_je_tag: number;
   summen: Record<string, string>;
   konten: BankKonto[];
