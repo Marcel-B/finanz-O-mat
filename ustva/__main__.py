@@ -12,6 +12,11 @@
     python -m ustva sevdesk importieren --ordner DIR    Sicherung oder Export übernehmen (erst mit --trocken)
     python -m ustva sevdesk abgleich --erwartet CSV     Zahllast je Monat gegen abgegebene Werte
     python -m ustva paperless duplikate [--loeschen]    doppelte Rechnungen in Paperless finden/aufräumen
+    python -m ustva bank banken [--land DE] [--suche N26]  Banken bei Enable Banking
+    python -m ustva bank verbinden --bank N26           Abruf bei der Bank freigeben (Adresse öffnen, zurück kopieren)
+    python -m ustva bank konten                         verbundene Konten, Freigabe, letzter Abruf
+    python -m ustva bank konto DE… --an [--name N26]    Konto für den Abruf ein-/ausschalten, umbenennen
+    python -m ustva bank abrufen [--von JJJJ-MM-TT]     Umsätze der eingeschalteten Konten holen und abgleichen
 """
 
 from __future__ import annotations
@@ -263,6 +268,95 @@ def sevdesk_befehl(args, cfg: Config) -> int:
     return 1 if erg.fehler else 0
 
 
+def bank_befehl(args, cfg: Config, db: Datenbank, eingabe=input, client=None) -> int:
+    from datetime import UTC, datetime
+
+    from . import kontoabruf as ka
+
+    jetzt = datetime.now(UTC)
+    if args.schritt == "konten":
+        konten = db.bank_konten()
+        if not konten:
+            print("Noch keine Konten verbunden („bank verbinden --bank …“).")
+        for k in konten:
+            tage = ka.tage_gueltig(k, jetzt)
+            freigabe = "?" if tage is None else ("abgelaufen" if tage < 0 else f"noch {tage} Tage")
+            print(f"{'an ' if k.aktiv else 'aus'}  {k.iban or k.schluessel:<24} {k.konto:<8} {k.bank} "
+                  f"{k.bezeichnung}".rstrip())
+            print(f"     Freigabe {freigabe}, zuletzt abgerufen {k.abgerufen or 'nie'}"
+                  + (f", Umsätze bis {k.bis}" if k.bis else ""))
+        return 0
+    if args.schritt == "konto":
+        gesucht = args.konto.replace(" ", "").upper()
+        k = next((k for k in db.bank_konten() if gesucht in (k.schluessel.upper(), k.iban)), None)
+        if k is None:
+            print(f"Kein verbundenes Konto {args.konto} („bank konten“ zeigt alle).", file=sys.stderr)
+            return 1
+        if args.an is not None:
+            k.aktiv = args.an
+        if args.name:
+            k.konto = args.name.strip()
+        db.bank_konto_speichern(k)
+        print(f"{k.iban or k.schluessel}: {'an' if k.aktiv else 'aus'}, Umsätze unter „{k.konto}“")
+        return 0
+    try:
+        eb = ka.EnableBanking.aus_config(cfg, client)
+        if args.schritt == "banken":
+            for b in eb.banken(args.land):
+                if args.suche and args.suche.lower() not in b.get("name", "").lower():
+                    continue
+                tage = (b.get("maximum_consent_validity") or 0) // 86400
+                arten = ", ".join(b.get("psu_types") or [])
+                print(f"{b.get('name')}  (Freigabe bis {tage} Tage{', ' + arten if arten else ''})")
+            return 0
+        if args.schritt == "verbinden":
+            bank = ka.bank_finden(eb.banken(args.land), args.bank)
+            rueckleitung = args.rueckleitung or (eb.anwendung().get("redirect_urls") or [""])[0]
+            if not rueckleitung:
+                print("Bei der Anwendung ist keine Rückleitungsadresse hinterlegt (Control Panel von Enable Banking).",
+                      file=sys.stderr)
+                return 1
+            url, state = eb.autorisierung_starten(bank["name"], args.land, rueckleitung, ka.freigabe_bis(bank, jetzt),
+                                                  "business" if args.geschaeftlich else "personal")
+            print(f"1. Diese Adresse im Browser öffnen und bei {bank['name']} den Abruf freigeben:\n\n   {url}\n")
+            print(f"2. Danach landet der Browser auf {rueckleitung}?code=… (die Seite selbst darf einen Fehler "
+                  "zeigen). Die ganze Adresse aus der Adresszeile kopieren.\n")
+            code = ka.code_aus(eingabe("3. Adresse hier einfügen: "), state)
+            sitzung = eb.sitzung_anlegen(code)
+            neu, erneuert = ka.sitzung_uebernehmen(db, sitzung, bank["name"], args.land)
+            gueltig = (sitzung.get("access") or {}).get("valid_until", "?")
+            print(f"\nVerbunden, Freigabe bis {gueltig}.")
+            for k in erneuert:
+                print(f"  erneuert: {k.iban or k.schluessel} ({k.konto}, {'an' if k.aktiv else 'aus'})")
+            for k in neu:
+                print(f"  neu:      {k.iban or k.schluessel} {k.bezeichnung}".rstrip())
+            if neu:
+                print("\nNeue Konten sind aus, damit private Konten nicht in die Umsatzsteuer geraten. Einschalten:\n"
+                      f"  python -m ustva bank konto {neu[0].iban or neu[0].schluessel} --an [--name {neu[0].konto}]")
+            return 0
+        von = date.fromisoformat(args.von) if args.von else None
+        ergebnis = ka.abrufen(db, cfg, eb, von, jetzt=jetzt, umrechner=Umrechner(db, cfg.ezb_kurse))
+    except ka.KontoabrufFehler as e:
+        print(f"Fehler: {e}", file=sys.stderr)
+        return 1
+    if not ergebnis.konten:
+        print("Kein Konto eingeschaltet („bank konten“, „bank konto … --an“).")
+    for a in ergebnis.konten:
+        if a.fehler:
+            continue
+        tage = ka.tage_gueltig(a.konto, jetzt)
+        print(f"{a.konto.konto} {a.konto.iban or a.konto.schluessel}: {a.neu} neu, {a.vorhanden} schon vorhanden"
+              + (f", {a.aus_csv} schon aus CSV" if a.aus_csv else "")
+              + (f", {a.vorgemerkt} vorgemerkt (noch nicht gebucht)" if a.vorgemerkt else ""))
+        if tage is not None and tage <= 14:
+            print(f"  Freigabe läuft in {tage} Tagen ab: „bank verbinden --bank {a.konto.bank}“")
+    if ergebnis.zugeordnet:
+        print(f"{ergebnis.zugeordnet} Umsätze automatisch Belegen zugeordnet.")
+    for f in ergebnis.fehler:
+        print(f"Fehler: {f}", file=sys.stderr)
+    return 1 if ergebnis.fehler else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ustva", description="Finanz-O-Mat: UStVA-Kennzahlen berechnen")
     sub = parser.add_subparsers(dest="befehl", required=True)
@@ -299,6 +393,25 @@ def main(argv: list[str] | None = None) -> int:
     du.add_argument("--von", help="nur Dokumente ab Monat JJJJ-MM")
     du.add_argument("--loeschen", action="store_true", help="Duplikate löschen (fragt nach)")
     du.add_argument("--ja", action="store_true", help="beim Löschen nicht nachfragen")
+    bk = sub.add_parser("bank", help="Kontoumsätze automatisch über Enable Banking abrufen")
+    bk_sub = bk.add_subparsers(dest="schritt", required=True)
+    b1 = bk_sub.add_parser("banken", help="Banken bei Enable Banking auflisten")
+    b1.add_argument("--suche", help="nur Namen mit diesem Teilwort")
+    b2 = bk_sub.add_parser("verbinden", help="Abruf bei einer Bank freigeben (auch zum Erneuern)")
+    b2.add_argument("--bank", required=True, help="Name der Bank, z. B. N26, ING, bunq")
+    b2.add_argument("--geschaeftlich", action="store_true", help="als Geschäftskunde anmelden (psu_type business)")
+    b2.add_argument("--rueckleitung", help="Rückleitungsadresse, Standard: die erste der Anwendung")
+    for p_ in (b1, b2):
+        p_.add_argument("--land", default="DE", help="Land der Bank (Standard DE)")
+    bk_sub.add_parser("konten", help="verbundene Konten zeigen")
+    b4 = bk_sub.add_parser("konto", help="Konto ein-/ausschalten oder umbenennen")
+    b4.add_argument("konto", help="IBAN des Kontos")
+    schalter = b4.add_mutually_exclusive_group()
+    schalter.add_argument("--an", dest="an", action="store_true", default=None, help="Umsätze abrufen")
+    schalter.add_argument("--aus", dest="an", action="store_false", help="nicht mehr abrufen")
+    b4.add_argument("--name", help="Kontoname der Umsätze (wie „N26“ beim CSV-Import)")
+    b5 = bk_sub.add_parser("abrufen", help="Umsätze der eingeschalteten Konten holen")
+    b5.add_argument("--von", help="ab Buchungstag JJJJ-MM-TT (Standard: seit dem letzten Abruf, sonst 90 Tage)")
     args = parser.parse_args(argv)
 
     cfg = Config.aus_umgebung()
@@ -321,6 +434,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.befehl == "paperless":
         db = Datenbank(cfg.datenbank)
         return duplikate_befehl(args, einstellungen.wirksam(cfg, db), db)
+    if args.befehl == "bank":
+        db = Datenbank(cfg.datenbank)
+        return bank_befehl(args, einstellungen.wirksam(cfg, db), db)
     if args.befehl == "sevdesk":
         return sevdesk_befehl(args, einstellungen.wirksam(cfg, Datenbank(cfg.datenbank)))
     return bericht(args, einstellungen.wirksam(cfg, Datenbank(cfg.datenbank)))
