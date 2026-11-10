@@ -487,6 +487,17 @@ export interface KontenUebersicht {
   konten: BankKonto[];
 }
 
+export interface KontoauszugEingelesen {
+  iban: string;
+  konto: string;
+  neu: number;
+  vorhanden: number;
+  vorgemerkt: number;
+  von: string | null;
+  bis: string | null;
+  fehler: string;
+}
+
 export interface KontoBuchung {
   pruefsumme: string;
   konto: string;
@@ -534,6 +545,12 @@ export const api = {
   konten: () => anfrage<KontenUebersicht>("/api/konten"),
   kontoBuchungen: (konto?: string) =>
     anfrage<KontoBuchung[]>(`/api/konten/buchungen${konto ? `?konto=${encodeURIComponent(konto)}` : ""}`),
+  kontoauszugEinlesen: (datei: File) =>
+    anfrage<{ auszuege: KontoauszugEingelesen[] }>("/api/konten/einlesen", {
+      method: "POST",
+      body: datei,
+      headers: { "Content-Type": "application/xml" },
+    }),
   kontenAbrufen: () => post<KontenAbruf>("/api/konten/abrufen"),
   anmeldung: () => anfrage<Anmeldung>("/api/anmeldung"),
   anmelden: (benutzer: string, passwort: string) => post<Anmeldung>("/api/anmelden", { benutzer, passwort }),

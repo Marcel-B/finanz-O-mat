@@ -523,6 +523,22 @@ class Datenbank:
                 (konto,) if konto else ()).fetchall()
         return [dict(z) for z in zeilen]
 
+    def konto_buchung_vorhanden(self, pruefsumme: str) -> bool:
+        with self._lock:
+            z = self._con.execute("SELECT 1 FROM konto_buchungen WHERE pruefsumme = ?", (pruefsumme,)).fetchone()
+        return z is not None
+
+    def konto_buchungen_von_bis(self, konto: str, von: date, bis: date) -> list[dict]:
+        with self._lock:
+            zeilen = self._con.execute(
+                "SELECT * FROM konto_buchungen WHERE konto = ? AND buchungsdatum BETWEEN ? AND ? "
+                "ORDER BY buchungsdatum, rowid", (konto, von.isoformat(), bis.isoformat())).fetchall()
+        return [dict(z) for z in zeilen]
+
+    def konto_buchung_umschluesseln(self, alt: str, neu: str) -> None:
+        with self._lock, self._con:
+            self._con.execute("UPDATE konto_buchungen SET pruefsumme = ? WHERE pruefsumme = ?", (neu, alt))
+
     def konto_buchungen_anzahl(self, konto: str) -> int:
         with self._lock:
             return self._con.execute("SELECT COUNT(*) FROM konto_buchungen WHERE konto = ?", (konto,)).fetchone()[0]

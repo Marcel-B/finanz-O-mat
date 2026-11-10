@@ -6,18 +6,21 @@ kommen nur die Konten, die mit ``bank konto … --an`` eingeschaltet sind (siehe
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
+from . import camt, monitoring
 from . import kontoabruf as ka
-from . import monitoring
 from .config import Config
 from .db import Datenbank
 from .models import BankKonto
+
+log = logging.getLogger(__name__)
 
 
 def _konto(k: BankKonto, jetzt: datetime) -> dict:
@@ -70,6 +73,23 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
     @r.get("/api/konten/buchungen")
     def buchungen(konto: str | None = None):
         return db.konto_buchungen(konto or None)
+
+    @r.post("/api/konten/einlesen")
+    async def einlesen(request: Request):
+        """Alte Kontoauszüge (CAMT.053, z. B. aus MoneyMoney) in die Übersicht; der Rumpf ist die XML-Datei."""
+        roh = await request.body()
+        if len(roh) > 50_000_000:
+            raise HTTPException(413, "Datei zu groß")
+        try:
+            ergebnisse = await run_in_threadpool(camt.einlesen, db, roh)
+        except camt.CamtFehler as e:
+            raise HTTPException(400, str(e)) from e
+        for e in ergebnisse:
+            if e.fehler:
+                log.warning("CAMT-Import %s: %s", e.iban[-4:], e.fehler)
+            else:
+                log.info("CAMT-Import %s: %d neu, %d schon vorhanden", e.konto, e.neu, e.vorhanden)
+        return {"auszuege": [e.to_dict() for e in ergebnisse]}
 
     @r.post("/api/konten/abrufen")
     async def abrufen():

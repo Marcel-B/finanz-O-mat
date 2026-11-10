@@ -226,6 +226,12 @@ finanz-o-mat bank konten                     # Konten, Saldo, Freigabe, letzter 
   später nach. Ohne Anmeldung bei der Bank erlaubt PSD2 höchstens vier Abrufe je Konto in 24 Stunden; die App zählt
   mit und lässt weitere aus, auch beim Knopf „Jetzt abrufen“ im Reiter „Konten“ und bei `bank abrufen`. Ein Klick auf
   den Knopf verbraucht also einen der vier, dann fällt der nächste geplante Abruf unter Umständen aus.
+- **Alte Auszüge einlesen:** Was weiter zurückliegt, als die Bank liefert, kommt als CAMT.053-Datei dazu, etwa aus
+  MoneyMoney (Ablage → Exportieren → CAMT.053): im Reiter „Konten“ über „Auszüge einlesen“ oder im Container mit
+  `finanz-o-mat bank einlesen datei.xml` (`--trocken` zählt nur). Die Umsätze gehen in die Kontenübersicht des
+  verbundenen Kontos mit derselben IBAN, nicht in die Buchhaltung (beim Einschalten des Kontos aber mit). Was schon
+  abgerufen ist, kommt nicht doppelt (gleicher Betrag, Buchungstag bis drei Tage auseinander), und ein späterer
+  Abruf übernimmt eingelesene Zeilen. Dieselbe Datei zweimal einzulesen schadet nicht.
 - Schon per CSV eingelesene Umsätze werden nicht doppelt angelegt (gleiches Konto, gleicher Betrag, Buchungstag bis
   drei Tage auseinander); Zuordnung und Markierung bleiben. Umgekehrt überspringt der CSV-Import abgerufene Umsätze.
 
