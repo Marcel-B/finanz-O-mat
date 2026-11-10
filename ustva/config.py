@@ -64,6 +64,7 @@ class Config:
     # Kontoumsätze automatisch über Enable Banking abrufen (siehe ustva/kontoabruf.py)
     enable_banking_app_id: str = ""
     enable_banking_schluessel: Path | None = None  # privater Schlüssel der Anwendung (.pem)
+    kontoabruf_stunden: float = 6  # im Dienst je Konto alle so viele Stunden abrufen, 0 = nie
 
     ezb_kurse: bool = True  # Monatsmittel der EZB-Referenzkurse abrufen, wenn kein Kurs hinterlegt ist
 
@@ -118,6 +119,7 @@ class Config:
             enable_banking_app_id=env.get("ENABLE_BANKING_APP_ID", "").strip(),
             enable_banking_schluessel=Path(env["ENABLE_BANKING_SCHLUESSEL"])
             if env.get("ENABLE_BANKING_SCHLUESSEL", "").strip() else None,
+            kontoabruf_stunden=float(env.get("KONTOABRUF_STUNDEN", "").strip().replace(",", ".") or 6),
             ezb_kurse=_bool(env.get("EZB_KURSE"), True),
             app_benutzer=env.get("APP_BENUTZER", ""),
             app_passwort=env.get("APP_PASSWORT", ""),

@@ -122,6 +122,11 @@ class BankKonto:
     gueltig_bis: str = ""  # ISO-Zeitpunkt, bis zu dem die Freigabe gilt
     abgerufen: str = ""
     bis: str = ""
+    # Für die Kontenübersicht: Saldo laut Bank und wann, Abrufe der letzten 24 Stunden, letzter Fehler
+    saldo: str = ""
+    saldo_stand: str = ""
+    abrufe: str = ""  # ISO-Zeitpunkte, mit Leerzeichen getrennt
+    fehler: str = ""
 
 
 @dataclass

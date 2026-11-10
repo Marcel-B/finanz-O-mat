@@ -15,8 +15,8 @@
     python -m ustva bank banken [--land DE] [--suche N26]  Banken bei Enable Banking
     python -m ustva bank verbinden --bank N26           Abruf bei der Bank freigeben (Adresse öffnen, zurück kopieren)
     python -m ustva bank konten                         verbundene Konten, Freigabe, letzter Abruf
-    python -m ustva bank konto DE… --an [--name N26]    Konto für den Abruf ein-/ausschalten, umbenennen
-    python -m ustva bank abrufen [--von JJJJ-MM-TT]     Umsätze der eingeschalteten Konten holen und abgleichen
+    python -m ustva bank konto DE… --an [--name N26]    Konto in die Buchhaltung übernehmen (--aus), umbenennen
+    python -m ustva bank abrufen [--von JJJJ-MM-TT]     Saldo und Umsätze aller Konten holen (max. 4-mal in 24 h)
     python -m ustva bank abrufen --konto DE… --trocken  Probelauf für ein Konto: zeigen, nichts speichern
 """
 
@@ -284,8 +284,12 @@ def bank_befehl(args, cfg: Config, db: Datenbank, eingabe=input, client=None) ->
             freigabe = "?" if tage is None else ("abgelaufen" if tage < 0 else f"noch {tage} Tage")
             print(f"{'an ' if k.aktiv else 'aus'}  {k.iban or k.schluessel:<24} {k.konto:<8} {k.bank} "
                   f"{k.bezeichnung}".rstrip())
-            print(f"     Freigabe {freigabe}, zuletzt abgerufen {k.abgerufen or 'nie'}"
-                  + (f", Umsätze bis {k.bis}" if k.bis else ""))
+            saldo = f"Saldo {_euro(Decimal(k.saldo))} {k.waehrung}, " if k.saldo else ""
+            print(f"     {saldo}Freigabe {freigabe}, zuletzt abgerufen {k.abgerufen or 'nie'}"
+                  + (f", Umsätze bis {k.bis}" if k.bis else "")
+                  + f", heute noch {ka.abrufe_frei(k, jetzt)} Abrufe frei")
+            if k.fehler:
+                print(f"     Fehler beim letzten Abruf: {k.fehler}")
         return 0
     if args.schritt == "konto":
         gesucht = args.konto.replace(" ", "").upper()
@@ -293,12 +297,19 @@ def bank_befehl(args, cfg: Config, db: Datenbank, eingabe=input, client=None) ->
         if k is None:
             print(f"Kein verbundenes Konto {args.konto} („bank konten“ zeigt alle).", file=sys.stderr)
             return 1
+        eingeschaltet = args.an and not k.aktiv
         if args.an is not None:
             k.aktiv = args.an
         if args.name:
             k.konto = args.name.strip()
         db.bank_konto_speichern(k)
-        print(f"{k.iban or k.schluessel}: {'an' if k.aktiv else 'aus'}, Umsätze unter „{k.konto}“")
+        print(f"{k.iban or k.schluessel}: {'in der Buchhaltung' if k.aktiv else 'nur in der Kontenübersicht'}, "
+              f"Umsätze unter „{k.konto}“")
+        if eingeschaltet:
+            a = ka.aus_uebersicht(db, cfg, k, Umrechner(db, cfg.ezb_kurse))
+            if a.neu or a.aus_csv or a.vorhanden:
+                print(f"Aus der Kontenübersicht übernommen: {a.neu} neu, {a.aus_csv} schon aus CSV, "
+                      f"{a.vorhanden} schon vorhanden")
         return 0
     try:
         eb = ka.EnableBanking.aus_config(cfg, client)
@@ -343,16 +354,23 @@ def bank_befehl(args, cfg: Config, db: Datenbank, eingabe=input, client=None) ->
         return 1
     if not ergebnis.konten:
         print(f"Kein verbundenes Konto {args.konto}." if args.konto
-              else "Kein Konto eingeschaltet („bank konten“, „bank konto … --an“).")
+              else "Noch kein Konto verbunden („bank verbinden --bank …“).")
     if args.trocken:
         print("PROBELAUF – es wurde nichts gespeichert.\n")
     for a in ergebnis.konten:
+        name = f"{a.konto.konto} {a.konto.iban or a.konto.schluessel}"
+        if a.uebersprungen:
+            print(f"{name}: übersprungen, {a.uebersprungen}")
+            continue
         if a.fehler:
             continue
         tage = ka.tage_gueltig(a.konto, jetzt)
-        print(f"{a.konto.konto} {a.konto.iban or a.konto.schluessel}: {a.neu} neu, {a.vorhanden} schon vorhanden"
-              + (f", {a.aus_csv} schon aus CSV" if a.aus_csv else "")
-              + (f", {a.vorgemerkt} vorgemerkt (noch nicht gebucht)" if a.vorgemerkt else ""))
+        if a.konto.aktiv or args.trocken:
+            print(f"{name}: {a.neu} neu, {a.vorhanden} schon vorhanden"
+                  + (f", {a.aus_csv} schon aus CSV" if a.aus_csv else "")
+                  + (f", {a.vorgemerkt} vorgemerkt (noch nicht gebucht)" if a.vorgemerkt else ""))
+        else:
+            print(f"{name}: {a.uebersicht} neu in der Kontenübersicht (nicht in der Buchhaltung)")
         if tage is not None and tage <= 14:
             print(f"  Freigabe läuft in {tage} Tagen ab: „bank verbinden --bank {a.konto.bank}“")
         if args.trocken:
@@ -415,13 +433,14 @@ def main(argv: list[str] | None = None) -> int:
     for p_ in (b1, b2):
         p_.add_argument("--land", default="DE", help="Land der Bank (Standard DE)")
     bk_sub.add_parser("konten", help="verbundene Konten zeigen")
-    b4 = bk_sub.add_parser("konto", help="Konto ein-/ausschalten oder umbenennen")
+    b4 = bk_sub.add_parser("konto", help="Konto für die Buchhaltung ein-/ausschalten oder umbenennen")
     b4.add_argument("konto", help="IBAN des Kontos")
     schalter = b4.add_mutually_exclusive_group()
-    schalter.add_argument("--an", dest="an", action="store_true", default=None, help="Umsätze abrufen")
-    schalter.add_argument("--aus", dest="an", action="store_false", help="nicht mehr abrufen")
+    schalter.add_argument("--an", dest="an", action="store_true", default=None,
+                          help="Umsätze in die Buchhaltung übernehmen")
+    schalter.add_argument("--aus", dest="an", action="store_false", help="nur noch in der Kontenübersicht")
     b4.add_argument("--name", help="Kontoname der Umsätze (wie „N26“ beim CSV-Import)")
-    b5 = bk_sub.add_parser("abrufen", help="Umsätze der eingeschalteten Konten holen")
+    b5 = bk_sub.add_parser("abrufen", help="Saldo und Umsätze aller verbundenen Konten holen")
     b5.add_argument("--von", help="ab Buchungstag JJJJ-MM-TT (Standard: seit dem letzten Abruf, sonst 90 Tage)")
     b5.add_argument("--konto", help="nur dieses Konto (IBAN), auch wenn es aus ist")
     b5.add_argument("--trocken", action="store_true", help="Probelauf: Umsätze nur zeigen, nichts speichern")
