@@ -71,8 +71,25 @@ CREATE TABLE IF NOT EXISTS bank_konten (  -- Konten mit Freigabe über Enable Ba
     aktiv INTEGER NOT NULL DEFAULT 0,
     gueltig_bis TEXT NOT NULL DEFAULT '',
     abgerufen TEXT NOT NULL DEFAULT '',  -- Zeitpunkt des letzten erfolgreichen Abrufs
-    bis TEXT NOT NULL DEFAULT ''  -- letztes abgerufenes Buchungsdatum
+    bis TEXT NOT NULL DEFAULT '',  -- letztes abgerufenes Buchungsdatum
+    saldo TEXT NOT NULL DEFAULT '',
+    saldo_stand TEXT NOT NULL DEFAULT '',
+    abrufe TEXT NOT NULL DEFAULT '',
+    fehler TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS konto_buchungen (  -- Kontenübersicht: alle Buchungen aller verbundenen Konten
+    pruefsumme TEXT PRIMARY KEY,
+    konto TEXT NOT NULL,  -- bank_konten.schluessel
+    buchungsdatum TEXT NOT NULL,
+    betrag TEXT NOT NULL,
+    partner TEXT NOT NULL DEFAULT '',
+    iban TEXT NOT NULL DEFAULT '',
+    verwendungszweck TEXT NOT NULL DEFAULT '',
+    typ TEXT NOT NULL DEFAULT '',
+    original_betrag TEXT,
+    original_waehrung TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS konto_buchungen_konto ON konto_buchungen(konto, buchungsdatum);
 CREATE TABLE IF NOT EXISTS einstellungen (
     schluessel TEXT PRIMARY KEY,
     wert TEXT NOT NULL
@@ -299,6 +316,10 @@ class Datenbank:
                     self._con.execute(f"ALTER TABLE sitzungen ADD COLUMN {spalte} TEXT NOT NULL DEFAULT ''")
             if "abgeglichen" not in spalten:
                 self._con.execute("ALTER TABLE sitzungen ADD COLUMN abgeglichen REAL NOT NULL DEFAULT 0")
+            spalten = {z["name"] for z in self._con.execute("PRAGMA table_info(bank_konten)")}
+            for spalte in ("saldo", "saldo_stand", "abrufe", "fehler"):  # von vor der Kontenübersicht
+                if spalte not in spalten:
+                    self._con.execute(f"ALTER TABLE bank_konten ADD COLUMN {spalte} TEXT NOT NULL DEFAULT ''")
 
     # Einstellungen aus der Oberfläche (überschreiben die Umgebungsvariablen)
     def einstellungen(self) -> dict[str, str]:
@@ -477,6 +498,30 @@ class Datenbank:
                 f"INSERT INTO bank_konten ({', '.join(felder)}) VALUES ({', '.join('?' for _ in felder)}) "
                 f"ON CONFLICT(schluessel) DO UPDATE SET {', '.join(f'{f} = excluded.{f}' for f in felder[1:])}",
                 werte)
+
+    # Kontenübersicht (getrennt von den Umsätzen der Buchhaltung)
+    def konto_buchungen_speichern(self, konto: str, umsaetze: list[Umsatz]) -> int:
+        """Legt neue Buchungen an (gleiche Prüfsumme wird übergangen). Gibt die Anzahl neuer zurück."""
+        felder = ["pruefsumme", "konto", "buchungsdatum", "betrag", "partner", "iban", "verwendungszweck", "typ",
+                  "original_betrag", "original_waehrung"]
+        werte = [[u.pruefsumme, konto, u.buchungsdatum.isoformat(), str(u.betrag), u.partner, u.iban,
+                  u.verwendungszweck, u.typ, None if u.original_betrag is None else str(u.original_betrag),
+                  u.original_waehrung] for u in umsaetze]
+        with self._lock, self._con:
+            vorher = self._con.total_changes
+            self._con.executemany(
+                f"INSERT OR IGNORE INTO konto_buchungen ({', '.join(felder)}) "
+                f"VALUES ({', '.join('?' for _ in felder)})", werte)
+            return self._con.total_changes - vorher
+
+    def konto_buchungen(self, konto: str | None = None) -> list[dict]:
+        """Neueste zuerst; ``konto`` ist bank_konten.schluessel."""
+        sql = "SELECT * FROM konto_buchungen"
+        with self._lock:
+            zeilen = self._con.execute(
+                sql + (" WHERE konto = ?" if konto else "") + " ORDER BY buchungsdatum DESC, rowid DESC",
+                (konto,) if konto else ()).fetchall()
+        return [dict(z) for z in zeilen]
 
     def bank_regeln(self) -> dict[str, str]:
         with self._lock:

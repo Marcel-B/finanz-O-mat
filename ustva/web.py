@@ -7,6 +7,7 @@ import math
 import mimetypes
 import re
 import time
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from html import escape
@@ -31,6 +32,8 @@ from . import (
     export,
     identity,
     kalender,
+    konten_web,
+    kontoabruf,
     monatsabschluss,
     monatsexport,
     monitoring,
@@ -261,7 +264,20 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     db = db or Datenbank(cfg.datenbank)
     umrechner = umrechner or Umrechner(db, cfg.ezb_kurse)
     urlaubskalender = urlaubskalender or kalender.Kalender()
-    app = FastAPI(title="Finanz-O-Mat", docs_url="/api/docs", openapi_url="/api/openapi.json")
+
+    @asynccontextmanager
+    async def lebenszyklus(_app: FastAPI):
+        # Kontoumsätze zu festen Uhrzeiten über Enable Banking abrufen (ustva/kontoabruf.py)
+        hintergrund = None
+        if cfg.enable_banking_app_id and cfg.enable_banking_schluessel and cfg.kontoabruf_zeiten:
+            hintergrund = kontoabruf.Hintergrundabruf(db, cfg, cfg.kontoabruf_zeiten)
+            hintergrund.starten()
+        yield
+        if hintergrund:
+            hintergrund.anhalten()
+
+    app = FastAPI(title="Finanz-O-Mat", docs_url="/api/docs", openapi_url="/api/openapi.json",
+                  lifespan=lebenszyklus)
 
     def _heute() -> date:
         return heute() if callable(heute) else (heute or date.today())
@@ -1100,6 +1116,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
 
     app.include_router(aktualisierung.router(cfg.update_verzeichnis))
     app.include_router(backup.router(cfg.backup_verzeichnis))
+    app.include_router(konten_web.router(db, aktuell))
     # Hochgeladener sevDesk-Export liegt neben der Datenbank und bleibt als Archiv
     app.include_router(sevdesk_web.router(sevdesk_ordner or cfg.datenbank.resolve().parent / "sevdesk-export",
                                           db, aktuell, umrechner))

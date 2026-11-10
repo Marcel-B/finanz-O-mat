@@ -17,6 +17,7 @@ import AnmeldeAnsicht from "./components/AnmeldeAnsicht.vue";
 import AppLogo from "./components/AppLogo.vue";
 import BackupHinweis from "./components/BackupHinweis.vue";
 import EinstellungenAnsicht from "./components/EinstellungenAnsicht.vue";
+import KontenAnsicht from "./components/KontenAnsicht.vue";
 import MonatsabschlussAnsicht from "./components/MonatsabschlussAnsicht.vue";
 import StundenzettelAnsicht from "./components/StundenzettelAnsicht.vue";
 import TaetigkeitenAnsicht from "./components/TaetigkeitenAnsicht.vue";
@@ -177,6 +178,7 @@ onMounted(starten);
         <Tab value="uebersicht"><i class="pi pi-chart-bar mr-2" />Übersicht</Tab>
         <Tab value="taetigkeiten"><i class="pi pi-briefcase mr-2" />Tätigkeiten</Tab>
         <Tab value="stundenzettel"><i class="pi pi-clock mr-2" />Stundenzettel</Tab>
+        <Tab value="konten"><i class="pi pi-building-columns mr-2" />Konten</Tab>
         <Tab value="adressbuch"><i class="pi pi-address-book mr-2" />Adressbuch</Tab>
         <Tab value="einstellungen"><i class="pi pi-cog mr-2" />Einstellungen</Tab>
       </TabList>
@@ -205,6 +207,9 @@ onMounted(starten);
         </TabPanel>
         <TabPanel value="stundenzettel">
           <StundenzettelAnsicht v-if="tab === 'stundenzettel'" />
+        </TabPanel>
+        <TabPanel value="konten">
+          <KontenAnsicht v-if="tab === 'konten'" />
         </TabPanel>
         <TabPanel value="adressbuch">
           <AdressbuchAnsicht v-if="tab === 'adressbuch'" />

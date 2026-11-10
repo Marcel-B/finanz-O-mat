@@ -40,6 +40,8 @@ Steuerberater nachfragen.
   (Landesfeiertage über `BUNDESLAND`), optional mit Dauerfristverlängerung.
 - Kontoumsätze aus dem N26-CSV-Export einlesen, automatisch den Rechnungen zuordnen und vor Umsätzen ohne Beleg
   warnen. Bei Ausgangsrechnungen übernimmt die Zuordnung das Zahlungsdatum (wichtig für die Ist-Versteuerung).
+- Konten bei N26, ING, bunq u. a. automatisch über Enable Banking abrufen; Reiter „Konten“ mit Saldo und Umsätzen
+  aller Konten als eigene Übersicht.
 - CSV-Export der Kennzahlen und Belege (Semikolon, Dezimalkomma, öffnet direkt in Excel).
 - Reiter „Monatsabschluss“: führt auf Wunsch Schritt für Schritt durch das Monatsende, siehe „Monatlicher Ablauf“.
 - Reiter „Übersicht“: grobe Jahresübersicht der Einnahmen und Ausgaben (netto) je Monat mit Diagramm, Ergebnis,
@@ -180,7 +182,9 @@ werden automatisch übergangen (`BANK_IGNORIEREN`).
 
 Statt der CSV-Datei kann die App die Umsätze über [Enable Banking](https://enablebanking.com) direkt bei der Bank
 abrufen (PSD2, nur lesend), etwa bei N26, ING und bunq. Für die eigenen Konten ist das kostenlos („restricted mode“).
-Bisher geht das nur über die Kommandozeile; in der Oberfläche erscheinen die Umsätze wie beim CSV-Import.
+Verbunden wird über die Kommandozeile. Alle verbundenen Konten erscheinen mit Saldo und Umsätzen im Reiter „Konten“,
+einer reinen Übersicht ohne Bezug zur Buchhaltung. In die Kontoumsätze der Buchhaltung (Belegabgleich, Warnung bei
+fehlenden Belegen) kommen nur Konten, die mit `bank konto … --an` eingeschaltet sind.
 
 Einrichten, einmalig:
 
@@ -202,21 +206,26 @@ Verbinden und abrufen (im Container mit `finanz-o-mat …`, sonst `python -m ust
 finanz-o-mat bank banken --suche ing         # genauen Namen der Bank finden
 finanz-o-mat bank verbinden --bank N26       # Adresse öffnen, bei der Bank freigeben, Rückleitungsadresse einfügen
 finanz-o-mat bank abrufen --konto DE… --trocken  # Probelauf: Umsätze nur zeigen, nichts speichern
-finanz-o-mat bank konto DE… --an             # Konto einschalten (neue Konten sind aus)
-finanz-o-mat bank konto DE… --name ING       # Name, unter dem die Umsätze erscheinen
-finanz-o-mat bank abrufen                    # gebuchte Umsätze holen und mit den Belegen abgleichen
-finanz-o-mat bank konten                     # Konten, Freigabe, letzter Abruf
+finanz-o-mat bank konto DE… --an             # Konto in die Buchhaltung übernehmen (neue Konten nur in der Übersicht)
+finanz-o-mat bank konto DE… --name ING       # Name, unter dem die Umsätze in der Buchhaltung erscheinen
+finanz-o-mat bank abrufen                    # Saldo und gebuchte Umsätze aller Konten holen, Belege abgleichen
+finanz-o-mat bank konten                     # Konten, Saldo, Freigabe, letzter Abruf, freie Abrufe
 ```
 
 - Nach der Freigabe leitet die Bank auf die Rückleitungsadresse um. Die Seite zeigt „Not Found“, das ist in Ordnung:
   die ganze Adresse (mit `?code=…`) aus der Adresszeile kopieren und einfügen.
-- Neu verbundene Konten sind aus, damit private Konten nicht in die Umsatzsteuer geraten. Umsätze von N26 erscheinen
-  unter dem Kontonamen „N26“ wie beim CSV-Import.
+- Neu verbundene Konten stehen nur in der Kontenübersicht, damit private Konten nicht in die Umsatzsteuer geraten.
+  Beim Einschalten übernimmt die App die schon abgerufenen Umsätze in die Buchhaltung. Umsätze von N26 erscheinen
+  dort unter dem Kontonamen „N26“ wie beim CSV-Import.
 - Die Freigabe gilt so lange, wie die Bank erlaubt (meist 90 oder 180 Tage). Danach einfach erneut `bank verbinden`;
   Name und Schalter der Konten bleiben. `bank abrufen` warnt zwei Wochen vorher.
 - Der erste Abruf holt 90 Tage, danach ab einer Woche vor dem letzten Buchungstag (`--von JJJJ-MM-TT` für mehr, soweit
-  die Bank liefert). Vorgemerkte Umsätze kommen erst, wenn die Bank sie bucht. Ohne Anmeldung bei der Bank erlauben
-  die Banken nur wenige Abrufe am Tag (PSD2: vier je Konto).
+  die Bank liefert). Vorgemerkte Umsätze kommen erst, wenn die Bank sie bucht.
+- Der Dienst ruft selbst ab, zu den Uhrzeiten in `KONTOABRUF_ZEITEN` (Standard `09:00,12:30,16:00,19:30`, deutsche
+  Zeit, nachts nicht; `aus` = nur von Hand). War der Dienst zur Abrufzeit aus, holt er den Abruf bis zu einer Stunde
+  später nach. Ohne Anmeldung bei der Bank erlaubt PSD2 höchstens vier Abrufe je Konto in 24 Stunden; die App zählt
+  mit und lässt weitere aus, auch beim Knopf „Jetzt abrufen“ im Reiter „Konten“ und bei `bank abrufen`. Ein Klick auf
+  den Knopf verbraucht also einen der vier, dann fällt der nächste geplante Abruf unter Umständen aus.
 - Schon per CSV eingelesene Umsätze werden nicht doppelt angelegt (gleiches Konto, gleicher Betrag, Buchungstag bis
   drei Tage auseinander); Zuordnung und Markierung bleiben. Umgekehrt überspringt der CSV-Import abgerufene Umsätze.
 

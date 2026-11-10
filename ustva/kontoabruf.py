@@ -24,15 +24,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import secrets
+import threading
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 import jwt
@@ -48,8 +51,16 @@ ERSTER_ABRUF = timedelta(days=90)  # so weit liefern die meisten Banken ohne neu
 UEBERLAPPUNG = timedelta(days=7)  # späte Buchungen mit älterem Buchungstag mitnehmen
 CSV_TAGE = 3  # Abstand Buchungstag CSV ↔ Schnittstelle, in dem ein Umsatz als derselbe gilt
 SEITEN = 100  # höchstens so viele Seiten Umsätze je Abruf
+ABRUFE_JE_TAG = 4  # PSD2 (RTS Art. 36 Abs. 5): ohne Anmeldung bei der Bank höchstens 4-mal in 24 Stunden
+ZEITZONE = "Europe/Berlin"  # für die festen Abrufzeiten im Dienst
+NACHHOLEN = timedelta(hours=1)  # verpasste Abrufzeit (Dienst war aus) so lange nachholen
+# Bevorzugte Saldoarten: gebucht (Zwischenstand, Tagesende), dann erwartet und verfügbar
+SALDO_ARTEN = ["ITBD", "CLBD", "XPCD", "ITAV", "CLAV", "OPBD"]
 # Kurznamen der Banken, unter denen die Umsätze erscheinen. N26 wie beim CSV-Import, damit beides zusammenpasst.
 KONTONAMEN = {"n26": "N26", "ing": "ING", "ing-diba": "ING", "bunq": "bunq"}
+
+
+log = logging.getLogger(__name__)
 
 
 class KontoabrufFehler(RuntimeError):
@@ -128,6 +139,9 @@ class EnableBanking:
 
     def sitzung_anlegen(self, code: str) -> dict:
         return self._anfrage("POST", "/sessions", json={"code": code})
+
+    def salden(self, uid: str) -> list[dict]:
+        return self._anfrage("GET", f"/accounts/{uid}/balances").get("balances") or []
 
     def umsaetze(self, uid: str, von: date, bis: date | None = None) -> list[dict]:
         params: dict[str, str] = {"date_from": von.isoformat()}
@@ -360,11 +374,13 @@ def schon_abgerufen(db: Datenbank, umsaetze: list[Umsatz]) -> list[bool]:
 @dataclass
 class Abruf:
     konto: BankKonto
-    neu: int = 0
+    neu: int = 0  # in der Buchhaltung (nur eingeschaltete Konten)
     vorhanden: int = 0
     aus_csv: int = 0
     vorgemerkt: int = 0
+    uebersicht: int = 0  # neu in der Kontenübersicht
     fehler: str = ""
+    uebersprungen: str = ""  # Abruflimit erreicht oder noch nicht fällig
     umsaetze: list[Umsatz] = field(default_factory=list)  # neue Umsätze (beim Probelauf nur gezeigt)
 
 
@@ -378,65 +394,243 @@ class Abrufe:
         return [f"{a.konto.konto} ({a.konto.iban or a.konto.schluessel}): {a.fehler}" for a in self.konten if a.fehler]
 
 
-def abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, von: date | None = None, heute: date | None = None,
-            jetzt: datetime | None = None, umrechner=None, trocken: bool = False, nur: str = "") -> Abrufe:
-    """Holt die Umsätze der eingeschalteten Konten (``nur``: nur dieses, auch wenn es aus ist).
+def abrufe_24h(k: BankKonto, jetzt: datetime) -> list[datetime]:
+    """Abrufe der letzten 24 Stunden, älteste zuerst."""
+    grenze = jetzt - timedelta(hours=24)
+    zeiten = []
+    for t in k.abrufe.split():
+        try:
+            z = datetime.fromisoformat(t)
+        except ValueError:
+            continue
+        if z.tzinfo is None:
+            z = z.replace(tzinfo=UTC)
+        if z > grenze:
+            zeiten.append(z)
+    return sorted(zeiten)
 
+
+def abrufe_frei(k: BankKonto, jetzt: datetime) -> int:
+    return max(0, ABRUFE_JE_TAG - len(abrufe_24h(k, jetzt)))
+
+
+def naechster_freier_abruf(k: BankKonto, jetzt: datetime) -> datetime | None:
+    zeiten = abrufe_24h(k, jetzt)
+    return None if len(zeiten) < ABRUFE_JE_TAG else zeiten[len(zeiten) - ABRUFE_JE_TAG] + timedelta(hours=24)
+
+
+def saldo_aus(salden: list[dict]) -> tuple[Decimal, str, str] | None:
+    """Gebuchter Saldo, wenn die Bank ihn liefert, sonst der erste. (Betrag, Währung, Stichtag)"""
+    for art in SALDO_ARTEN + [None]:
+        for s in salden:
+            if art is None or s.get("balance_type") == art:
+                menge = s.get("balance_amount") or {}
+                if (betrag := _betrag(menge.get("amount"))) is not None:
+                    return betrag, (menge.get("currency") or "EUR").upper(), str(s.get("reference_date") or "")
+    return None
+
+
+def buchhaltung_uebernehmen(db: Datenbank, cfg: Config, k: BankKonto, buchungen: list[Umsatz], a: Abruf,
+                            trocken: bool = False) -> None:
+    """Legt die Buchungen eines eingeschalteten Kontos als Kontoumsätze der Buchhaltung an (wie beim CSV-Import)."""
+    from .bank import ignorier_grund
+
+    regeln = db.bank_regeln()
+    vergeben: set[int] = set()
+    for u in buchungen:
+        u.konto = k.konto
+        if db.umsatz_vorhanden(u.pruefsumme):
+            a.vorhanden += 1
+            continue
+        if (alt := schon_per_csv(db, u, vergeben)) is not None:
+            # Die CSV-Zeile bleibt mit Zuordnung und Markierung, bekommt aber die Prüfsumme der Schnittstelle
+            alt.pruefsumme = u.pruefsumme
+            if not trocken:
+                db.umsatz_aktualisieren(alt)
+            vergeben.add(alt.id)
+            a.aus_csv += 1
+            continue
+        if grund := ignorier_grund(u, regeln, cfg.bank_ignorieren):
+            u.ignoriert, u.ignoriert_grund = True, grund
+        if not trocken:
+            db.umsatz_anlegen(u)
+        a.umsaetze.append(u)
+        a.neu += 1
+
+
+def aus_uebersicht(db: Datenbank, cfg: Config, k: BankKonto, umrechner=None) -> Abruf:
+    """Nach dem Einschalten: die schon abgerufenen Buchungen des Kontos in die Buchhaltung übernehmen."""
+    from .bank import abgleich_ausfuehren
+
+    buchungen = [Umsatz(konto=k.konto, buchungsdatum=date.fromisoformat(z["buchungsdatum"]),
+                        betrag=Decimal(z["betrag"]), partner=z["partner"], iban=z["iban"],
+                        verwendungszweck=z["verwendungszweck"], typ=z["typ"],
+                        original_betrag=_betrag(z["original_betrag"]) if z["original_betrag"] else None,
+                        original_waehrung=z["original_waehrung"], pruefsumme=z["pruefsumme"])
+                 for z in reversed(db.konto_buchungen(k.schluessel))]
+    a = Abruf(k)
+    buchhaltung_uebernehmen(db, cfg, k, buchungen, a)
+    if a.neu:
+        abgleich_ausfuehren(db, umrechner)
+    return a
+
+
+_SPERRE = threading.Lock()  # Hintergrund und Knopf in der App rufen nicht gleichzeitig ab
+
+
+def abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, von: date | None = None, heute: date | None = None,
+            jetzt: datetime | None = None, umrechner=None, trocken: bool = False, nur: str = "",
+            faellig_nach: timedelta | None = None) -> Abrufe:
+    """Holt Saldo und Umsätze aller verbundenen Konten (``nur``: nur dieses).
+
+    Alle Konten landen in der Kontenübersicht; in die Buchhaltung (Kontoumsätze) nur die eingeschalteten.
+    Je Konto höchstens ``ABRUFE_JE_TAG`` Abrufe in 24 Stunden, so viel erlaubt PSD2 ohne Anmeldung bei der Bank.
+    ``faellig_nach``: nur Konten, deren letzter Abruf mindestens so lange her ist (regelmäßiger Abruf).
     ``trocken``: Probelauf, der nichts speichert; die neuen Umsätze stehen in ``Abruf.umsaetze``.
     """
-    from .bank import abgleich_ausfuehren, ignorier_grund
+    from .bank import abgleich_ausfuehren
 
-    heute = heute or date.today()
-    jetzt = jetzt or datetime.now(UTC)
-    ergebnis = Abrufe()
-    regeln = db.bank_regeln()
-    nur = nur.replace(" ", "").upper()
-    for k in (k for k in db.bank_konten() if (nur in (k.schluessel.upper(), k.iban) if nur else k.aktiv)):
-        a = Abruf(k)
-        ergebnis.konten.append(a)
-        tage = tage_gueltig(k, jetzt)
-        if tage is not None and tage < 0:
-            a.fehler = "Freigabe abgelaufen, bitte neu verbinden"
-            continue
-        start = von or (date.fromisoformat(k.bis) - UEBERLAPPUNG if k.bis else heute - ERSTER_ABRUF)
-        try:
-            roh = eb.umsaetze(k.uid, start)
-        except KontoabrufFehler as e:
-            a.fehler = str(e)
-            continue
-        buchungen = []
-        for tx in roh:
-            if (u := umsatz_aus(tx, k)) is None:
-                a.vorgemerkt += 1
+    with _SPERRE:
+        heute = heute or date.today()
+        jetzt = jetzt or datetime.now(UTC)
+        ergebnis = Abrufe()
+        nur = nur.replace(" ", "").upper()
+        for k in (k for k in db.bank_konten() if not nur or nur in (k.schluessel.upper(), k.iban)):
+            zeiten = abrufe_24h(k, jetzt)
+            if faellig_nach is not None and zeiten and jetzt - zeiten[-1] < faellig_nach:
+                continue
+            a = Abruf(k)
+            ergebnis.konten.append(a)
+            tage = tage_gueltig(k, jetzt)
+            if tage is not None and tage < 0 and faellig_nach is not None:
+                continue  # die Übersicht zeigt die abgelaufene Freigabe ohnehin
+            if tage is not None and tage < 0:
+                a.fehler = "Freigabe abgelaufen, bitte neu verbinden"
+            elif len(zeiten) >= ABRUFE_JE_TAG:
+                frei = naechster_freier_abruf(k, jetzt)
+                a.uebersprungen = (f"{ABRUFE_JE_TAG} Abrufe in 24 Stunden erreicht, wieder ab "
+                                   f"{frei.astimezone():%d.%m. %H:%M} Uhr" if frei else "Abruflimit erreicht")
+                continue
             else:
-                buchungen.append((tx, u))
-        pruefsummen(buchungen, k)
-        vergeben: set[int] = set()
-        for _, u in buchungen:
-            if db.umsatz_vorhanden(u.pruefsumme):
-                a.vorhanden += 1
-                continue
-            if (alt := schon_per_csv(db, u, vergeben)) is not None:
-                # Die CSV-Zeile bleibt mit Zuordnung und Markierung, bekommt aber die Prüfsumme der Schnittstelle
-                alt.pruefsumme = u.pruefsumme
-                if not trocken:
-                    db.umsatz_aktualisieren(alt)
-                vergeben.add(alt.id)
-                a.aus_csv += 1
-                continue
-            if grund := ignorier_grund(u, regeln, cfg.bank_ignorieren):
-                u.ignoriert, u.ignoriert_grund = True, grund
+                _konto_abrufen(db, cfg, eb, k, a, von or (date.fromisoformat(k.bis) - UEBERLAPPUNG if k.bis
+                                                          else heute - ERSTER_ABRUF), jetzt, trocken)
             if not trocken:
-                db.umsatz_anlegen(u)
-            a.umsaetze.append(u)
-            a.neu += 1
+                k.fehler = a.fehler
+                db.bank_konto_speichern(k)
+        if not trocken and any(a.neu for a in ergebnis.konten):
+            ergebnis.zugeordnet = abgleich_ausfuehren(db, umrechner)
+        return ergebnis
+
+
+def _konto_abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, k: BankKonto, a: Abruf, start: date,
+                   jetzt: datetime, trocken: bool) -> None:
+    k.abrufe = " ".join([*(z.isoformat(timespec="seconds") for z in abrufe_24h(k, jetzt)),
+                         jetzt.isoformat(timespec="seconds")])
+    try:
+        roh = eb.umsaetze(k.uid, start)
+    except KontoabrufFehler as e:
+        a.fehler = str(e)
         if trocken:
-            continue
-        letzte = max((u.buchungsdatum for _, u in buchungen), default=None)
-        if letzte and (not k.bis or letzte.isoformat() > k.bis):
-            k.bis = letzte.isoformat()
-        k.abgerufen = jetzt.isoformat(timespec="seconds")
-        db.bank_konto_speichern(k)
-    if not trocken and any(a.neu for a in ergebnis.konten):
-        ergebnis.zugeordnet = abgleich_ausfuehren(db, umrechner)
-    return ergebnis
+            return
+        db.bank_konto_speichern(k)  # der Abruf zählt trotzdem
+        return
+    buchungen = []
+    for tx in roh:
+        if (u := umsatz_aus(tx, k)) is None:
+            a.vorgemerkt += 1
+        else:
+            buchungen.append((tx, u))
+    pruefsummen(buchungen, k)
+    umsaetze = [u for _, u in buchungen]
+    if k.aktiv or trocken:
+        buchhaltung_uebernehmen(db, cfg, k, umsaetze, a, trocken)
+    if trocken:
+        return
+    a.uebersicht = db.konto_buchungen_speichern(k.schluessel, umsaetze)
+    try:
+        if (saldo := saldo_aus(eb.salden(k.uid))) is not None:
+            k.saldo, k.waehrung, stichtag = str(saldo[0]), saldo[1], saldo[2]
+            k.saldo_stand = stichtag if stichtag and stichtag[:10] != jetzt.date().isoformat() \
+                else jetzt.isoformat(timespec="seconds")
+    except KontoabrufFehler as e:
+        a.fehler = f"Saldo: {e}"
+    letzte = max((u.buchungsdatum for u in umsaetze), default=None)
+    if letzte and (not k.bis or letzte.isoformat() > k.bis):
+        k.bis = letzte.isoformat()
+    k.abgerufen = jetzt.isoformat(timespec="seconds")
+
+
+def zeitzone() -> tzinfo | None:
+    """Zeitzone der Abrufzeiten; ohne Zeitzonendaten im System die Ortszeit."""
+    try:
+        return ZoneInfo(ZEITZONE)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+
+
+def faellige_zeit(zeiten: list[str], jetzt: datetime, nachholen: timedelta = NACHHOLEN) -> datetime | None:
+    """Letzte Abrufzeit von heute, die schon erreicht und höchstens ``nachholen`` her ist (``jetzt`` in Ortszeit)."""
+    faellig = None
+    for z in zeiten:
+        stunde, minute = (int(t) for t in z.split(":"))
+        punkt = jetzt.replace(hour=stunde, minute=minute, second=0, microsecond=0)
+        if punkt <= jetzt and jetzt - punkt <= nachholen and (faellig is None or punkt > faellig):
+            faellig = punkt
+    return faellig
+
+
+class Hintergrundabruf:
+    """Ruft im Dienst zu festen Uhrzeiten ab (``KONTOABRUF_ZEITEN``, Standard 9:00, 12:30, 16:00, 19:30).
+
+    Nachts nicht. Ist der Dienst zur Abrufzeit aus, holt er den Abruf bis zu einer Stunde später nach. Konten, die
+    seit der Abrufzeit schon abgerufen wurden (Knopf, Kommandozeile, Neustart), lässt er aus.
+    """
+
+    def __init__(self, db: Datenbank, cfg: Config, zeiten: list[str], takt: float = 60, tz: tzinfo | None = None):
+        self.db, self.cfg = db, cfg
+        self.zeiten = zeiten
+        self.takt = takt
+        self.tz = tz or zeitzone()
+        self._halt = threading.Event()
+        self._faden: threading.Thread | None = None
+        self._eb: EnableBanking | None = None
+        self._erledigt: datetime | None = None  # zuletzt bearbeitete Abrufzeit
+
+    def einmal(self, eb: EnableBanking | None = None, jetzt: datetime | None = None) -> Abrufe | None:
+        from .einstellungen import wirksam
+
+        jetzt = jetzt or datetime.now(UTC)
+        punkt = faellige_zeit(self.zeiten, jetzt.astimezone(self.tz))
+        if punkt is None or punkt == self._erledigt or not self.db.bank_konten():
+            return None
+        self._erledigt = punkt
+        try:
+            eb = eb or self._eb or EnableBanking.aus_config(self.cfg)
+            self._eb = eb
+            e = abrufen(self.db, wirksam(self.cfg, self.db), eb, jetzt=jetzt, faellig_nach=jetzt - punkt)
+        except Exception:  # der Faden darf nicht sterben
+            log.exception("Kontoabruf im Hintergrund fehlgeschlagen")
+            return None
+        for a in e.konten:
+            if a.fehler:
+                log.warning("Kontoabruf %s: %s", a.konto.iban or a.konto.schluessel, a.fehler)
+            elif a.uebersprungen:
+                log.info("Kontoabruf %s: %s", a.konto.iban or a.konto.schluessel, a.uebersprungen)
+            else:
+                log.info("Kontoabruf %s: %d neu in der Übersicht, %d in der Buchhaltung",
+                         a.konto.iban or a.konto.schluessel, a.uebersicht, a.neu)
+        return e
+
+    def _schleife(self) -> None:
+        if self._halt.wait(60):  # erst nach dem Start des Dienstes
+            return
+        while not self._halt.is_set():
+            self.einmal()
+            self._halt.wait(self.takt)
+
+    def starten(self) -> None:
+        self._faden = threading.Thread(target=self._schleife, name="kontoabruf", daemon=True)
+        self._faden.start()
+
+    def anhalten(self) -> None:
+        self._halt.set()

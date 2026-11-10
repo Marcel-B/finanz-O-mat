@@ -48,6 +48,12 @@ BUCHUNGEN = [
 ]
 
 
+PRIVAT = [
+    buchung("42.00", "DBIT", "2026-10-02", entry_reference="P1", creditor={"name": "Supermarkt"}),
+    buchung("2500.00", "CRDT", "2026-10-30", entry_reference="P2", debtor={"name": "Umbuchung"}),
+]
+
+
 class Bank:
     """Nachbau der API von Enable Banking."""
 
@@ -83,6 +89,16 @@ class Bank:
                 "accounts": [{"uid": "u-1", "account_id": {"iban": IBAN}, "name": "Hauptkonto", "currency": "EUR"},
                              {"uid": "u-2", "account_id": {"iban": "DE75512108001245126199"}, "name": "Spaces"}],
             })
+        if pfad == "/accounts/u-1/balances":
+            return httpx.Response(200, json={"balances": [
+                {"balance_amount": {"amount": "1200.00", "currency": "EUR"}, "balance_type": "ITAV"},
+                {"balance_amount": {"amount": "1069.77", "currency": "EUR"}, "balance_type": "CLBD",
+                 "reference_date": "2026-11-09"}]})
+        if pfad == "/accounts/u-2/balances":
+            return httpx.Response(200, json={"balances": [
+                {"balance_amount": {"amount": "194.98", "currency": "EUR"}, "balance_type": "ITBD"}]})
+        if pfad == "/accounts/u-2/transactions":
+            return httpx.Response(200, json={"transactions": PRIVAT})
         if pfad == "/accounts/u-1/transactions":
             # zwei Seiten
             if request.url.params.get("continuation_key") == "weiter":
@@ -215,29 +231,140 @@ def test_verbinden_und_konto_einschalten(db, eb, capsys, monkeypatch):
         "Geschäft", True, "u-9", "s-2", "2027-05-01", "Hauptkonto")
 
 
+PRIVAT_IBAN = "DE75512108001245126199"
+
+
+def privat():
+    return BankKonto(schluessel=PRIVAT_IBAN, uid="u-2", sitzung="s-1", bank="ING", land="DE", konto="ING",
+                     iban=PRIVAT_IBAN, gueltig_bis="2027-05-01T00:00:00+00:00")
+
+
 def test_abrufen(db, eb):
     db.bank_konto_speichern(konto())
-    # ausgeschaltetes Konto: wird nicht abgerufen
-    db.bank_konto_speichern(BankKonto(schluessel="X", uid="u-aus", sitzung="s-1", bank="N26", land="DE", konto="N26"))
+    db.bank_konto_speichern(privat())  # ausgeschaltet: nur Kontenübersicht
     e = ka.abrufen(db, Config(), eb, heute=date(2026, 11, 10), jetzt=JETZT)
-    assert len(e.konten) == 1
-    a = e.konten[0]
-    assert (a.neu, a.vorhanden, a.vorgemerkt, a.fehler) == (6, 0, 1, "")
-    params = eb.api_nachbau.anfragen[0].url.params
+    a = next(a for a in e.konten if a.konto.schluessel == IBAN)
+    assert (a.neu, a.vorhanden, a.vorgemerkt, a.uebersicht, a.fehler) == (6, 0, 1, 6, "")
+    params = next(r for r in eb.api_nachbau.anfragen if r.url.path == "/accounts/u-1/transactions").url.params
     assert params["date_from"] == "2026-08-12"  # erster Abruf: 90 Tage
     umsaetze = db.alle_umsaetze()
-    assert len(umsaetze) == 6
+    assert len(umsaetze) == 6  # nur das eingeschaltete Konto in der Buchhaltung
     finanzamt = next(u for u in umsaetze if u.partner.startswith("Finanzamt"))
     assert finanzamt.ignoriert  # BANK_IGNORIEREN gilt auch hier
     k = db.bank_konto(IBAN)
-    assert (k.bis, k.abgerufen) == ("2026-09-30", "2026-11-10T08:00:00+00:00")
+    assert (k.bis, k.abgerufen, k.saldo, k.saldo_stand) == (
+        "2026-09-30", "2026-11-10T08:00:00+00:00", "1069.77", "2026-11-09")
+    p = next(a for a in e.konten if a.konto.schluessel == PRIVAT_IBAN)
+    assert (p.neu, p.uebersicht) == (0, 2)
+    kp = db.bank_konto(PRIVAT_IBAN)
+    assert (kp.saldo, kp.saldo_stand) == ("194.98", "2026-11-10T08:00:00+00:00")
+    assert [b["betrag"] for b in db.konto_buchungen(PRIVAT_IBAN)] == ["2500.00", "-42.00"]  # neueste zuerst
+    assert len(db.konto_buchungen()) == 8
 
     # Zweiter Abruf: nichts doppelt, Beginn eine Woche vor dem letzten Buchungstag
     eb.api_nachbau.anfragen.clear()
-    a = ka.abrufen(db, Config(), eb, heute=date(2026, 11, 11), jetzt=JETZT).konten[0]
-    assert (a.neu, a.vorhanden) == (0, 6)
+    a = ka.abrufen(db, Config(), eb, heute=date(2026, 11, 11), jetzt=JETZT, nur=IBAN).konten[0]
+    assert (a.neu, a.vorhanden, a.uebersicht) == (0, 6, 0)
     assert eb.api_nachbau.anfragen[0].url.params["date_from"] == "2026-09-23"
     assert len(db.alle_umsaetze()) == 6
+    assert len(db.konto_buchungen()) == 8
+
+
+def test_abruflimit_und_faellig(db, eb):
+    db.bank_konto_speichern(konto())
+    for stunde in range(4):
+        a = ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=stunde)).konten[0]
+        assert not a.uebersprungen
+    eb.api_nachbau.anfragen.clear()
+    a = ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=5)).konten[0]
+    assert "4 Abrufe in 24 Stunden" in a.uebersprungen and not eb.api_nachbau.anfragen
+    k = db.bank_konto(IBAN)
+    assert ka.abrufe_frei(k, JETZT + timedelta(hours=5)) == 0
+    assert ka.naechster_freier_abruf(k, JETZT + timedelta(hours=5)) == JETZT + timedelta(hours=24)
+    # 24 Stunden nach dem ersten ist wieder einer frei
+    assert ka.abrufe_frei(k, JETZT + timedelta(hours=24, minutes=1)) == 1
+    # regelmäßiger Abruf: erst fällig, wenn der letzte (nach 3 Stunden) lange genug her ist
+    assert not ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=8), faellig_nach=timedelta(hours=6)).konten
+    a = ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=10), faellig_nach=timedelta(hours=6)).konten[0]
+    assert a.uebersprungen  # fällig, aber das Limit gilt auch hier
+    a = ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=25), faellig_nach=timedelta(hours=6)).konten[0]
+    assert not a.uebersprungen and not a.fehler
+
+
+def test_einschalten_uebernimmt_aus_uebersicht(db, eb):
+    db.bank_konto_speichern(privat())
+    ka.abrufen(db, Config(), eb, jetzt=JETZT)
+    assert not db.alle_umsaetze()
+    assert bank_befehl(args(schritt="konto", konto=PRIVAT_IBAN, an=True, name=None), Config(), db) == 0
+    umsaetze = db.alle_umsaetze()
+    assert [(u.konto, u.betrag, u.partner) for u in umsaetze] == [
+        ("ING", D("-42.00"), "Supermarkt"), ("ING", D("2500.00"), "Umbuchung")]
+    # ein späterer Abruf legt sie nicht noch einmal an
+    a = ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=7)).konten[0]
+    assert (a.neu, a.vorhanden) == (0, 2)
+
+
+def test_hintergrund_zu_festen_zeiten(db, eb):
+    from zoneinfo import ZoneInfo
+
+    h = ka.Hintergrundabruf(db, Config(), ["09:00", "12:30", "16:00", "19:30"], tz=ZoneInfo("Europe/Berlin"))
+    assert h.einmal(eb, jetzt=JETZT) is None  # noch keine Konten
+    db.bank_konto_speichern(konto())
+    e = h.einmal(eb, jetzt=JETZT + timedelta(minutes=1))  # 9:01 Uhr deutscher Zeit
+    assert e.konten[0].uebersicht == 6
+    assert h.einmal(eb, jetzt=JETZT + timedelta(minutes=2)) is None  # 9:00 schon erledigt
+    assert h.einmal(eb, jetzt=JETZT + timedelta(hours=2)) is None  # 11:00, keine Abrufzeit
+    assert h.einmal(eb, jetzt=JETZT.replace(hour=21)) is None  # 22:00, nachts nicht
+
+    # Neustart des Dienstes um 9:30: das Konto ist seit 9:00 schon abgerufen
+    h2 = ka.Hintergrundabruf(db, Config(), ["09:00", "12:30"], tz=ZoneInfo("Europe/Berlin"))
+    assert not h2.einmal(eb, jetzt=JETZT + timedelta(minutes=30)).konten
+    # 12:30 verpasst, um 13:15 nachgeholt; 16:00 um 17:15 nicht mehr
+    assert h2.einmal(eb, jetzt=JETZT.replace(hour=12, minute=15)).konten[0].uebersprungen == ""
+    assert len(db.bank_konto(IBAN).abrufe.split()) == 2
+    h3 = ka.Hintergrundabruf(db, Config(), ["16:00"], tz=ZoneInfo("Europe/Berlin"))
+    assert h3.einmal(eb, jetzt=JETZT.replace(hour=16, minute=15)) is None  # 17:15
+
+
+def test_faellige_zeit():
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("Europe/Berlin")
+    zeiten = ["09:00", "12:30", "16:00", "19:30"]
+    assert ka.faellige_zeit(zeiten, datetime(2026, 11, 10, 8, 59, tzinfo=tz)) is None
+    assert ka.faellige_zeit(zeiten, datetime(2026, 11, 10, 9, 0, tzinfo=tz)).hour == 9
+    assert ka.faellige_zeit(zeiten, datetime(2026, 11, 10, 12, 45, tzinfo=tz)).minute == 30
+    assert ka.faellige_zeit(zeiten, datetime(2026, 11, 10, 20, 31, tzinfo=tz)) is None
+    assert ka.faellige_zeit([], datetime(2026, 11, 10, 9, 0, tzinfo=tz)) is None
+
+
+def test_abrufzeiten_aus_umgebung(monkeypatch):
+    monkeypatch.delenv("KONTOABRUF_ZEITEN", raising=False)
+    assert Config.aus_umgebung().kontoabruf_zeiten == ["09:00", "12:30", "16:00", "19:30"]
+    monkeypatch.setenv("KONTOABRUF_ZEITEN", "19:30, 9:00 Uhr;12.30, 25:00, quatsch")
+    assert Config.aus_umgebung().kontoabruf_zeiten == ["09:00", "12:30", "19:30"]
+    monkeypatch.setenv("KONTOABRUF_ZEITEN", "aus")
+    assert Config.aus_umgebung().kontoabruf_zeiten == []
+
+
+def test_alte_datenbank_bekommt_neue_spalten(tmp_path):
+    import sqlite3
+
+    from ustva.db import Datenbank
+
+    pfad = tmp_path / "alt.sqlite"
+    con = sqlite3.connect(pfad)
+    con.execute("CREATE TABLE bank_konten (schluessel TEXT PRIMARY KEY, uid TEXT NOT NULL, sitzung TEXT NOT NULL, "
+                "bank TEXT NOT NULL, land TEXT NOT NULL, iban TEXT NOT NULL DEFAULT '', bezeichnung TEXT NOT NULL "
+                "DEFAULT '', waehrung TEXT NOT NULL DEFAULT 'EUR', konto TEXT NOT NULL, aktiv INTEGER NOT NULL "
+                "DEFAULT 0, gueltig_bis TEXT NOT NULL DEFAULT '', abgerufen TEXT NOT NULL DEFAULT '', bis TEXT NOT "
+                "NULL DEFAULT '')")
+    con.execute("INSERT INTO bank_konten (schluessel, uid, sitzung, bank, land, konto) "
+                "VALUES ('X', 'u', 's', 'ING', 'DE', 'ING')")
+    con.commit()
+    con.close()
+    k = Datenbank(pfad).bank_konto("X")
+    assert (k.konto, k.saldo, k.abrufe, k.fehler) == ("ING", "", "", "")
 
 
 def test_abrufen_nach_csv_und_csv_nach_abrufen(db, eb):
@@ -287,7 +414,6 @@ def test_abgelaufene_freigabe_und_fehler(db, eb):
 
 def test_probelauf_speichert_nichts(db, eb):
     db.bank_konto_speichern(konto(aktiv=False))  # aus, aber ausdrücklich gewählt
-    assert not ka.abrufen(db, Config(), eb, heute=date(2026, 11, 10), jetzt=JETZT, trocken=True).konten
     e = ka.abrufen(db, Config(), eb, heute=date(2026, 11, 10), jetzt=JETZT, trocken=True, nur=IBAN.lower())
     a = e.konten[0]
     assert (a.neu, len(a.umsaetze), a.vorgemerkt) == (6, 6, 1)
@@ -303,3 +429,43 @@ def test_probelauf_befehl(db, eb, capsys, monkeypatch):
     ausgabe = capsys.readouterr().out
     assert "PROBELAUF" in ausgabe and "Hosting GmbH" in ausgabe and "-17,32 € (-20,00 USD)" in ausgabe
     assert not db.alle_umsaetze()
+
+
+def test_api_konten(db, eb):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from ustva import konten_web
+
+    app = FastAPI()
+    cfg = Config(enable_banking_app_id="app-123")
+    app.include_router(konten_web.router(db, lambda: cfg, lambda c: eb, jetzt=lambda: JETZT))
+    client = TestClient(app)
+    leer = client.get("/api/konten").json()
+    assert (leer["konten"], leer["eingerichtet"], leer["abrufe_je_tag"]) == ([], False, 4)
+
+    db.bank_konto_speichern(konto())
+    db.bank_konto_speichern(privat())
+    antwort = client.post("/api/konten/abrufen").json()
+    assert sorted(k["neu"] for k in antwort["konten"]) == [2, 6]
+    daten = client.get("/api/konten").json()
+    assert daten["summen"] == {"EUR": "1264.75"}
+    ing, n26 = daten["konten"]
+    assert (ing["bank"], ing["saldo"], ing["buchhaltung"], ing["abrufe_frei"], ing["freigabe_tage"]) == (
+        "ING", "194.98", False, 3, 171)
+    assert (n26["bank"], n26["buchhaltung"]) == ("N26", True)
+    alle = client.get("/api/konten/buchungen").json()
+    nur_ing = client.get("/api/konten/buchungen", params={"konto": PRIVAT_IBAN}).json()
+    assert len(alle) == 8 and [b["partner"] for b in nur_ing] == ["Umbuchung", "Supermarkt"]
+
+
+def test_api_abrufen_ohne_einrichtung(db):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from ustva import konten_web
+
+    app = FastAPI()
+    app.include_router(konten_web.router(db, Config))
+    antwort = TestClient(app).post("/api/konten/abrufen")
+    assert antwort.status_code == 400 and "ENABLE_BANKING_APP_ID" in antwort.json()["detail"]

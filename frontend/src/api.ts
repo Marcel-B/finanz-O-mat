@@ -460,6 +460,51 @@ export interface SevdeskStatus {
   beendet: string;
 }
 
+// Reiter „Konten“: Übersicht der über Enable Banking verbundenen Konten (ustva/konten_web.py)
+export interface BankKonto {
+  schluessel: string;
+  name: string;
+  bank: string;
+  bezeichnung: string;
+  iban: string;
+  waehrung: string;
+  saldo: string | null;
+  saldo_stand: string; // Stichtag (JJJJ-MM-TT) oder Zeitpunkt des Abrufs
+  abgerufen: string;
+  freigabe_bis: string;
+  freigabe_tage: number | null;
+  abrufe_frei: number;
+  naechster_frei: string | null;
+  fehler: string;
+  buchhaltung: boolean; // Umsätze gehen auch in die Buchhaltung
+}
+
+export interface KontenUebersicht {
+  eingerichtet: boolean;
+  zeiten: string[]; // feste Abrufzeiten im Dienst (HH:MM, Europe/Berlin)
+  abrufe_je_tag: number;
+  summen: Record<string, string>;
+  konten: BankKonto[];
+}
+
+export interface KontoBuchung {
+  pruefsumme: string;
+  konto: string;
+  buchungsdatum: string;
+  betrag: string;
+  partner: string;
+  iban: string;
+  verwendungszweck: string;
+  typ: string;
+  original_betrag: string | null;
+  original_waehrung: string;
+}
+
+export interface KontenAbruf {
+  zugeordnet: number;
+  konten: { schluessel: string; name: string; neu: number; fehler: string; uebersprungen: string }[];
+}
+
 async function anfrage<T>(pfad: string, optionen: RequestInit = {}): Promise<T> {
   const antwort = await fetch(pfad, {
     ...optionen,
@@ -486,6 +531,10 @@ const post = <T>(pfad: string, daten?: unknown) =>
   anfrage<T>(pfad, { method: "POST", body: daten === undefined ? undefined : JSON.stringify(daten) });
 
 export const api = {
+  konten: () => anfrage<KontenUebersicht>("/api/konten"),
+  kontoBuchungen: (konto?: string) =>
+    anfrage<KontoBuchung[]>(`/api/konten/buchungen${konto ? `?konto=${encodeURIComponent(konto)}` : ""}`),
+  kontenAbrufen: () => post<KontenAbruf>("/api/konten/abrufen"),
   anmeldung: () => anfrage<Anmeldung>("/api/anmeldung"),
   anmelden: (benutzer: string, passwort: string) => post<Anmeldung>("/api/anmelden", { benutzer, passwort }),
   // Bei Identity-Anmeldung kommt die Adresse zum Abmelden beim Identity-Server zurück
