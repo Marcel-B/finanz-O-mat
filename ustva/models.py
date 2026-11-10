@@ -106,6 +106,25 @@ class Umsatz:
 
 
 @dataclass
+class BankKonto:
+    """Ein Konto, für das die Bank über Enable Banking den Abruf der Umsätze freigegeben hat."""
+
+    schluessel: str  # IBAN, ohne IBAN die Kennung von Enable Banking
+    uid: str
+    sitzung: str
+    bank: str
+    land: str
+    konto: str  # unter diesem Namen landen die Umsätze (wie "N26" beim CSV-Import)
+    iban: str = ""
+    bezeichnung: str = ""
+    waehrung: str = "EUR"
+    aktiv: bool = False
+    gueltig_bis: str = ""  # ISO-Zeitpunkt, bis zu dem die Freigabe gilt
+    abgerufen: str = ""
+    bis: str = ""
+
+
+@dataclass
 class Taetigkeit:
     """Ein Eintrag im Tätigkeitsnachweis: was an einem Tag für welchen Auftrag gemacht wurde."""
 

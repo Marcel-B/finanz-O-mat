@@ -166,8 +166,13 @@ def importieren(db: Datenbank, cfg: Config, text: str, umrechner: Umrechner | No
     except CsvFormatFehler as e:
         ergebnis.fehler.append(str(e))
         return ergebnis
+    from .kontoabruf import schon_abgerufen
+
     regeln = db.bank_regeln()
-    for u in umsaetze:
+    for u, abgerufen in zip(umsaetze, schon_abgerufen(db, umsaetze), strict=True):
+        if abgerufen:  # kam schon über den automatischen Abruf (Enable Banking)
+            ergebnis.vorhanden += 1
+            continue
         if grund := ignorier_grund(u, regeln, cfg.bank_ignorieren):
             u.ignoriert, u.ignoriert_grund = True, grund
         if db.umsatz_anlegen(u):

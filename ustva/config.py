@@ -61,6 +61,10 @@ class Config:
     # Kontoumsätze, die keinen Beleg brauchen (Teilwort in Partner oder Verwendungszweck)
     bank_ignorieren: list[str] = field(default_factory=lambda: ["Finanzamt", "Bundeskasse", "Steuerverwaltung"])
 
+    # Kontoumsätze automatisch über Enable Banking abrufen (siehe ustva/kontoabruf.py)
+    enable_banking_app_id: str = ""
+    enable_banking_schluessel: Path | None = None  # privater Schlüssel der Anwendung (.pem)
+
     ezb_kurse: bool = True  # Monatsmittel der EZB-Referenzkurse abrufen, wenn kein Kurs hinterlegt ist
 
     app_benutzer: str = ""
@@ -111,6 +115,9 @@ class Config:
             paperless_tag_kontoauszug=env.get("PAPERLESS_TAG_KONTOAUSZUG", cls.paperless_tag_kontoauszug),
             paperless_tag_protokoll=env.get("PAPERLESS_TAG_PROTOKOLL", cls.paperless_tag_protokoll),
             bank_ignorieren=_liste(env.get("BANK_IGNORIEREN"), cls().bank_ignorieren),
+            enable_banking_app_id=env.get("ENABLE_BANKING_APP_ID", "").strip(),
+            enable_banking_schluessel=Path(env["ENABLE_BANKING_SCHLUESSEL"])
+            if env.get("ENABLE_BANKING_SCHLUESSEL", "").strip() else None,
             ezb_kurse=_bool(env.get("EZB_KURSE"), True),
             app_benutzer=env.get("APP_BENUTZER", ""),
             app_passwort=env.get("APP_PASSWORT", ""),

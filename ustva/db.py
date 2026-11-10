@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from dataclasses import fields
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from .models import Beleg, Kontakt, Taetigkeit, Umsatz
+from .models import BankKonto, Beleg, Kontakt, Taetigkeit, Umsatz
 from .steuerfaelle import Art, Steuerfall
 
 SCHEMA = """
@@ -56,6 +57,21 @@ CREATE TABLE IF NOT EXISTS umsaetze (
 CREATE TABLE IF NOT EXISTS bank_regeln (
     partner TEXT PRIMARY KEY,
     grund TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS bank_konten (  -- Konten mit Freigabe über Enable Banking (ustva/kontoabruf.py)
+    schluessel TEXT PRIMARY KEY,  -- IBAN, ohne IBAN die Kennung von Enable Banking
+    uid TEXT NOT NULL,  -- wechselt mit jeder neuen Freigabe
+    sitzung TEXT NOT NULL,
+    bank TEXT NOT NULL,
+    land TEXT NOT NULL,
+    iban TEXT NOT NULL DEFAULT '',
+    bezeichnung TEXT NOT NULL DEFAULT '',
+    waehrung TEXT NOT NULL DEFAULT 'EUR',
+    konto TEXT NOT NULL,  -- Name in umsaetze.konto
+    aktiv INTEGER NOT NULL DEFAULT 0,
+    gueltig_bis TEXT NOT NULL DEFAULT '',
+    abgerufen TEXT NOT NULL DEFAULT '',  -- Zeitpunkt des letzten erfolgreichen Abrufs
+    bis TEXT NOT NULL DEFAULT ''  -- letztes abgerufenes Buchungsdatum
 );
 CREATE TABLE IF NOT EXISTS einstellungen (
     schluessel TEXT PRIMARY KEY,
@@ -431,6 +447,36 @@ class Datenbank:
         with self._lock, self._con:
             self._con.execute(f"UPDATE umsaetze SET {zuweisung} WHERE id = ?", [*_umsatz_zu_werten(u), u.id])
         return u
+
+    def umsaetze_von_bis(self, konto: str, von: date, bis: date) -> list[Umsatz]:
+        with self._lock:
+            zeilen = self._con.execute(
+                "SELECT * FROM umsaetze WHERE konto = ? AND buchungsdatum BETWEEN ? AND ? ORDER BY buchungsdatum, id",
+                (konto, von.isoformat(), bis.isoformat())).fetchall()
+        return [_zeile_zu_umsatz(z) for z in zeilen]
+
+    def umsatz_vorhanden(self, pruefsumme: str) -> bool:
+        with self._lock:
+            z = self._con.execute("SELECT 1 FROM umsaetze WHERE pruefsumme = ?", (pruefsumme,)).fetchone()
+        return z is not None
+
+    # Konten mit Freigabe über Enable Banking
+    def bank_konten(self) -> list[BankKonto]:
+        with self._lock:
+            zeilen = self._con.execute("SELECT * FROM bank_konten ORDER BY bank, konto, schluessel").fetchall()
+        return [BankKonto(**{**dict(z), "aktiv": bool(z["aktiv"])}) for z in zeilen]
+
+    def bank_konto(self, schluessel: str) -> BankKonto | None:
+        return next((k for k in self.bank_konten() if k.schluessel == schluessel), None)
+
+    def bank_konto_speichern(self, k: BankKonto) -> None:
+        felder = [f.name for f in fields(BankKonto)]
+        werte = [int(v) if isinstance(v, bool) else v for v in (getattr(k, f) for f in felder)]
+        with self._lock, self._con:
+            self._con.execute(
+                f"INSERT INTO bank_konten ({', '.join(felder)}) VALUES ({', '.join('?' for _ in felder)}) "
+                f"ON CONFLICT(schluessel) DO UPDATE SET {', '.join(f'{f} = excluded.{f}' for f in felder[1:])}",
+                werte)
 
     def bank_regeln(self) -> dict[str, str]:
         with self._lock:

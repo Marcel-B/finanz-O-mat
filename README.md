@@ -176,6 +176,50 @@ Umsätze ohne Beleg erscheinen als Warnung. Was keinen Beleg braucht (Steuerzahl
 als „kein Beleg nötig“, mit „Partner immer“ auch für alle künftigen Umsätze dieses Partners. Zahlungen ans Finanzamt
 werden automatisch übergangen (`BANK_IGNORIEREN`).
 
+### Automatisch abrufen (Enable Banking)
+
+Statt der CSV-Datei kann die App die Umsätze über [Enable Banking](https://enablebanking.com) direkt bei der Bank
+abrufen (PSD2, nur lesend), etwa bei N26, ING und bunq. Für die eigenen Konten ist das kostenlos („restricted mode“).
+Bisher geht das nur über die Kommandozeile; in der Oberfläche erscheinen die Umsätze wie beim CSV-Import.
+
+Einrichten, einmalig:
+
+1. Bei enablebanking.com registrieren, im Control Panel unter „API applications“ eine Anwendung für **Production**
+   anlegen. Als Rückleitungsadresse (Redirect URL) die App mit einem freien Pfad eintragen, z. B.
+   `https://finanz-o-mat.<tailnet>.ts.net/bank-verbunden`; die Seite muss nichts können. Für die Links zu
+   Datenschutz und Nutzungsbedingungen reicht eine beliebige `https://`-Adresse.
+2. Den privaten Schlüssel (`.pem`) beim Anlegen herunterladen und in den Container legen, z. B. nach
+   `/etc/finanz-o-mat/enablebanking.pem` (`chown root:finanzomat`, `chmod 640`). Er liegt nicht im Backup; geht er
+   verloren, im Control Panel eine neue Anwendung anlegen.
+3. Bei der Anwendung „Activate by linking accounts“ wählen und die eigenen Konten verknüpfen. Nur verknüpfte Konten
+   lassen sich im kostenlosen Modus abrufen.
+4. In `/etc/finanz-o-mat/finanz-o-mat.env` (bzw. `.env`) eintragen:
+   `ENABLE_BANKING_APP_ID="<Application ID>"` und `ENABLE_BANKING_SCHLUESSEL="/etc/finanz-o-mat/enablebanking.pem"`.
+
+Verbinden und abrufen (im Container mit `finanz-o-mat …`, sonst `python -m ustva …`):
+
+```sh
+finanz-o-mat bank banken --suche ing         # genauen Namen der Bank finden
+finanz-o-mat bank verbinden --bank N26       # Adresse öffnen, bei der Bank freigeben, Rückleitungsadresse einfügen
+finanz-o-mat bank abrufen --konto DE… --trocken  # Probelauf: Umsätze nur zeigen, nichts speichern
+finanz-o-mat bank konto DE… --an             # Konto einschalten (neue Konten sind aus)
+finanz-o-mat bank konto DE… --name ING       # Name, unter dem die Umsätze erscheinen
+finanz-o-mat bank abrufen                    # gebuchte Umsätze holen und mit den Belegen abgleichen
+finanz-o-mat bank konten                     # Konten, Freigabe, letzter Abruf
+```
+
+- Nach der Freigabe leitet die Bank auf die Rückleitungsadresse um. Die Seite zeigt „Not Found“, das ist in Ordnung:
+  die ganze Adresse (mit `?code=…`) aus der Adresszeile kopieren und einfügen.
+- Neu verbundene Konten sind aus, damit private Konten nicht in die Umsatzsteuer geraten. Umsätze von N26 erscheinen
+  unter dem Kontonamen „N26“ wie beim CSV-Import.
+- Die Freigabe gilt so lange, wie die Bank erlaubt (meist 90 oder 180 Tage). Danach einfach erneut `bank verbinden`;
+  Name und Schalter der Konten bleiben. `bank abrufen` warnt zwei Wochen vorher.
+- Der erste Abruf holt 90 Tage, danach ab einer Woche vor dem letzten Buchungstag (`--von JJJJ-MM-TT` für mehr, soweit
+  die Bank liefert). Vorgemerkte Umsätze kommen erst, wenn die Bank sie bucht. Ohne Anmeldung bei der Bank erlauben
+  die Banken nur wenige Abrufe am Tag (PSD2: vier je Konto).
+- Schon per CSV eingelesene Umsätze werden nicht doppelt angelegt (gleiches Konto, gleicher Betrag, Buchungstag bis
+  drei Tage auseinander); Zuordnung und Markierung bleiben. Umgekehrt überspringt der CSV-Import abgerufene Umsätze.
+
 ## Paperless-ngx
 
 1. In Paperless unter „Profil“ ein API-Token erzeugen und in der App unter „Einstellungen“ mit der URL eintragen
