@@ -72,7 +72,10 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
 
     @r.get("/api/konten/buchungen")
     def buchungen(konto: str | None = None):
-        return db.konto_buchungen(konto or None)
+        """Vorgemerkte Umsätze (noch nicht gebucht, bei jedem Abruf ersetzt) zuerst, dann die gebuchten."""
+        vorgemerkt = [z | {"pruefsumme": f"vorgemerkt:{z['konto']}:{z['nr']}", "vorgemerkt": True}
+                      for z in db.konto_vorgemerkt(konto or None)]
+        return vorgemerkt + [z | {"vorgemerkt": False} for z in db.konto_buchungen(konto or None)]
 
     @r.post("/api/konten/einlesen")
     async def einlesen(request: Request):

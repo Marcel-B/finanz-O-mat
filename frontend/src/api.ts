@@ -509,6 +509,7 @@ export interface KontoBuchung {
   typ: string;
   original_betrag: string | null;
   original_waehrung: string;
+  vorgemerkt: boolean; // noch nicht gebucht (Kartenzahlung, angekündigte Lastschrift), ändert sich beim nächsten Abruf
 }
 
 export interface KontenAbruf {

@@ -456,7 +456,8 @@ def test_api_konten(db, eb):
     assert (n26["bank"], n26["buchhaltung"]) == ("N26", True)
     alle = client.get("/api/konten/buchungen").json()
     nur_ing = client.get("/api/konten/buchungen", params={"konto": PRIVAT_IBAN}).json()
-    assert len(alle) == 8 and [b["partner"] for b in nur_ing] == ["Umbuchung", "Supermarkt"]
+    assert [b["vorgemerkt"] for b in alle].count(False) == 8 and alle[0]["vorgemerkt"]  # Vorgemerktes oben
+    assert [b["partner"] for b in nur_ing] == ["Umbuchung", "Supermarkt"]
 
 
 def test_api_abrufen_ohne_einrichtung(db):
@@ -508,3 +509,32 @@ def test_konto_namen_und_endpunkt():
     assert ka._endpunkt("/accounts/u-1/transactions?date_from=2026-01-01") == "accounts/transactions"
     assert ka._endpunkt("/sessions") == "sessions"
     assert ka._endpunkt("/aspsps") == "aspsps"
+
+
+def test_vorgemerkte_umsaetze(db, eb):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from ustva import konten_web
+
+    db.bank_konto_speichern(konto())
+    ka.abrufen(db, Config(), eb, jetzt=JETZT)
+    (v,) = db.konto_vorgemerkt(IBAN)
+    assert (v["betrag"], v["partner"], v["buchungsdatum"]) == ("-9.99", "Vorgemerkt", "2026-10-01")
+    # Nur zur Anzeige: nicht in Übersicht und Buchhaltung
+    assert all(z["betrag"] != "-9.99" for z in db.konto_buchungen(IBAN))
+    app = FastAPI()
+    app.include_router(konten_web.router(db, lambda: Config(), lambda c: eb, jetzt=lambda: JETZT))
+    erste, zweite = TestClient(app).get("/api/konten/buchungen", params={"konto": IBAN}).json()[:2]
+    assert (erste["vorgemerkt"], erste["pruefsumme"], zweite["vorgemerkt"]) == (True, f"vorgemerkt:{IBAN}:0", False)
+    # Beim nächsten Abruf ersetzt: inzwischen gebucht oder weggefallen
+    eb.api_nachbau.buchungen = [b for b in BUCHUNGEN if b.get("status") != "PDNG"]
+    ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=7))
+    assert db.konto_vorgemerkt(IBAN) == []
+
+
+def test_vorgemerkt_ohne_datum():
+    tx = {**buchung("5.00", "DBIT", None, creditor={"name": "Karte"}), "status": "PDNG"}
+    u = ka.vorgemerkt_aus(tx, konto(), date(2026, 11, 10))
+    assert (u.buchungsdatum, u.betrag) == (date(2026, 11, 10), D("-5.00"))
+    assert ka.vorgemerkt_aus(buchung("5.00", "DBIT", "2026-11-09"), konto(), date(2026, 11, 10)) is None

@@ -336,6 +336,19 @@ def umsatz_aus(tx: dict, konto: BankKonto) -> Umsatz | None:
                   original_waehrung=waehrung)
 
 
+VORGEMERKT = {"PDNG", "PEND", "PENDING", "INFO"}
+
+
+def vorgemerkt_aus(tx: dict, konto: BankKonto, heute: date) -> Umsatz | None:
+    """Ein vorgemerkter Umsatz (Kartenzahlung, angekündigte Lastschrift) zur Anzeige; ohne Datum mit heute."""
+    if str(tx.get("status") or "").upper() not in VORGEMERKT:
+        return None
+    gebucht = {**tx, "status": "BOOK"}
+    if _datum(gebucht) is None:
+        gebucht["booking_date"] = heute.isoformat()
+    return umsatz_aus(gebucht, konto)
+
+
 def pruefsummen(buchungen: list[tuple[dict, Umsatz]], konto: BankKonto) -> None:
     """Stabile Prüfsumme je Buchung: aus der Kennung der Bank, sonst aus dem Inhalt.
 
@@ -580,18 +593,21 @@ def _konto_abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, k: BankKonto, 
             return
         db.bank_konto_speichern(k)  # der Abruf zählt trotzdem
         return
-    buchungen = []
+    buchungen, vorgemerkt = [], []
     for tx in roh:
-        if (u := umsatz_aus(tx, k)) is None:
-            a.vorgemerkt += 1
-        else:
+        if (u := umsatz_aus(tx, k)) is not None:
             buchungen.append((tx, u))
+            continue
+        a.vorgemerkt += 1
+        if (v := vorgemerkt_aus(tx, k, jetzt.date())) is not None:
+            vorgemerkt.append(v)
     pruefsummen(buchungen, k)
     umsaetze = [u for _, u in buchungen]
     if k.aktiv or trocken:
         buchhaltung_uebernehmen(db, cfg, k, umsaetze, a, trocken)
     if trocken:
         return
+    db.konto_vorgemerkt_ersetzen(k.schluessel, vorgemerkt)
     eingelesene_uebernehmen(db, k.schluessel, umsaetze)
     a.uebersicht = db.konto_buchungen_speichern(k.schluessel, umsaetze)
     try:

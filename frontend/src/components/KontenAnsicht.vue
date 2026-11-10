@@ -172,10 +172,17 @@ const gefiltert = computed(() =>
     Noch kein Konto verbunden. Im Container: <code>finanz-o-mat bank verbinden --bank ING</code>
   </Message>
 
-  <div v-if="konten.length" class="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
+  <!--
+    Ab lg ist die Seite genau ein Fenster hoch: Beim Scrollen verschwindet der Kopf der App, danach steht die Seite,
+    und Kontenliste und Umsätze scrollen in sich. Darunter bleibt nur der Rand von <main> (pb-8).
+  -->
+  <div
+    v-if="konten.length"
+    class="grid gap-4 lg:mt-4 lg:h-[calc(100dvh-4rem)] lg:grid-cols-[18rem_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]"
+  >
     <!-- Kontenliste, je Konto ein Knoten -->
     <nav
-      class="h-fit rounded-xl border border-surface-200 bg-surface-0 p-2 dark:border-surface-700 dark:bg-surface-900"
+      class="h-fit rounded-xl border border-surface-200 bg-surface-0 p-2 lg:max-h-full lg:overflow-y-auto dark:border-surface-700 dark:bg-surface-900"
       aria-label="Konten"
     >
       <div class="px-2 pt-1 pb-2 text-sm font-semibold text-muted-color">Konten</div>
@@ -217,7 +224,7 @@ const gefiltert = computed(() =>
 
     <!-- Umsätze des gewählten Kontos -->
     <section
-      class="min-w-0 rounded-xl border border-surface-200 bg-surface-0 p-4 dark:border-surface-700 dark:bg-surface-900"
+      class="min-w-0 rounded-xl border border-surface-200 bg-surface-0 p-4 lg:flex lg:min-h-0 lg:flex-col dark:border-surface-700 dark:bg-surface-900"
     >
       <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div class="min-w-0">
@@ -285,10 +292,29 @@ const gefiltert = computed(() =>
       <div class="mb-2 flex justify-end">
         <SuchFeld v-model="suche" :treffer="gefiltert.length" :gesamt="buchungen.length" />
       </div>
-      <DataTable :value="gefiltert" :loading="laedt" size="small" data-key="pruefsumme" scrollable paginator :rows="50">
+      <DataTable
+        :value="gefiltert"
+        :loading="laedt"
+        size="small"
+        data-key="pruefsumme"
+        scrollable
+        scroll-height="flex"
+        class="lg:min-h-0 lg:flex-1"
+        :row-class="(b: KontoBuchung) => (b.vorgemerkt ? 'vorgemerkt' : '')"
+        paginator
+        :rows="100"
+      >
         <template #empty><span class="text-muted-color">Keine Umsätze.</span></template>
         <Column header="Datum" class="w-28 whitespace-nowrap">
-          <template #body="{ data }">{{ datum(data.buchungsdatum) }}</template>
+          <template #body="{ data }">
+            {{ datum(data.buchungsdatum) }}
+            <small
+              v-if="data.vorgemerkt"
+              v-tooltip.top="'Noch nicht gebucht. Kann sich bis zur Buchung ändern oder wegfallen.'"
+              class="block text-muted-color"
+              >vorgemerkt</small
+            >
+          </template>
         </Column>
         <Column v-if="!gewaehlt" header="Konto" class="w-36">
           <template #body="{ data }">
@@ -318,3 +344,13 @@ const gefiltert = computed(() =>
   </div>
 </template>
 
+<style scoped>
+/* Vorgemerkte Umsätze schraffiert wie in MoneyMoney */
+:deep(tr.vorgemerkt) {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 10px,
+    color-mix(in srgb, var(--p-text-color) 7%, transparent) 10px 20px
+  );
+}
+</style>
