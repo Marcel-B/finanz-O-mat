@@ -1,0 +1,240 @@
+"""Bestand des ING-Direkt-Depots über FinTS (HBCI) abrufen, für den Reiter „Konten“.
+
+Enable Banking (PSD2) liefert nur Zahlungskonten, keine Depots. Die ING bietet über FinTS für das Direkt-Depot den
+Depotbestand mit Details je Wertpapier an, aber keine Depotumsätze (https://www.ing.de/hilfe/log-in/fints/).
+
+Dafür braucht die App
+- eine FinTS-Produkt-ID der Deutschen Kreditwirtschaft (``FINTS_PRODUKT_ID``, kostenlos, Registrierung unter
+  https://www.fints.org/de/hersteller/produktregistrierung, bis zu zwei Wochen),
+- die Zugangsnummer (letzte 10 Stellen der IBAN, ``ING_FINTS_ZUGANG``) und die PIN fürs Internetbanking
+  (``ING_FINTS_PIN``).
+
+Verlangt die ING eine starke Kundenauthentifizierung, schickt sie eine Freigabe in die ING-App. Der Abruf wartet
+darauf bis zu zwei Minuten. Im Hintergrund wird danach nicht erneut gefragt, bis ein Abruf von Hand (Knopf oder
+``bank depot``) die Freigabe wieder bekommen hat; sonst käme bei jedem Abruf eine neue Anfrage aufs Telefon.
+
+Nur eine Übersicht, mit der Buchhaltung hat das Depot nichts zu tun.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
+
+from .config import Config
+from .db import Datenbank
+
+log = logging.getLogger(__name__)
+
+ING_BLZ = "50010517"
+ING_FINTS = "https://fints.ing.de/fints/"
+ZUGANG = "ing"  # Schlüssel des gespeicherten FinTS-Zustands
+FREIGABE_WARTEN = timedelta(minutes=2)
+ERSTE_NACHFRAGE = 5  # Sekunden bis zur ersten Nachfrage, ob in der App freigegeben wurde
+NACHFRAGE = 3
+DEPOT_KONTOARTEN = range(50, 60)  # FinTS-Kontoart 50–59: Depot
+
+
+class DepotFehler(RuntimeError):
+    pass
+
+
+class FreigabeNoetig(DepotFehler):
+    """Die ING wollte eine Freigabe in der App, die nicht rechtzeitig kam (oder im Hintergrund nicht gefragt wird)."""
+
+
+def eingerichtet(cfg: Config) -> bool:
+    return bool(cfg.fints_produkt_id and cfg.ing_fints_zugang and cfg.ing_fints_pin)
+
+
+@dataclass
+class Position:
+    isin: str
+    name: str
+    stueck: Decimal
+    kurs: Decimal | None = None
+    waehrung: str = "EUR"
+    kursdatum: date | None = None
+    wert: Decimal | None = None
+    einstand: Decimal | None = None  # Einstandskurs je Stück
+
+    @property
+    def einstandswert(self) -> Decimal | None:
+        return None if self.einstand is None else (self.stueck * self.einstand).quantize(Decimal("0.01"))
+
+
+@dataclass
+class Depot:
+    nummer: str
+    name: str = "Direkt-Depot"
+    bank: str = "ING"
+    waehrung: str = "EUR"
+    positionen: list[Position] = field(default_factory=list)
+
+    @property
+    def schluessel(self) -> str:
+        return f"fints:{ING_BLZ}:{self.nummer}"
+
+    @property
+    def wert(self) -> Decimal:
+        return sum((p.wert or Decimal(0) for p in self.positionen), Decimal(0))
+
+
+@dataclass
+class DepotAbruf:
+    depots: list[Depot] = field(default_factory=list)
+    fehler: str = ""
+    freigabe: bool = False  # wartet auf eine Freigabe in der ING-App
+    uebersprungen: str = ""
+
+    @property
+    def ergebnis(self) -> str:
+        if self.uebersprungen:
+            return "uebersprungen"
+        if self.freigabe:
+            return "freigabe"
+        return "fehler" if self.fehler else "ok"
+
+
+def _dec(wert) -> Decimal | None:
+    """python-fints liefert die Werte aus MT535 als float; über str() bleiben die Stellen der Bank erhalten."""
+    if wert is None:
+        return None
+    try:
+        return Decimal(str(wert))
+    except InvalidOperation:
+        return None
+
+
+def position_aus(h) -> Position | None:
+    """Eine Position aus ``fints.models.Holding``."""
+    isin = (getattr(h, "ISIN", None) or "").strip()
+    if not isin:
+        return None
+    stueck = _dec(getattr(h, "pieces", None)) or Decimal(0)
+    kurs = _dec(getattr(h, "market_value", None))
+    wert = _dec(getattr(h, "total_value", None))
+    if wert is None and kurs is not None:
+        wert = (stueck * kurs).quantize(Decimal("0.01"))
+    return Position(isin=isin, name=(getattr(h, "name", None) or isin).strip(), stueck=stueck, kurs=kurs,
+                    waehrung=(getattr(h, "value_symbol", None) or "EUR").upper(),
+                    kursdatum=getattr(h, "valuation_date", None),
+                    wert=wert, einstand=_dec(getattr(h, "acquisitionprice", None)))
+
+
+def depots_aus(info: dict) -> list[dict]:
+    """Die Depots aus den Kontoinformationen der Bank (UPD), über die Kontoart erkannt."""
+    return [a for a in info.get("accounts", []) if a.get("type") in DEPOT_KONTOARTEN and a.get("account_number")]
+
+
+def _client(cfg: Config, zustand: bytes | None):
+    from fints.client import FinTS3PinTanClient
+
+    return FinTS3PinTanClient(ING_BLZ, cfg.ing_fints_zugang, cfg.ing_fints_pin, ING_FINTS,
+                              product_id=cfg.fints_produkt_id, from_data=zustand)
+
+
+class IngFints:
+    """Der Weg zur ING über python-fints; in den Tests ersetzt ``client_fabrik`` den echten Client."""
+
+    def __init__(self, cfg: Config, zustand: bytes | None = None, client_fabrik: Callable | None = None,
+                 schlafen: Callable[[float], None] = time.sleep, uhr: Callable[[], float] = time.monotonic):
+        if not eingerichtet(cfg):
+            raise DepotFehler("Depotabruf nicht eingerichtet: FINTS_PRODUKT_ID, ING_FINTS_ZUGANG und ING_FINTS_PIN "
+                              "setzen (siehe README)")
+        self.cfg = cfg
+        self.zustand = zustand
+        self._fabrik = client_fabrik or _client
+        self._schlafen, self._uhr = schlafen, uhr
+
+    def _freigeben(self, f, antwort, bis: float, hinweis: Callable[[str], None] | None):
+        """Wartet auf die Freigabe in der App, solange die Bank eine verlangt (``NeedTANResponse``)."""
+        from fints.client import NeedTANResponse
+
+        gemeldet = False
+        while isinstance(antwort, NeedTANResponse):
+            if not antwort.decoupled:
+                raise DepotFehler("Die ING verlangt eine TAN statt einer Freigabe in der App; das kann der Abruf "
+                                  "nicht. Im Online-Banking die App-Freigabe als Verfahren wählen.")
+            if bis <= self._uhr():
+                raise FreigabeNoetig("Freigabe in der ING-App nicht rechtzeitig bestätigt")
+            if not gemeldet:
+                gemeldet = True
+                text = (getattr(antwort, "challenge", "") or "").strip()
+                log.info("Depotabruf: ING wartet auf Freigabe in der App%s", f" ({text})" if text else "")
+                if hinweis:
+                    hinweis("Bitte den Zugriff in der ING-App freigeben" + (f": {text}" if text else "."))
+                self._schlafen(ERSTE_NACHFRAGE)
+            else:
+                self._schlafen(NACHFRAGE)
+            antwort = f.send_tan(antwort, "")
+        return antwort
+
+    def _verfahren_waehlen(self, f) -> None:
+        """Freigabe in der App bevorzugen; die ING bietet in der Regel nur ein Verfahren an."""
+        if f.get_current_tan_mechanism():
+            return
+        f.fetch_tan_mechanisms()
+        verfahren = [code for code in f.get_tan_mechanisms() if code != "999"]
+        if verfahren:
+            f.set_tan_mechanism(verfahren[0])
+
+    def abrufen(self, warten: timedelta = FREIGABE_WARTEN,
+                hinweis: Callable[[str], None] | None = None) -> list[Depot]:
+        from fints.models import SEPAAccount
+
+        bis = self._uhr() + warten.total_seconds()
+        f = self._fabrik(self.cfg, self.zustand)
+        try:
+            self._verfahren_waehlen(f)
+            with f:
+                self._freigeben(f, f.init_tan_response, bis, hinweis)
+                gefunden = depots_aus(f.get_information())
+                if not gefunden:
+                    raise DepotFehler("Die ING meldet für diesen Zugang kein Depot")
+                depots = []
+                for d in gefunden:
+                    konto = SEPAAccount(iban=d.get("iban"), bic=None, accountnumber=d["account_number"],
+                                        subaccount=d.get("subaccount_number"), blz=ING_BLZ)
+                    bestand = self._freigeben(f, f.get_holdings(konto), bis, hinweis) or []
+                    depots.append(Depot(nummer=d["account_number"], name=(d.get("product_name") or "Depot").strip(),
+                                        waehrung=(d.get("currency") or "EUR").upper(),
+                                        positionen=[p for p in map(position_aus, bestand) if p]))
+                return depots
+        finally:
+            try:  # Systemkennung, Bank- und Nutzerdaten fürs nächste Mal (ohne PIN)
+                self.zustand = f.deconstruct(including_private=True)
+            except Exception:  # noqa: BLE001 – ein halb geöffneter Client darf den Fehler nicht verdecken
+                log.debug("FinTS-Zustand nicht gespeichert", exc_info=True)
+
+
+def abrufen(db: Datenbank, cfg: Config, zugang: IngFints | None = None, jetzt: datetime | None = None,
+            warten: timedelta = FREIGABE_WARTEN, hinweis: Callable[[str], None] | None = None,
+            hintergrund: bool = False) -> DepotAbruf:
+    """Holt den Bestand aller Depots des Zugangs und ersetzt die gespeicherten Positionen."""
+    jetzt = jetzt or datetime.now(UTC)
+    a = DepotAbruf()
+    stand = db.fints_zustand(ZUGANG) or {}
+    if hintergrund and stand.get("freigabe"):
+        a.uebersprungen = "wartet auf Freigabe in der ING-App; einmal von Hand abrufen"
+        return a
+    try:
+        zugang = zugang or IngFints(cfg, stand.get("daten"))
+        a.depots = zugang.abrufen(warten=warten, hinweis=hinweis)
+    except FreigabeNoetig as e:
+        a.freigabe, a.fehler = True, str(e)
+    except DepotFehler as e:
+        a.fehler = str(e)
+    except Exception as e:  # noqa: BLE001 – Fehler der Bank oder von python-fints landen beim Depot
+        log.warning("Depotabruf fehlgeschlagen", exc_info=True)
+        a.fehler = f"{type(e).__name__}: {e}"
+    zeit = jetzt.isoformat(timespec="seconds")
+    db.fints_zustand_speichern(ZUGANG, daten=zugang.zustand if zugang else None, fehler=a.fehler,
+                               freigabe=a.freigabe, versucht=zeit)
+    for d in a.depots:
+        db.depot_speichern(d, zeit)
+    return a

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Reiter „Konten“: Salden und Umsätze aller über Enable Banking verbundenen Konten, nur zur Übersicht.
-// Mit der Buchhaltung (Kontoumsätze, Belege) hat die Seite nichts zu tun.
+// Mit der Buchhaltung (Kontoumsätze, Belege) hat die Seite nichts zu tun. Dazu Depots über FinTS (nur Bestand).
 import Button from "primevue/button";
 import Column from "primevue/column";
 import DataTable from "primevue/datatable";
@@ -12,12 +12,13 @@ import { computed, onMounted, ref, watch } from "vue";
 import { api, type BankKonto, type KontenUebersicht, type KontoBuchung } from "@/api";
 import { betrag, datum, passtZurSuche, suchtext } from "@/format";
 
+import DepotAnsicht from "./DepotAnsicht.vue";
 import SuchFeld from "./SuchFeld.vue";
 
 const toast = useToast();
 const daten = ref<KontenUebersicht | null>(null);
 const buchungen = ref<KontoBuchung[]>([]);
-const auswahl = ref<string>(""); // "" = alle Konten
+const auswahl = ref<string>(""); // "" = alle Konten, sonst Schlüssel eines Kontos oder Depots
 const suche = ref("");
 const laedt = ref(false);
 const ruftAb = ref(false);
@@ -25,6 +26,9 @@ const fehler = ref("");
 
 const konten = computed(() => daten.value?.konten ?? []);
 const gewaehlt = computed(() => konten.value.find((k) => k.schluessel === auswahl.value) ?? null);
+const depots = computed(() => daten.value?.depots ?? []);
+const gewaehltesDepot = computed(() => depots.value.find((d) => d.schluessel === auswahl.value) ?? null);
+const mitDepot = computed(() => depots.value.length > 0 || !!daten.value?.depot.eingerichtet);
 const nachSchluessel = computed(() => Object.fromEntries(konten.value.map((k) => [k.schluessel, k])));
 
 async function laden() {
@@ -32,7 +36,11 @@ async function laden() {
   fehler.value = "";
   try {
     daten.value = await api.konten();
-    buchungen.value = await api.kontoBuchungen(auswahl.value || undefined);
+    // Ohne Konten gleich das erste Depot zeigen
+    if (!auswahl.value && !daten.value.konten.length && daten.value.depots.length) {
+      auswahl.value = daten.value.depots[0].schluessel;
+    }
+    if (!gewaehltesDepot.value) buchungen.value = await api.kontoBuchungen(auswahl.value || undefined);
   } catch (e) {
     fehler.value = (e as Error).message;
   } finally {
@@ -42,6 +50,7 @@ async function laden() {
 
 watch(auswahl, async () => {
   suche.value = "";
+  if (gewaehltesDepot.value) return;
   try {
     buchungen.value = await api.kontoBuchungen(auswahl.value || undefined);
   } catch (e) {
@@ -66,6 +75,38 @@ async function abrufen() {
     toast.add({ severity: "error", summary: "Abruf fehlgeschlagen", detail: (e as Error).message, life: 8000 });
   } finally {
     ruftAb.value = false;
+  }
+}
+
+// Depotbestand über FinTS; verlangt die ING eine Freigabe in der App, wartet der Server bis zu zwei Minuten
+const ruftDepotAb = ref(false);
+
+async function depotAbrufen() {
+  ruftDepotAb.value = true;
+  toast.add({
+    severity: "info",
+    summary: "Depot wird abgerufen",
+    detail: "Falls die ING fragt: in der ING-App freigeben.",
+    life: 8000,
+  });
+  try {
+    const e = await api.depotAbrufen();
+    if (e.fehler) {
+      toast.add({
+        severity: "warn",
+        summary: e.freigabe ? "Keine Freigabe in der ING-App" : "Depotabruf fehlgeschlagen",
+        detail: e.fehler,
+        life: 10000,
+      });
+    } else {
+      const n = e.depots.reduce((s, d) => s + d.positionen, 0);
+      toast.add({ severity: "success", summary: "Depot abgerufen", detail: `${n} Positionen`, life: 3000 });
+    }
+    await laden();
+  } catch (e) {
+    toast.add({ severity: "error", summary: "Depotabruf fehlgeschlagen", detail: (e as Error).message, life: 8000 });
+  } finally {
+    ruftDepotAb.value = false;
   }
 }
 
@@ -131,6 +172,7 @@ const ibanKurz = (iban: string) => (iban ? `${iban.slice(0, 4)} … ${iban.slice
 const ibanLang = (iban: string) => iban.replace(/(.{4})/g, "$1 ").trim();
 
 const summe = computed(() => Object.entries(daten.value?.summen ?? {}));
+const depotSumme = computed(() => depots.value.reduce((s, d) => s + Number(d.wert ?? 0), 0));
 const letzterAbruf = computed(() =>
   konten.value.map((k) => k.abgerufen).filter(Boolean).sort().at(-1) ?? "",
 );
@@ -168,7 +210,7 @@ const gefiltert = computed(() =>
     Noch kein Kontoabruf eingerichtet. Wie das geht (Enable Banking, <code>ENABLE_BANKING_APP_ID</code> und
     <code>ENABLE_BANKING_SCHLUESSEL</code>), steht im README unter „Automatisch abrufen“.
   </Message>
-  <Message v-else-if="daten && !konten.length" severity="info" class="mb-4">
+  <Message v-else-if="daten && !konten.length && !mitDepot" severity="info" class="mb-4">
     Noch kein Konto verbunden. Im Container: <code>finanz-o-mat bank verbinden --bank ING</code>
   </Message>
 
@@ -177,7 +219,7 @@ const gefiltert = computed(() =>
     und Kontenliste und Umsätze scrollen in sich. Darunter bleibt nur der Rand von <main> (pb-8).
   -->
   <div
-    v-if="konten.length"
+    v-if="konten.length || mitDepot"
     class="grid gap-4 lg:mt-4 lg:h-[calc(100dvh-4rem)] lg:grid-cols-[18rem_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]"
   >
     <!-- Kontenliste, je Konto ein Knoten -->
@@ -185,18 +227,16 @@ const gefiltert = computed(() =>
       class="h-fit rounded-xl border border-surface-200 bg-surface-0 p-2 lg:max-h-full lg:overflow-y-auto dark:border-surface-700 dark:bg-surface-900"
       aria-label="Konten"
     >
-      <div class="px-2 pt-1 pb-2 text-sm font-semibold text-muted-color">Konten</div>
-      <button
-        type="button"
-        :class="knoten(auswahl === '')"
-        @click="auswahl = ''"
-      >
-        <i class="pi pi-building-columns text-primary" />
-        <span class="min-w-0 flex-1 truncate font-medium">Alle Konten</span>
-        <span class="text-right font-semibold tabular-nums">
-          <span v-for="[w, s] in summe" :key="w" class="block">{{ betrag(s) }} {{ w === "EUR" ? "€" : w }}</span>
-        </span>
-      </button>
+      <template v-if="konten.length">
+        <div class="px-2 pt-1 pb-2 text-sm font-semibold text-muted-color">Konten</div>
+        <button type="button" :class="knoten(auswahl === '')" @click="auswahl = ''">
+          <i class="pi pi-building-columns text-primary" />
+          <span class="min-w-0 flex-1 truncate font-medium">Alle Konten</span>
+          <span class="text-right font-semibold tabular-nums">
+            <span v-for="[w, s] in summe" :key="w" class="block">{{ betrag(s) }} {{ w === "EUR" ? "€" : w }}</span>
+          </span>
+        </button>
+      </template>
       <button
         v-for="k in konten"
         :key="k.schluessel"
@@ -220,10 +260,67 @@ const gefiltert = computed(() =>
           {{ k.saldo === null ? "–" : `${betrag(k.saldo)} ${k.waehrung === "EUR" ? "€" : k.waehrung}` }}
         </span>
       </button>
+
+      <!-- Depots über FinTS, nur Bestand -->
+      <template v-if="mitDepot">
+        <div
+          class="flex items-center justify-between gap-2 px-2 pt-1 pb-2 text-sm font-semibold text-muted-color"
+          :class="{ 'mt-3': konten.length }"
+        >
+          <span>Depots</span>
+          <span v-if="depots.length > 1" class="tabular-nums">{{ betrag(depotSumme) }} €</span>
+          <Button
+            v-if="!depots.length"
+            v-tooltip.top="'Fragt die ING nach einer Freigabe, kommt sie in die ING-App'"
+            icon="pi pi-refresh"
+            label="Abrufen"
+            size="small"
+            severity="secondary"
+            text
+            :loading="ruftDepotAb"
+            @click="depotAbrufen"
+          />
+        </div>
+        <small v-if="!depots.length && daten?.depot.fehler" class="block px-2 pb-2 text-orange-600 dark:text-orange-400">
+          {{ daten.depot.fehler }}
+        </small>
+        <button
+          v-for="d in depots"
+          :key="d.schluessel"
+          type="button"
+          :class="[knoten(auswahl === d.schluessel), 'pl-5']"
+          @click="auswahl = d.schluessel"
+        >
+          <i class="pi pi-chart-line text-muted-color" />
+          <span class="min-w-0 flex-1">
+            <span class="flex items-center gap-1 truncate">
+              {{ d.name }}
+              <i
+                v-if="daten?.depot.freigabe || daten?.depot.fehler"
+                v-tooltip.top="daten?.depot.freigabe ? 'Wartet auf Freigabe in der ING-App' : daten?.depot.fehler"
+                class="pi pi-exclamation-triangle text-xs text-orange-500"
+              />
+            </span>
+            <small class="block truncate text-muted-color">{{ d.bank }} · {{ d.positionen }} Positionen</small>
+          </span>
+          <span class="text-right tabular-nums">{{ betrag(d.wert) }} {{ d.waehrung === "EUR" ? "€" : d.waehrung }}</span>
+        </button>
+      </template>
     </nav>
+
+    <DepotAnsicht
+      v-if="gewaehltesDepot && daten"
+      :depot="gewaehltesDepot"
+      :zugang="daten.depot"
+      :ruft-ab="ruftDepotAb"
+      :abrufzeiten="abrufzeiten"
+      :zeit="zeit"
+      @abrufen="depotAbrufen"
+    />
 
     <!-- Umsätze des gewählten Kontos -->
     <section
+      v-else
       class="min-w-0 rounded-xl border border-surface-200 bg-surface-0 p-4 lg:flex lg:min-h-0 lg:flex-col dark:border-surface-700 dark:bg-surface-900"
     >
       <div class="mb-3 flex flex-wrap items-start justify-between gap-3">

@@ -28,6 +28,7 @@ from . import (
     bank,
     belegdruck,
     belegnummern,
+    depot,
     einstellungen,
     export,
     identity,
@@ -269,7 +270,9 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     async def lebenszyklus(_app: FastAPI):
         # Kontoumsätze zu festen Uhrzeiten über Enable Banking abrufen (ustva/kontoabruf.py)
         hintergrund = None
-        if cfg.enable_banking_app_id and cfg.enable_banking_schluessel and cfg.kontoabruf_zeiten:
+        # und den Depotbestand über FinTS (ustva/depot.py)
+        if cfg.kontoabruf_zeiten and ((cfg.enable_banking_app_id and cfg.enable_banking_schluessel)
+                                      or depot.eingerichtet(cfg)):
             hintergrund = kontoabruf.Hintergrundabruf(db, cfg, cfg.kontoabruf_zeiten)
             hintergrund.starten()
         yield

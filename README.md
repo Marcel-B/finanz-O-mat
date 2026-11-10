@@ -236,6 +236,28 @@ finanz-o-mat bank konten                     # Konten, Saldo, Freigabe, letzter 
 - Schon per CSV eingelesene Umsätze werden nicht doppelt angelegt (gleiches Konto, gleicher Betrag, Buchungstag bis
   drei Tage auseinander); Zuordnung und Markierung bleiben. Umgekehrt überspringt der CSV-Import abgerufene Umsätze.
 
+### Depot der ING (FinTS)
+
+Depots gehören nicht zu PSD2, Enable Banking liefert sie deshalb nicht. Den Bestand des ING-Direkt-Depots holt die App
+über FinTS (HBCI), das die ING kostenlos anbietet: je Wertpapier Name, ISIN, Stück, Kurs, Wert und Einstandskurs.
+Depotumsätze bietet die ING über FinTS nicht an. Das Depot steht im Reiter „Konten“ unter „Depots“, mit Gewinn oder
+Verlust je Position, und hat mit der Buchhaltung nichts zu tun.
+
+1. Eine FinTS-Produkt-ID bei der Deutschen Kreditwirtschaft beantragen
+   (https://www.fints.org/de/hersteller/produktregistrierung, kostenlos, dauert bis zu zwei Wochen).
+2. In `/etc/finanz-o-mat/finanz-o-mat.env` (bzw. `.env`) eintragen:
+   `FINTS_PRODUKT_ID="<Produkt-ID>"`, `ING_FINTS_ZUGANG="<Zugangsnummer>"` (die letzten 10 Stellen der IBAN) und
+   `ING_FINTS_PIN="<PIN fürs Internetbanking>"`. Die Datei ist nur für den Dienst lesbar.
+3. Einmal von Hand abrufen, im Reiter „Konten“ („Depots“ → „Abrufen“) oder im Container mit `finanz-o-mat bank depot`,
+   und den Zugriff in der ING-App freigeben.
+
+- Danach holt der Dienst den Bestand zu denselben Zeiten wie die Konten (`KONTOABRUF_ZEITEN`).
+- Verlangt die ING eine Freigabe, wartet der Abruf bis zu zwei Minuten darauf. Kommt sie im Hintergrund nicht, fragt
+  der Dienst nicht erneut (sonst käme bei jedem Abruf eine Anfrage aufs Telefon), bis ein Abruf von Hand sie wieder
+  bekommen hat. Alle 90 Tage verlangt die ING außerdem einen Login im Online-Banking.
+- Die App merkt sich die Systemkennung und die Bankdaten von FinTS in der Datenbank (ohne PIN) und je Tag den Wert
+  des Depots.
+
 ## Paperless-ngx
 
 1. In Paperless unter „Profil“ ein API-Token erzeugen und in der App unter „Einstellungen“ mit der URL eintragen
@@ -376,6 +398,9 @@ stehen dort nur Anzahlen und Laufzeiten, keine Beträge, Namen oder Rechnungsnum
 | `finanzomat_bankkonto_info{bank,konto,buchhaltung}` | je verbundenem Konto; `konto` ist der Bankname, bei mehreren Konten einer Bank mit Nummer (keine IBAN) |
 | `finanzomat_bankkonto_freigabe_tage`, `…_freigabe_bis_timestamp_seconds` | Restlaufzeit der Freigabe der Bank, für einen Alarm vor dem Ablauf |
 | `finanzomat_bankkonto_letzter_abruf_timestamp_seconds`, `…_abrufe_frei`, `…_fehler`, `…_umsaetze` | letzter erfolgreicher Abruf, freie Abrufe in 24 Stunden, Fehler beim letzten Abruf, Umsätze in der Übersicht (kein Saldo) |
+| `finanzomat_depotabruf_total{ausloeser,ergebnis}` | Depotabrufe über FinTS: ok, fehler, freigabe (App-Freigabe fehlt), uebersprungen |
+| `finanzomat_depot_positionen{bank,depot}`, `…_letzter_abruf_timestamp_seconds` | Wertpapiere je Depot und letzter erfolgreicher Abruf (kein Wert, keine Depotnummer) |
+| `finanzomat_depot_freigabe_noetig`, `finanzomat_depot_fehler` | 1, wenn der Depotabruf auf eine Freigabe in der ING-App wartet bzw. zuletzt fehlschlug |
 | `process_*`, `python_*` | Speicher, CPU und Garbage Collector des Prozesses |
 
 **Protokoll:** Alles, was die App und uvicorn protokollieren (Start, Zugriffe außer `/metrics`, Importe,
