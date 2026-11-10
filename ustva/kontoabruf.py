@@ -46,6 +46,7 @@ from .models import BankKonto, Umsatz
 
 API = "https://api.enablebanking.com"
 PRAEFIX = "eb:"  # Prüfsummen abgerufener Umsätze; CSV-Umsätze haben eine reine SHA-256
+IMPORT_PRAEFIX = "camt:"  # aus einer CAMT.053-Datei eingelesen (ustva/camt.py)
 HOECHSTE_FREIGABE = timedelta(days=180)
 ERSTER_ABRUF = timedelta(days=90)  # so weit liefern die meisten Banken ohne neue Freigabe zurück
 UEBERLAPPUNG = timedelta(days=7)  # späte Buchungen mit älterem Buchungstag mitnehmen
@@ -335,6 +336,19 @@ def umsatz_aus(tx: dict, konto: BankKonto) -> Umsatz | None:
                   original_waehrung=waehrung)
 
 
+VORGEMERKT = {"PDNG", "PEND", "PENDING", "INFO"}
+
+
+def vorgemerkt_aus(tx: dict, konto: BankKonto, heute: date) -> Umsatz | None:
+    """Ein vorgemerkter Umsatz (Kartenzahlung, angekündigte Lastschrift) zur Anzeige; ohne Datum mit heute."""
+    if str(tx.get("status") or "").upper() not in VORGEMERKT:
+        return None
+    gebucht = {**tx, "status": "BOOK"}
+    if _datum(gebucht) is None:
+        gebucht["booking_date"] = heute.isoformat()
+    return umsatz_aus(gebucht, konto)
+
+
 def pruefsummen(buchungen: list[tuple[dict, Umsatz]], konto: BankKonto) -> None:
     """Stabile Prüfsumme je Buchung: aus der Kennung der Bank, sonst aus dem Inhalt.
 
@@ -355,7 +369,11 @@ def pruefsummen(buchungen: list[tuple[dict, Umsatz]], konto: BankKonto) -> None:
 
 
 def aus_csv(u: Umsatz) -> bool:
-    return not u.pruefsumme.startswith(PRAEFIX)
+    return not u.pruefsumme.startswith((PRAEFIX, IMPORT_PRAEFIX))
+
+
+def eingelesen(u: Umsatz) -> bool:
+    return u.pruefsumme.startswith(IMPORT_PRAEFIX)
 
 
 def _gleich(a: Umsatz, b: Umsatz) -> bool:
@@ -363,15 +381,19 @@ def _gleich(a: Umsatz, b: Umsatz) -> bool:
 
 
 def schon_per_csv(db: Datenbank, u: Umsatz, vergeben: set[int]) -> Umsatz | None:
-    """Der per CSV eingelesene Umsatz, der diesem abgerufenen entspricht (zeitlich nächster)."""
+    """Der per CSV eingelesene Umsatz, der diesem abgerufenen entspricht (zeitlich nächster).
+
+    Ein abgerufener Umsatz übernimmt auch einen aus einer CAMT-Datei, ein eingelesener nur CSV-Zeilen.
+    """
     tage = timedelta(days=CSV_TAGE)
+    abgerufen = u.pruefsumme.startswith(PRAEFIX)
     kandidaten = [v for v in db.umsaetze_von_bis(u.konto, u.buchungsdatum - tage, u.buchungsdatum + tage)
-                  if aus_csv(v) and v.id not in vergeben and _gleich(u, v)]
+                  if (aus_csv(v) or (abgerufen and eingelesen(v))) and v.id not in vergeben and _gleich(u, v)]
     return min(kandidaten, key=lambda v: abs((v.buchungsdatum - u.buchungsdatum).days), default=None)
 
 
 def schon_abgerufen(db: Datenbank, umsaetze: list[Umsatz]) -> list[bool]:
-    """Für den CSV-Import: welche Zeilen schon über die Schnittstelle kamen.
+    """Für den CSV-Import: welche Zeilen schon über die Schnittstelle oder aus einer CAMT-Datei kamen.
 
     Gleiche Umsätze (Konto, Tag, Betrag) zählen einzeln: Gibt es zwei abgerufene, gelten die ersten zwei
     gleichen CSV-Zeilen als vorhanden, eine dritte nicht.
@@ -474,6 +496,26 @@ def buchhaltung_uebernehmen(db: Datenbank, cfg: Config, k: BankKonto, buchungen:
         a.neu += 1
 
 
+def eingelesene_uebernehmen(db: Datenbank, schluessel: str, umsaetze: list[Umsatz]) -> int:
+    """Abgerufene Umsätze, die schon aus einer CAMT-Datei in der Übersicht stehen, übernehmen deren Zeile.
+
+    Die Zeile bekommt die Prüfsumme der Schnittstelle, damit sie beim Speichern nicht ein zweites Mal entsteht.
+    """
+    tage = timedelta(days=CSV_TAGE)
+    anzahl = 0
+    for u in umsaetze:
+        if db.konto_buchung_vorhanden(u.pruefsumme):
+            continue
+        kandidaten = [z for z in db.konto_buchungen_von_bis(schluessel, u.buchungsdatum - tage,
+                                                            u.buchungsdatum + tage)
+                      if z["pruefsumme"].startswith(IMPORT_PRAEFIX) and Decimal(z["betrag"]) == u.betrag]
+        if kandidaten:
+            z = min(kandidaten, key=lambda z: abs((date.fromisoformat(z["buchungsdatum"]) - u.buchungsdatum).days))
+            db.konto_buchung_umschluesseln(z["pruefsumme"], u.pruefsumme)  # zählt danach als abgerufen
+            anzahl += 1
+    return anzahl
+
+
 def aus_uebersicht(db: Datenbank, cfg: Config, k: BankKonto, umrechner=None) -> Abruf:
     """Nach dem Einschalten: die schon abgerufenen Buchungen des Kontos in die Buchhaltung übernehmen."""
     from .bank import abgleich_ausfuehren
@@ -551,18 +593,22 @@ def _konto_abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, k: BankKonto, 
             return
         db.bank_konto_speichern(k)  # der Abruf zählt trotzdem
         return
-    buchungen = []
+    buchungen, vorgemerkt = [], []
     for tx in roh:
-        if (u := umsatz_aus(tx, k)) is None:
-            a.vorgemerkt += 1
-        else:
+        if (u := umsatz_aus(tx, k)) is not None:
             buchungen.append((tx, u))
+            continue
+        a.vorgemerkt += 1
+        if (v := vorgemerkt_aus(tx, k, jetzt.date())) is not None:
+            vorgemerkt.append(v)
     pruefsummen(buchungen, k)
     umsaetze = [u for _, u in buchungen]
     if k.aktiv or trocken:
         buchhaltung_uebernehmen(db, cfg, k, umsaetze, a, trocken)
     if trocken:
         return
+    db.konto_vorgemerkt_ersetzen(k.schluessel, vorgemerkt)
+    eingelesene_uebernehmen(db, k.schluessel, umsaetze)
     a.uebersicht = db.konto_buchungen_speichern(k.schluessel, umsaetze)
     try:
         if (saldo := saldo_aus(eb.salden(k.uid))) is not None:

@@ -69,6 +69,49 @@ async function abrufen() {
   }
 }
 
+// Alte Kontoauszüge (CAMT.053, z. B. aus MoneyMoney) in die Übersicht
+const dateiFeld = ref<HTMLInputElement | null>(null);
+const liestEin = ref(false);
+
+async function einlesen(ereignis: Event) {
+  const feld = ereignis.target as HTMLInputElement;
+  const dateien = [...(feld.files ?? [])];
+  feld.value = "";
+  if (!dateien.length) return;
+  liestEin.value = true;
+  try {
+    const zeilen: string[] = [];
+    let neu = 0;
+    let fehler = false;
+    for (const datei of dateien) {
+      try {
+        for (const a of (await api.kontoauszugEinlesen(datei)).auszuege) {
+          if (a.fehler) {
+            fehler = true;
+            zeilen.push(`${ibanKurz(a.iban)}: ${a.fehler}`);
+          } else {
+            neu += a.neu;
+            const zeitraum = a.von && a.bis ? ` (${datum(a.von)} bis ${datum(a.bis)})` : "";
+            zeilen.push(`${a.konto}${zeitraum}: ${a.neu} neu, ${a.vorhanden} schon vorhanden`);
+          }
+        }
+      } catch (e) {
+        fehler = true;
+        zeilen.push(`${datei.name}: ${(e as Error).message}`);
+      }
+    }
+    toast.add({
+      severity: fehler ? "warn" : "success",
+      summary: neu ? `${neu} Umsätze eingelesen` : "Keine neuen Umsätze",
+      detail: zeilen.join(" · ") || undefined,
+      life: fehler ? 10000 : 6000,
+    });
+    await laden();
+  } finally {
+    liestEin.value = false;
+  }
+}
+
 onMounted(laden);
 
 // Uhrzeit in der Zeitzone des Browsers
@@ -129,10 +172,17 @@ const gefiltert = computed(() =>
     Noch kein Konto verbunden. Im Container: <code>finanz-o-mat bank verbinden --bank ING</code>
   </Message>
 
-  <div v-if="konten.length" class="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
+  <!--
+    Ab lg ist die Seite genau ein Fenster hoch: Beim Scrollen verschwindet der Kopf der App, danach steht die Seite,
+    und Kontenliste und Umsätze scrollen in sich. Darunter bleibt nur der Rand von <main> (pb-8).
+  -->
+  <div
+    v-if="konten.length"
+    class="grid gap-4 lg:mt-4 lg:h-[calc(100dvh-4rem)] lg:grid-cols-[18rem_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]"
+  >
     <!-- Kontenliste, je Konto ein Knoten -->
     <nav
-      class="h-fit rounded-xl border border-surface-200 bg-surface-0 p-2 dark:border-surface-700 dark:bg-surface-900"
+      class="h-fit rounded-xl border border-surface-200 bg-surface-0 p-2 lg:max-h-full lg:overflow-y-auto dark:border-surface-700 dark:bg-surface-900"
       aria-label="Konten"
     >
       <div class="px-2 pt-1 pb-2 text-sm font-semibold text-muted-color">Konten</div>
@@ -174,7 +224,7 @@ const gefiltert = computed(() =>
 
     <!-- Umsätze des gewählten Kontos -->
     <section
-      class="min-w-0 rounded-xl border border-surface-200 bg-surface-0 p-4 dark:border-surface-700 dark:bg-surface-900"
+      class="min-w-0 rounded-xl border border-surface-200 bg-surface-0 p-4 lg:flex lg:min-h-0 lg:flex-col dark:border-surface-700 dark:bg-surface-900"
     >
       <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div class="min-w-0">
@@ -205,6 +255,17 @@ const gefiltert = computed(() =>
               {{ gewaehlt.saldo === null ? "–" : `${betrag(gewaehlt.saldo)} ${gewaehlt.waehrung === "EUR" ? "€" : gewaehlt.waehrung}` }}
             </div>
           </div>
+          <input ref="dateiFeld" type="file" accept=".xml,application/xml,text/xml" multiple hidden @change="einlesen" />
+          <Button
+            v-tooltip.bottom="'Alte Kontoauszüge als CAMT.053 einlesen, z. B. aus MoneyMoney (Ablage → Exportieren)'"
+            icon="pi pi-upload"
+            label="Auszüge einlesen"
+            size="small"
+            severity="secondary"
+            text
+            :loading="liestEin"
+            @click="dateiFeld?.click()"
+          />
           <Button
             v-tooltip.bottom="
               abrufFrei
@@ -231,10 +292,29 @@ const gefiltert = computed(() =>
       <div class="mb-2 flex justify-end">
         <SuchFeld v-model="suche" :treffer="gefiltert.length" :gesamt="buchungen.length" />
       </div>
-      <DataTable :value="gefiltert" :loading="laedt" size="small" data-key="pruefsumme" scrollable paginator :rows="50">
+      <DataTable
+        :value="gefiltert"
+        :loading="laedt"
+        size="small"
+        data-key="pruefsumme"
+        scrollable
+        scroll-height="flex"
+        class="lg:min-h-0 lg:flex-1"
+        :row-class="(b: KontoBuchung) => (b.vorgemerkt ? 'vorgemerkt' : '')"
+        paginator
+        :rows="100"
+      >
         <template #empty><span class="text-muted-color">Keine Umsätze.</span></template>
         <Column header="Datum" class="w-28 whitespace-nowrap">
-          <template #body="{ data }">{{ datum(data.buchungsdatum) }}</template>
+          <template #body="{ data }">
+            {{ datum(data.buchungsdatum) }}
+            <small
+              v-if="data.vorgemerkt"
+              v-tooltip.top="'Noch nicht gebucht. Kann sich bis zur Buchung ändern oder wegfallen.'"
+              class="block text-muted-color"
+              >vorgemerkt</small
+            >
+          </template>
         </Column>
         <Column v-if="!gewaehlt" header="Konto" class="w-36">
           <template #body="{ data }">
@@ -264,3 +344,13 @@ const gefiltert = computed(() =>
   </div>
 </template>
 
+<style scoped>
+/* Vorgemerkte Umsätze schraffiert wie in MoneyMoney */
+:deep(tr.vorgemerkt) {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 10px,
+    color-mix(in srgb, var(--p-text-color) 7%, transparent) 10px 20px
+  );
+}
+</style>

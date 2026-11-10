@@ -311,6 +311,27 @@ def bank_befehl(args, cfg: Config, db: Datenbank, eingabe=input, client=None) ->
                 print(f"Aus der Kontenübersicht übernommen: {a.neu} neu, {a.aus_csv} schon aus CSV, "
                       f"{a.vorhanden} schon vorhanden")
         return 0
+    if args.schritt == "einlesen":
+        from . import camt
+
+        fehler = 0
+        for pfad in args.datei:
+            try:
+                ergebnisse = camt.einlesen(db, Path(pfad).read_bytes(), trocken=args.trocken)
+            except (OSError, camt.CamtFehler) as e:
+                print(f"{pfad}: {e}", file=sys.stderr)
+                fehler += 1
+                continue
+            for e in ergebnisse:
+                zeitraum = f" ({e.von:%d.%m.%Y} bis {e.bis:%d.%m.%Y})" if e.von and e.bis else ""
+                if e.fehler:
+                    print(f"{pfad}: {e.iban}{zeitraum}: {e.fehler}", file=sys.stderr)
+                    fehler += 1
+                    continue
+                print(f"{pfad}: {e.konto} {e.iban}{zeitraum}: {e.neu} neu, {e.vorhanden} schon vorhanden"
+                      + (f", {e.vorgemerkt} vorgemerkt übersprungen" if e.vorgemerkt else "")
+                      + (" (Probelauf, nichts gespeichert)" if args.trocken else ""))
+        return 1 if fehler else 0
     try:
         eb = ka.EnableBanking.aus_config(cfg, client)
         if args.schritt == "banken":
@@ -444,6 +465,9 @@ def main(argv: list[str] | None = None) -> int:
     b5.add_argument("--von", help="ab Buchungstag JJJJ-MM-TT (Standard: seit dem letzten Abruf, sonst 90 Tage)")
     b5.add_argument("--konto", help="nur dieses Konto (IBAN), auch wenn es aus ist")
     b5.add_argument("--trocken", action="store_true", help="Probelauf: Umsätze nur zeigen, nichts speichern")
+    b6 = bk_sub.add_parser("einlesen", help="alte Kontoauszüge (CAMT.053, z. B. aus MoneyMoney) in die Kontenübersicht")
+    b6.add_argument("datei", nargs="+", help="CAMT.053-Datei(en), .xml")
+    b6.add_argument("--trocken", action="store_true", help="Probelauf: nur zählen, nichts speichern")
     args = parser.parse_args(argv)
 
     cfg = Config.aus_umgebung()

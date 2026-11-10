@@ -221,7 +221,8 @@ onMounted(starten);
     </Tabs>
   </main>
 
-  <footer class="mx-auto max-w-7xl px-4 pb-8 text-sm text-muted-color">
+  <!-- Im Reiter „Konten“ füllt die Seite das Fenster, der Hinweis würde nur darunter hängen -->
+  <footer v-if="tab !== 'konten'" class="mx-auto max-w-7xl px-4 pb-8 text-sm text-muted-color">
     Keine Steuerberatung. Die App übermittelt nichts ans Finanzamt; Abgabe und Zahlung erledigst du selbst in Mein
     ELSTER. Bei Sonderfällen beim Finanzamt oder Steuerberater nachfragen.
   </footer>

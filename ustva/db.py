@@ -77,6 +77,19 @@ CREATE TABLE IF NOT EXISTS bank_konten (  -- Konten mit Freigabe über Enable Ba
     abrufe TEXT NOT NULL DEFAULT '',
     fehler TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS konto_vorgemerkt (  -- vorgemerkte Umsätze, bei jedem Abruf je Konto ersetzt
+    konto TEXT NOT NULL,  -- bank_konten.schluessel
+    nr INTEGER NOT NULL,
+    buchungsdatum TEXT NOT NULL,
+    betrag TEXT NOT NULL,
+    partner TEXT NOT NULL DEFAULT '',
+    iban TEXT NOT NULL DEFAULT '',
+    verwendungszweck TEXT NOT NULL DEFAULT '',
+    typ TEXT NOT NULL DEFAULT '',
+    original_betrag TEXT,
+    original_waehrung TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (konto, nr)
+);
 CREATE TABLE IF NOT EXISTS konto_buchungen (  -- Kontenübersicht: alle Buchungen aller verbundenen Konten
     pruefsumme TEXT PRIMARY KEY,
     konto TEXT NOT NULL,  -- bank_konten.schluessel
@@ -522,6 +535,38 @@ class Datenbank:
                 sql + (" WHERE konto = ?" if konto else "") + " ORDER BY buchungsdatum DESC, rowid DESC",
                 (konto,) if konto else ()).fetchall()
         return [dict(z) for z in zeilen]
+
+    def konto_vorgemerkt_ersetzen(self, konto: str, umsaetze: list[Umsatz]) -> None:
+        werte = [[konto, nr, u.buchungsdatum.isoformat(), str(u.betrag), u.partner, u.iban, u.verwendungszweck, u.typ,
+                  None if u.original_betrag is None else str(u.original_betrag), u.original_waehrung]
+                 for nr, u in enumerate(umsaetze)]
+        with self._lock, self._con:
+            self._con.execute("DELETE FROM konto_vorgemerkt WHERE konto = ?", (konto,))
+            self._con.executemany("INSERT INTO konto_vorgemerkt VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", werte)
+
+    def konto_vorgemerkt(self, konto: str | None = None) -> list[dict]:
+        """Neueste zuerst; ``konto`` ist bank_konten.schluessel."""
+        with self._lock:
+            zeilen = self._con.execute(
+                "SELECT * FROM konto_vorgemerkt" + (" WHERE konto = ?" if konto else "")
+                + " ORDER BY buchungsdatum DESC, konto, nr", (konto,) if konto else ()).fetchall()
+        return [dict(z) for z in zeilen]
+
+    def konto_buchung_vorhanden(self, pruefsumme: str) -> bool:
+        with self._lock:
+            z = self._con.execute("SELECT 1 FROM konto_buchungen WHERE pruefsumme = ?", (pruefsumme,)).fetchone()
+        return z is not None
+
+    def konto_buchungen_von_bis(self, konto: str, von: date, bis: date) -> list[dict]:
+        with self._lock:
+            zeilen = self._con.execute(
+                "SELECT * FROM konto_buchungen WHERE konto = ? AND buchungsdatum BETWEEN ? AND ? "
+                "ORDER BY buchungsdatum, rowid", (konto, von.isoformat(), bis.isoformat())).fetchall()
+        return [dict(z) for z in zeilen]
+
+    def konto_buchung_umschluesseln(self, alt: str, neu: str) -> None:
+        with self._lock, self._con:
+            self._con.execute("UPDATE konto_buchungen SET pruefsumme = ? WHERE pruefsumme = ?", (neu, alt))
 
     def konto_buchungen_anzahl(self, konto: str) -> int:
         with self._lock:
