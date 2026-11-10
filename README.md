@@ -220,7 +220,8 @@ finanz-o-mat bank konten                     # Konten, Saldo, Freigabe, letzter 
 - Die Freigabe gilt so lange, wie die Bank erlaubt (meist 90 oder 180 Tage). Danach einfach erneut `bank verbinden`;
   Name und Schalter der Konten bleiben. `bank abrufen` warnt zwei Wochen vorher.
 - Der erste Abruf holt 90 Tage, danach ab einer Woche vor dem letzten Buchungstag (`--von JJJJ-MM-TT` für mehr, soweit
-  die Bank liefert). Vorgemerkte Umsätze kommen erst, wenn die Bank sie bucht.
+  die Bank liefert). Vorgemerkte Umsätze stehen schraffiert oben in der Kontenübersicht und werden bei jedem
+  Abruf ersetzt; in die Buchhaltung kommen sie erst, wenn die Bank sie bucht.
 - Der Dienst ruft selbst ab, zu den Uhrzeiten in `KONTOABRUF_ZEITEN` (Standard `09:00,12:30,16:00,19:30`, deutsche
   Zeit, nachts nicht; `aus` = nur von Hand). War der Dienst zur Abrufzeit aus, holt er den Abruf bis zu einer Stunde
   später nach. Ohne Anmeldung bei der Bank erlaubt PSD2 höchstens vier Abrufe je Konto in 24 Stunden; die App zählt
