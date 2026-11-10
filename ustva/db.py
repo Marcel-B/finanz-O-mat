@@ -103,6 +103,42 @@ CREATE TABLE IF NOT EXISTS konto_buchungen (  -- Kontenübersicht: alle Buchunge
     original_waehrung TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS konto_buchungen_konto ON konto_buchungen(konto, buchungsdatum);
+CREATE TABLE IF NOT EXISTS fints_zustand (  -- FinTS-Zugang (ustva/depot.py): Bank- und Nutzerdaten, letzter Versuch
+    schluessel TEXT PRIMARY KEY,
+    daten BLOB,  -- python-fints deconstruct(), ohne PIN
+    fehler TEXT NOT NULL DEFAULT '',
+    freigabe INTEGER NOT NULL DEFAULT 0,  -- 1: wartet auf eine Freigabe in der App, im Hintergrund nicht fragen
+    versucht TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS depots (  -- Depots in der Kontenübersicht, nur Bestand
+    schluessel TEXT PRIMARY KEY,
+    bank TEXT NOT NULL,
+    nummer TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    waehrung TEXT NOT NULL DEFAULT 'EUR',
+    wert TEXT NOT NULL DEFAULT '',
+    einstandswert TEXT NOT NULL DEFAULT '',
+    stand TEXT NOT NULL DEFAULT '',  -- jüngstes Kursdatum
+    abgerufen TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS depot_positionen (  -- bei jedem Abruf je Depot ersetzt
+    depot TEXT NOT NULL,  -- depots.schluessel
+    isin TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    stueck TEXT NOT NULL,
+    kurs TEXT,
+    waehrung TEXT NOT NULL DEFAULT 'EUR',
+    kursdatum TEXT NOT NULL DEFAULT '',
+    wert TEXT,
+    einstand TEXT,  -- Einstandskurs je Stück
+    PRIMARY KEY (depot, isin)
+);
+CREATE TABLE IF NOT EXISTS depot_werte (  -- Wert je Depot und Tag (letzter Abruf des Tages), für einen Verlauf
+    depot TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    wert TEXT NOT NULL,
+    PRIMARY KEY (depot, tag)
+);
 CREATE TABLE IF NOT EXISTS einstellungen (
     schluessel TEXT PRIMARY KEY,
     wert TEXT NOT NULL
@@ -571,6 +607,63 @@ class Datenbank:
     def konto_buchungen_anzahl(self, konto: str) -> int:
         with self._lock:
             return self._con.execute("SELECT COUNT(*) FROM konto_buchungen WHERE konto = ?", (konto,)).fetchone()[0]
+
+    # FinTS-Zugang und Depots (ustva/depot.py)
+    def fints_zustand(self, schluessel: str) -> dict | None:
+        with self._lock:
+            z = self._con.execute("SELECT * FROM fints_zustand WHERE schluessel = ?", (schluessel,)).fetchone()
+        return None if z is None else dict(z) | {"freigabe": bool(z["freigabe"])}
+
+    def fints_zustand_speichern(self, schluessel: str, *, daten: bytes | None = None, fehler: str | None = None,
+                                freigabe: bool | None = None, versucht: str | None = None) -> None:
+        """Nur die übergebenen Felder; ``daten=None`` lässt den gespeicherten Zustand stehen."""
+        with self._lock, self._con:
+            self._con.execute("INSERT OR IGNORE INTO fints_zustand (schluessel) VALUES (?)", (schluessel,))
+            for spalte, wert in (("daten", daten), ("fehler", fehler), ("versucht", versucht),
+                                 ("freigabe", None if freigabe is None else int(freigabe))):
+                if wert is not None:
+                    self._con.execute(f"UPDATE fints_zustand SET {spalte} = ? WHERE schluessel = ?",
+                                      (wert, schluessel))
+
+    def depot_speichern(self, d, abgerufen: str) -> None:
+        """``d`` ist ein ``depot.Depot``; ersetzt die Positionen und merkt sich den Wert des Tages."""
+        werte = [[d.schluessel, p.isin, p.name, str(p.stueck), None if p.kurs is None else str(p.kurs), p.waehrung,
+                  p.kursdatum.isoformat() if p.kursdatum else "", None if p.wert is None else str(p.wert),
+                  None if p.einstand is None else str(p.einstand)] for p in d.positionen]
+        einstand = [p.einstandswert for p in d.positionen]
+        einstandswert = "" if not einstand or None in einstand else str(sum(einstand))
+        stand = max((p.kursdatum for p in d.positionen if p.kursdatum), default=None)
+        with self._lock, self._con:
+            self._con.execute(
+                "INSERT INTO depots (schluessel, bank, nummer, name, waehrung, wert, einstandswert, stand, abgerufen) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(schluessel) DO UPDATE SET bank = excluded.bank, "
+                "nummer = excluded.nummer, name = excluded.name, waehrung = excluded.waehrung, wert = excluded.wert, "
+                "einstandswert = excluded.einstandswert, stand = excluded.stand, abgerufen = excluded.abgerufen",
+                (d.schluessel, d.bank, d.nummer, d.name, d.waehrung, str(d.wert), einstandswert,
+                 stand.isoformat() if stand else "", abgerufen))
+            self._con.execute("DELETE FROM depot_positionen WHERE depot = ?", (d.schluessel,))
+            self._con.executemany("INSERT INTO depot_positionen VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", werte)
+            self._con.execute("INSERT OR REPLACE INTO depot_werte VALUES (?, ?, ?)",
+                              (d.schluessel, abgerufen[:10], str(d.wert)))
+
+    def depots(self) -> list[dict]:
+        with self._lock:
+            zeilen = self._con.execute(
+                "SELECT d.*, (SELECT COUNT(*) FROM depot_positionen p WHERE p.depot = d.schluessel) AS positionen "
+                "FROM depots d ORDER BY bank, name, nummer").fetchall()
+        return [dict(z) for z in zeilen]
+
+    def depot_positionen(self, depot: str) -> list[dict]:
+        """Nach Wert, größte zuerst."""
+        with self._lock:
+            zeilen = self._con.execute("SELECT * FROM depot_positionen WHERE depot = ?", (depot,)).fetchall()
+        return sorted((dict(z) for z in zeilen), key=lambda z: -Decimal(z["wert"] or 0))
+
+    def depot_werte(self, depot: str) -> list[dict]:
+        with self._lock:
+            zeilen = self._con.execute("SELECT tag, wert FROM depot_werte WHERE depot = ? ORDER BY tag",
+                                       (depot,)).fetchall()
+        return [dict(z) for z in zeilen]
 
     def bank_regeln(self) -> dict[str, str]:
         with self._lock:

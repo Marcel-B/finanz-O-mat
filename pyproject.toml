@@ -12,6 +12,7 @@ dependencies = [
     "XlsxWriter>=3.2",
     "prometheus-client>=0.20",
     "PyJWT[crypto]>=2.8",  # ID-Token des Identity-Servers prüfen
+    "fints>=5.0,<6",  # Depotbestand der ING über FinTS (ustva/depot.py)
 ]
 
 [project.optional-dependencies]

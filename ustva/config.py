@@ -83,6 +83,11 @@ class Config:
     # Im Dienst zu diesen Uhrzeiten abrufen (Europe/Berlin), leer = nur von Hand. PSD2 erlaubt 4 Abrufe in 24 Stunden.
     kontoabruf_zeiten: list[str] = field(default_factory=lambda: list(ABRUFZEITEN))
 
+    # Bestand des ING-Direkt-Depots über FinTS (siehe ustva/depot.py); PSD2 liefert keine Depots
+    fints_produkt_id: str = ""  # Produkt-ID der Deutschen Kreditwirtschaft
+    ing_fints_zugang: str = ""  # Zugangsnummer: die letzten 10 Stellen der IBAN
+    ing_fints_pin: str = ""  # PIN fürs Internetbanking
+
     ezb_kurse: bool = True  # Monatsmittel der EZB-Referenzkurse abrufen, wenn kein Kurs hinterlegt ist
 
     app_benutzer: str = ""
@@ -137,6 +142,9 @@ class Config:
             enable_banking_schluessel=Path(env["ENABLE_BANKING_SCHLUESSEL"])
             if env.get("ENABLE_BANKING_SCHLUESSEL", "").strip() else None,
             kontoabruf_zeiten=_uhrzeiten(env.get("KONTOABRUF_ZEITEN")),
+            fints_produkt_id=env.get("FINTS_PRODUKT_ID", "").strip(),
+            ing_fints_zugang=env.get("ING_FINTS_ZUGANG", "").replace(" ", ""),
+            ing_fints_pin=env.get("ING_FINTS_PIN", ""),
             ezb_kurse=_bool(env.get("EZB_KURSE"), True),
             app_benutzer=env.get("APP_BENUTZER", ""),
             app_passwort=env.get("APP_PASSWORT", ""),

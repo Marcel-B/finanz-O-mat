@@ -60,6 +60,8 @@ ENABLE_BANKING = Counter("finanzomat_enable_banking_requests_total", "Anfragen a
 ENABLE_BANKING_DAUER = Histogram("finanzomat_enable_banking_request_duration_seconds",
                                  "Dauer der Anfragen an die Enable-Banking-API", ["endpunkt"],
                                  buckets=(0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60))
+DEPOTABRUFE = Counter("finanzomat_depotabruf_total", "Depotabrufe über FinTS je Auslöser und Ergebnis",
+                      ["ausloeser", "ergebnis"])
 
 STUFEN = {logging.DEBUG: "debug", logging.INFO: "info", logging.WARNING: "warning"}
 # Diese Logger schreibt der Versender selbst; sie dürfen nicht wieder bei ihm landen
@@ -104,6 +106,11 @@ def kontoabruf_zaehlen(abrufe, ausloeser: str) -> None:
             KONTO_UMSAETZE.labels(a.konto.bank, "uebersicht").inc(a.uebersicht)
         if a.neu:
             KONTO_UMSAETZE.labels(a.konto.bank, "buchhaltung").inc(a.neu)
+
+
+def depotabruf_zaehlen(abruf, ausloeser: str) -> None:
+    """Zählt das Ergebnis von depot.abrufen(): ok, fehler, freigabe (App-Freigabe fehlt) oder uebersprungen."""
+    DEPOTABRUFE.labels(ausloeser, abruf.ergebnis).inc()
 
 
 def konto_namen(konten) -> dict[str, str]:
@@ -160,6 +167,7 @@ class Bestand:
                                 value=sum(1 for u in umsaetze if u.beleg_id is None and not u.ignoriert))
 
         yield from self._bankkonten()
+        yield from self._depots()
 
         b = backup.lesen(self.backup_verzeichnis)
         if b["unterstuetzt"]:
@@ -212,6 +220,33 @@ class Bestand:
             fehler.add_metric(werte, 1 if k.fehler else 0)
             umsaetze.add_metric(werte, self.db.konto_buchungen_anzahl(k.schluessel))
         yield from (info, tage, bis, zuletzt, frei, fehler, umsaetze)
+
+    def _depots(self):
+        """Je Depot: Anzahl der Positionen und letzter Abruf; dazu, ob der FinTS-Zugang auf eine Freigabe wartet.
+
+        Keine Werte oder Depotnummern, /metrics ist ohne Anmeldung erreichbar.
+        """
+        from . import depot
+
+        zustand = self.db.fints_zustand(depot.ZUGANG)
+        depots = self.db.depots()
+        if not zustand and not depots:
+            return
+        positionen = GaugeMetricFamily("finanzomat_depot_positionen", "Wertpapiere im Depot", labels=["bank", "depot"])
+        zuletzt = GaugeMetricFamily("finanzomat_depot_letzter_abruf_timestamp_seconds",
+                                    "Letzter erfolgreicher Depotabruf", labels=["bank", "depot"])
+        for d in depots:
+            werte = [d["bank"], d["name"]]
+            positionen.add_metric(werte, d["positionen"])
+            if zeit := _zeitpunkt(d["abgerufen"]):
+                zuletzt.add_metric(werte, zeit)
+        yield from (positionen, zuletzt)
+        if zustand:
+            yield GaugeMetricFamily("finanzomat_depot_freigabe_noetig",
+                                    "1, wenn der Depotabruf auf eine Freigabe in der ING-App wartet",
+                                    value=1 if zustand["freigabe"] else 0)
+            yield GaugeMetricFamily("finanzomat_depot_fehler", "1, wenn der letzte Depotabruf fehlgeschlagen ist",
+                                    value=1 if zustand["fehler"] else 0)
 
 
 def _zeitpunkt(text: str | None) -> float | None:

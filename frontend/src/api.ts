@@ -483,6 +483,8 @@ export interface KontenUebersicht {
   eingerichtet: boolean;
   zeiten: string[]; // feste Abrufzeiten im Dienst (HH:MM, Europe/Berlin)
   abrufe_je_tag: number;
+  depot: DepotZugang;
+  depots: Depot[];
   summen: Record<string, string>;
   konten: BankKonto[];
 }
@@ -496,6 +498,48 @@ export interface KontoauszugEingelesen {
   von: string | null;
   bis: string | null;
   fehler: string;
+}
+
+// Depot über FinTS (ING-Direkt-Depot), nur Bestand
+export interface Depot {
+  schluessel: string;
+  bank: string;
+  name: string;
+  waehrung: string;
+  wert: string | null;
+  einstandswert: string | null; // leer, wenn bei einer Position der Einstand fehlt
+  stand: string; // jüngstes Kursdatum
+  abgerufen: string;
+  positionen: number;
+}
+
+export interface DepotZugang {
+  eingerichtet: boolean;
+  fehler: string;
+  freigabe: boolean; // wartet auf eine Freigabe in der ING-App
+  versucht: string;
+}
+
+export interface DepotPosition {
+  isin: string;
+  name: string;
+  stueck: string;
+  kurs: string | null;
+  waehrung: string;
+  kursdatum: string;
+  wert: string | null;
+  einstand: string | null; // Einstandskurs je Stück
+}
+
+export interface DepotBestand {
+  positionen: DepotPosition[];
+  verlauf: { tag: string; wert: string }[];
+}
+
+export interface DepotAbruf {
+  fehler: string;
+  freigabe: boolean;
+  depots: { schluessel: string; name: string; positionen: number }[];
 }
 
 export interface KontoBuchung {
@@ -553,6 +597,9 @@ export const api = {
       headers: { "Content-Type": "application/xml" },
     }),
   kontenAbrufen: () => post<KontenAbruf>("/api/konten/abrufen"),
+  depotBestand: (schluessel: string) =>
+    anfrage<DepotBestand>(`/api/konten/depot?schluessel=${encodeURIComponent(schluessel)}`),
+  depotAbrufen: () => post<DepotAbruf>("/api/konten/depot/abrufen"),
   anmeldung: () => anfrage<Anmeldung>("/api/anmeldung"),
   anmelden: (benutzer: string, passwort: string) => post<Anmeldung>("/api/anmelden", { benutzer, passwort }),
   // Bei Identity-Anmeldung kommt die Adresse zum Abmelden beim Identity-Server zurück

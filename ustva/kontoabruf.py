@@ -660,13 +660,46 @@ class Hintergrundabruf:
         self._erledigt: datetime | None = None  # zuletzt bearbeitete Abrufzeit
 
     def einmal(self, eb: EnableBanking | None = None, jetzt: datetime | None = None) -> Abrufe | None:
+        from . import depot
         from .einstellungen import wirksam
 
         jetzt = jetzt or datetime.now(UTC)
         punkt = faellige_zeit(self.zeiten, jetzt.astimezone(self.tz))
-        if punkt is None or punkt == self._erledigt or not self.db.bank_konten():
+        if punkt is None or punkt == self._erledigt:
             return None
+        eb_da = eb or self._eb or (self.cfg.enable_banking_app_id and self.cfg.enable_banking_schluessel)
+        konten = bool(eb_da and self.db.bank_konten())
+        cfg = wirksam(self.cfg, self.db)
+        mit_depot = depot.eingerichtet(cfg)
+        if not konten and not mit_depot:
+            return None  # noch nichts zu tun; ein gleich danach verbundenes Konto kommt noch zu dieser Zeit dran
         self._erledigt = punkt
+        try:
+            return self._konten(eb, jetzt, punkt) if konten else None
+        finally:
+            if mit_depot:
+                self._depot(cfg, jetzt)
+
+    def _depot(self, cfg: Config, jetzt: datetime) -> None:
+        """Depotbestand über FinTS (ustva/depot.py); fragt im Hintergrund keine Freigabe in der App nach."""
+        from . import depot, monitoring
+
+        try:
+            a = depot.abrufen(self.db, cfg, jetzt=jetzt, hintergrund=True)
+        except Exception:  # der Faden darf nicht sterben
+            log.exception("Depotabruf im Hintergrund fehlgeschlagen")
+            return
+        monitoring.depotabruf_zaehlen(a, "zeitplan")
+        if a.fehler:
+            log.warning("Depotabruf: %s", a.fehler)
+        elif a.uebersprungen:
+            log.info("Depotabruf: %s", a.uebersprungen)
+        else:
+            log.info("Depotabruf: %d Positionen", sum(len(d.positionen) for d in a.depots))
+
+    def _konten(self, eb: EnableBanking | None, jetzt: datetime, punkt: datetime) -> Abrufe | None:
+        from .einstellungen import wirksam
+
         try:
             eb = eb or self._eb or EnableBanking.aus_config(self.cfg)
             self._eb = eb
