@@ -74,6 +74,14 @@ def _schluessel_laden(pfad: Path) -> bytes:
         raise KontoabrufFehler(f"Privater Schlüssel {pfad} nicht lesbar: {e.strerror or e}") from e
 
 
+def _endpunkt(pfad: str) -> str:
+    """/accounts/<uid>/transactions → accounts/transactions, damit Konto-IDs keine eigenen Messreihen werden."""
+    teile = [t for t in pfad.split("?")[0].split("/") if t]
+    if teile and teile[0] in ("accounts", "sessions") and len(teile) > 1:
+        return "/".join([teile[0], *teile[2:]]) or teile[0]
+    return teile[0] if teile else ""
+
+
 class EnableBanking:
     """Zugriff auf die API von Enable Banking."""
 
@@ -109,11 +117,19 @@ class EnableBanking:
         return token
 
     def _anfrage(self, methode: str, pfad: str, **kwargs) -> dict:
+        from . import monitoring
+
+        endpunkt = _endpunkt(pfad)
+        start = time.perf_counter()
         try:
             antwort = self.client.request(methode, self.api + pfad, headers={"Authorization": f"Bearer {self._jwt()}"},
                                           **kwargs)
         except httpx.HTTPError as e:
+            monitoring.ENABLE_BANKING.labels(endpunkt, "nicht_erreichbar").inc()
             raise KontoabrufFehler(f"Enable Banking nicht erreichbar: {e}") from e
+        finally:
+            monitoring.ENABLE_BANKING_DAUER.labels(endpunkt).observe(time.perf_counter() - start)
+        monitoring.ENABLE_BANKING.labels(endpunkt, str(antwort.status_code)).inc()
         if antwort.status_code >= 400:
             raise KontoabrufFehler(f"Enable Banking {antwort.status_code}: {_fehlertext(antwort)}")
         return antwort.json() if antwort.content else {}
@@ -503,7 +519,8 @@ def abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, von: date | None = No
             ergebnis.konten.append(a)
             tage = tage_gueltig(k, jetzt)
             if tage is not None and tage < 0 and faellig_nach is not None:
-                continue  # die Übersicht zeigt die abgelaufene Freigabe ohnehin
+                a.uebersprungen = "Freigabe abgelaufen"  # die Übersicht zeigt das ohnehin
+                continue
             if tage is not None and tage < 0:
                 a.fehler = "Freigabe abgelaufen, bitte neu verbinden"
             elif len(zeiten) >= ABRUFE_JE_TAG:
@@ -611,6 +628,9 @@ class Hintergrundabruf:
         except Exception:  # der Faden darf nicht sterben
             log.exception("Kontoabruf im Hintergrund fehlgeschlagen")
             return None
+        from . import monitoring
+
+        monitoring.kontoabruf_zaehlen(e, "zeitplan")
         for a in e.konten:
             if a.fehler:
                 log.warning("Kontoabruf %s: %s", a.konto.iban or a.konto.schluessel, a.fehler)

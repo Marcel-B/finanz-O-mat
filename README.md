@@ -363,6 +363,12 @@ stehen dort nur Anzahlen und Laufzeiten, keine Beträge, Namen oder Rechnungsnum
 | `finanzomat_backup_ok`, `finanzomat_backup_last_success_timestamp_seconds` | Stand des Nextcloud-Backups (nur im Container) |
 | `finanzomat_update_available` | 1, wenn eine neue Version bereitsteht (nur im Container) |
 | `finanzomat_loki_dropped_total` | Zeilen, die Loki nicht erreicht haben |
+| `finanzomat_kontoabruf_total{bank,ausloeser,ergebnis}` | Kontoabrufe über Enable Banking: `zeitplan` oder `knopf`; ok, fehler, uebersprungen |
+| `finanzomat_kontoabruf_umsaetze_total{bank,ziel}` | neu abgerufene Umsätze, `uebersicht` (Reiter „Konten“) oder `buchhaltung` |
+| `finanzomat_enable_banking_requests_total{endpunkt,status}`, `…_request_duration_seconds{endpunkt}` | Anfragen an die API von Enable Banking (`accounts/transactions`, `accounts/balances`, …) |
+| `finanzomat_bankkonto_info{bank,konto,buchhaltung}` | je verbundenem Konto; `konto` ist der Bankname, bei mehreren Konten einer Bank mit Nummer (keine IBAN) |
+| `finanzomat_bankkonto_freigabe_tage`, `…_freigabe_bis_timestamp_seconds` | Restlaufzeit der Freigabe der Bank, für einen Alarm vor dem Ablauf |
+| `finanzomat_bankkonto_letzter_abruf_timestamp_seconds`, `…_abrufe_frei`, `…_fehler`, `…_umsaetze` | letzter erfolgreicher Abruf, freie Abrufe in 24 Stunden, Fehler beim letzten Abruf, Umsätze in der Übersicht (kein Saldo) |
 | `process_*`, `python_*` | Speicher, CPU und Garbage Collector des Prozesses |
 
 **Protokoll:** Alles, was die App und uvicorn protokollieren (Start, Zugriffe außer `/metrics`, Importe,

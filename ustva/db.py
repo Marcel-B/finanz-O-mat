@@ -523,6 +523,10 @@ class Datenbank:
                 (konto,) if konto else ()).fetchall()
         return [dict(z) for z in zeilen]
 
+    def konto_buchungen_anzahl(self, konto: str) -> int:
+        with self._lock:
+            return self._con.execute("SELECT COUNT(*) FROM konto_buchungen WHERE konto = ?", (konto,)).fetchone()[0]
+
     def bank_regeln(self) -> dict[str, str]:
         with self._lock:
             return {z["partner"]: z["grund"] for z in self._con.execute("SELECT * FROM bank_regeln")}
