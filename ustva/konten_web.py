@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
 from . import kontoabruf as ka
+from . import monitoring
 from .config import Config
 from .db import Datenbank
 from .models import BankKonto
@@ -78,6 +79,7 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
         except ka.KontoabrufFehler as e:
             raise HTTPException(400, str(e)) from e
         e = await run_in_threadpool(ka.abrufen, db, cfg, eb, jetzt=_jetzt())
+        monitoring.kontoabruf_zaehlen(e, "knopf")
         return {"zugeordnet": e.zugeordnet, "konten": [
             {"schluessel": a.konto.schluessel, "name": a.konto.bezeichnung or a.konto.bank, "neu": a.uebersicht,
              "fehler": a.fehler, "uebersprungen": a.uebersprungen} for a in e.konten]}

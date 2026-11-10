@@ -469,3 +469,42 @@ def test_api_abrufen_ohne_einrichtung(db):
     app.include_router(konten_web.router(db, Config))
     antwort = TestClient(app).post("/api/konten/abrufen")
     assert antwort.status_code == 400 and "ENABLE_BANKING_APP_ID" in antwort.json()["detail"]
+
+
+def test_metriken(db, eb):
+    from prometheus_client import REGISTRY
+
+    from ustva import monitoring
+
+    def wert(name, **labels):
+        return REGISTRY.get_sample_value(name, labels) or 0.0
+
+    assert list(monitoring.Bestand(db, None, None)._bankkonten()) == []  # ohne Konten keine Reihen
+    db.bank_konto_speichern(konto())
+    db.bank_konto_speichern(privat())
+    vorher = wert("finanzomat_kontoabruf_total", bank="N26", ausloeser="knopf", ergebnis="ok")
+    anfragen = wert("finanzomat_enable_banking_requests_total", endpunkt="accounts/transactions", status="200")
+    monitoring.kontoabruf_zaehlen(ka.abrufen(db, Config(), eb, jetzt=JETZT), "knopf")
+    assert wert("finanzomat_kontoabruf_total", bank="N26", ausloeser="knopf", ergebnis="ok") == vorher + 1
+    # je Konto mindestens eine Seite Umsätze
+    assert wert("finanzomat_enable_banking_requests_total", endpunkt="accounts/transactions",
+                status="200") >= anfragen + 2
+
+    text = monitoring.metriken(monitoring.Bestand(db, None, None))[0].decode()
+    assert 'finanzomat_bankkonto_info{bank="N26",buchhaltung="ja",konto="N26"} 1.0' in text
+    assert 'finanzomat_bankkonto_umsaetze{bank="ING",konto="ING"} 2.0' in text
+    assert 'finanzomat_bankkonto_fehler{bank="N26",konto="N26"} 0.0' in text
+    assert "finanzomat_bankkonto_freigabe_tage" in text and "finanzomat_bankkonto_abrufe_frei" in text
+    # Weder IBAN noch Saldo noch Partner auf der offenen Seite
+    for geheim in (IBAN, PRIVAT_IBAN, "194.98", "Supermarkt", "u-1"):
+        assert geheim not in text
+
+
+def test_konto_namen_und_endpunkt():
+    from ustva import monitoring
+
+    konten = [konto(schluessel="b", bank="bunq"), konto(schluessel="a", bank="bunq"), konto(schluessel="c", bank="ING")]
+    assert monitoring.konto_namen(konten) == {"a": "bunq 1", "b": "bunq 2", "c": "ING"}
+    assert ka._endpunkt("/accounts/u-1/transactions?date_from=2026-01-01") == "accounts/transactions"
+    assert ka._endpunkt("/sessions") == "sessions"
+    assert ka._endpunkt("/aspsps") == "aspsps"

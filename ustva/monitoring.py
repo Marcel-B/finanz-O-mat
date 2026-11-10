@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -51,6 +51,15 @@ IMPORTE = Counter("finanzomat_import_belege_total", "Eingelesene Belege und Kont
 ANMELDUNGEN = Counter("finanzomat_anmeldungen_total", "Anmeldeversuche an der Weboberfläche", ["ergebnis"])
 LOGZEILEN = Counter("finanzomat_log_lines_total", "Protokollzeilen je Quelle und Stufe", ["source", "level"])
 LOKI_VERWORFEN = Counter("finanzomat_loki_dropped_total", "Protokollzeilen, die Loki nicht erreicht haben")
+KONTOABRUFE = Counter("finanzomat_kontoabruf_total", "Kontoabrufe über Enable Banking je Bank, Auslöser und Ergebnis",
+                      ["bank", "ausloeser", "ergebnis"])
+KONTO_UMSAETZE = Counter("finanzomat_kontoabruf_umsaetze_total", "Neu abgerufene Umsätze je Bank und Ziel",
+                         ["bank", "ziel"])
+ENABLE_BANKING = Counter("finanzomat_enable_banking_requests_total", "Anfragen an die Enable-Banking-API",
+                         ["endpunkt", "status"])
+ENABLE_BANKING_DAUER = Histogram("finanzomat_enable_banking_request_duration_seconds",
+                                 "Dauer der Anfragen an die Enable-Banking-API", ["endpunkt"],
+                                 buckets=(0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60))
 
 STUFEN = {logging.DEBUG: "debug", logging.INFO: "info", logging.WARNING: "warning"}
 # Diese Logger schreibt der Versender selbst; sie dürfen nicht wieder bei ihm landen
@@ -84,6 +93,26 @@ def import_zaehlen(name: str, ergebnis: dict) -> None:
             IMPORTE.labels(name, schluessel).inc(wert)
     if fehler := ergebnis.get("fehler"):
         IMPORTE.labels(name, "fehler").inc(len(fehler) if isinstance(fehler, list) else fehler)
+
+
+def kontoabruf_zaehlen(abrufe, ausloeser: str) -> None:
+    """Zählt das Ergebnis von kontoabruf.abrufen(); ``ausloeser``: zeitplan oder knopf."""
+    for a in abrufe.konten:
+        ergebnis = "fehler" if a.fehler else "uebersprungen" if a.uebersprungen else "ok"
+        KONTOABRUFE.labels(a.konto.bank, ausloeser, ergebnis).inc()
+        if a.uebersicht:
+            KONTO_UMSAETZE.labels(a.konto.bank, "uebersicht").inc(a.uebersicht)
+        if a.neu:
+            KONTO_UMSAETZE.labels(a.konto.bank, "buchhaltung").inc(a.neu)
+
+
+def konto_namen(konten) -> dict[str, str]:
+    """Label je Konto ohne IBAN und Inhabernamen: der Bankname, bei mehreren Konten einer Bank mit Nummer."""
+    je_bank: dict[str, list] = {}
+    for k in sorted(konten, key=lambda k: k.schluessel):
+        je_bank.setdefault(k.bank, []).append(k)
+    return {k.schluessel: bank if len(liste) == 1 else f"{bank} {i}"
+            for bank, liste in je_bank.items() for i, k in enumerate(liste, 1)}
 
 
 def _route(request) -> str:
@@ -130,6 +159,8 @@ class Bestand:
         yield GaugeMetricFamily("finanzomat_umsaetze_ohne_beleg", "Kontoumsätze ohne Beleg (nicht ignoriert)",
                                 value=sum(1 for u in umsaetze if u.beleg_id is None and not u.ignoriert))
 
+        yield from self._bankkonten()
+
         b = backup.lesen(self.backup_verzeichnis)
         if b["unterstuetzt"]:
             ok = GaugeMetricFamily("finanzomat_backup_ok", "1, wenn das letzte Nextcloud-Backup geklappt hat")
@@ -142,6 +173,45 @@ class Bestand:
         if u["unterstuetzt"]:
             yield GaugeMetricFamily("finanzomat_update_available", "1, wenn eine neue Version bereitsteht",
                                     value=1 if u["zustand"] in ("neu", "angefordert") else 0)
+
+
+    def _bankkonten(self):
+        """Je über Enable Banking verbundenem Konto: Freigabe, letzter Abruf, freie Abrufe, Fehler (kein Saldo)."""
+        from . import kontoabruf as ka
+
+        konten = self.db.bank_konten()
+        if not konten:
+            return
+        jetzt = datetime.now(UTC)
+        namen = konto_namen(konten)
+        labels = ["bank", "konto"]
+        info = GaugeMetricFamily("finanzomat_bankkonto_info", "Verbundenes Konto, buchhaltung=ja, wenn eingeschaltet",
+                                 labels=[*labels, "buchhaltung"])
+        tage = GaugeMetricFamily("finanzomat_bankkonto_freigabe_tage", "Tage, bis die Freigabe der Bank abläuft",
+                                 labels=labels)
+        bis = GaugeMetricFamily("finanzomat_bankkonto_freigabe_bis_timestamp_seconds",
+                                "Ablauf der Freigabe der Bank", labels=labels)
+        zuletzt = GaugeMetricFamily("finanzomat_bankkonto_letzter_abruf_timestamp_seconds",
+                                    "Letzter erfolgreicher Abruf", labels=labels)
+        frei = GaugeMetricFamily("finanzomat_bankkonto_abrufe_frei", "Freie Abrufe in den letzten 24 Stunden (PSD2: 4)",
+                                 labels=labels)
+        fehler = GaugeMetricFamily("finanzomat_bankkonto_fehler", "1, wenn der letzte Abruf fehlgeschlagen ist",
+                                   labels=labels)
+        umsaetze = GaugeMetricFamily("finanzomat_bankkonto_umsaetze", "Umsätze in der Kontenübersicht",
+                                     labels=labels)
+        for k in konten:
+            werte = [k.bank, namen[k.schluessel]]
+            info.add_metric([*werte, "ja" if k.aktiv else "nein"], 1)
+            if (t := ka.tage_gueltig(k, jetzt)) is not None:
+                tage.add_metric(werte, t)
+            if zeit := _zeitpunkt(k.gueltig_bis):
+                bis.add_metric(werte, zeit)
+            if zeit := _zeitpunkt(k.abgerufen):
+                zuletzt.add_metric(werte, zeit)
+            frei.add_metric(werte, ka.abrufe_frei(k, jetzt))
+            fehler.add_metric(werte, 1 if k.fehler else 0)
+            umsaetze.add_metric(werte, self.db.konto_buchungen_anzahl(k.schluessel))
+        yield from (info, tage, bis, zuletzt, frei, fehler, umsaetze)
 
 
 def _zeitpunkt(text: str | None) -> float | None:
