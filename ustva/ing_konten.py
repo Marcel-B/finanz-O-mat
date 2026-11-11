@@ -9,8 +9,8 @@ Abgerufen wird beim Öffnen des Reiters (höchstens alle zwei Minuten), mit „J
 stündlich von 7 bis 22 Uhr. Alle Konten des Zugangs, nur in die Kontenübersicht: Ist eins nicht über Enable Banking
 verbunden (etwa das Extra-Konto, Tagesgeld), legt der erste Abruf es an (``BankKonto.sitzung`` = ``fints``); der
 Abruf über Enable Banking lässt es aus. In die Buchhaltung bringt sie weiter Enable Banking: Dessen Abruf übernimmt
-eine Zeile, die schon über FinTS kam (gleicher Betrag, Buchungstag bis drei Tage auseinander), statt sie doppelt anzulegen; und
-was Enable Banking schon geliefert hat, legt FinTS nicht noch einmal an.
+eine Zeile, die schon über FinTS kam (gleicher Betrag, Buchungstag bis drei Tage auseinander), statt sie doppelt
+anzulegen; und was Enable Banking schon geliefert hat, legt FinTS nicht noch einmal an.
 """
 
 from __future__ import annotations
