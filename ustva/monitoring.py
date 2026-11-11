@@ -101,7 +101,7 @@ def import_zaehlen(name: str, ergebnis: dict) -> None:
 
 
 def kontoabruf_zaehlen(abrufe, ausloeser: str) -> None:
-    """Zählt das Ergebnis von kontoabruf.abrufen(); ``ausloeser``: zeitplan oder knopf."""
+    """Zählt das Ergebnis von kontoabruf.abrufen(); ``ausloeser``: zeitplan, knopf oder oeffnen."""
     for a in abrufe.konten:
         ergebnis = "fehler" if a.fehler else "uebersprungen" if a.uebersprungen else "ok"
         KONTOABRUFE.labels(a.konto.bank, ausloeser, ergebnis).inc()

@@ -617,7 +617,8 @@ export const api = {
       body: datei,
       headers: { "Content-Type": "application/xml" },
     }),
-  kontenAbrufen: () => post<KontenAbruf>("/api/konten/abrufen"),
+  kontenAbrufen: (automatisch = false) =>
+    post<KontenAbruf>(`/api/konten/abrufen${automatisch ? "?automatisch=true" : ""}`),
   depotBestand: (schluessel: string) =>
     anfrage<DepotBestand>(`/api/konten/depot?schluessel=${encodeURIComponent(schluessel)}`),
   depotAbrufen: () => post<DepotAbruf>("/api/konten/depot/abrufen"),

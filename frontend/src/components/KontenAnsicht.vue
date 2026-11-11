@@ -58,15 +58,16 @@ watch(auswahl, async () => {
   }
 });
 
-// „Jetzt abrufen“: Enable Banking (max. 4-mal in 24 Stunden je Konto), danach die ING-Konten über FinTS ohne
-// Limit. In dieser Reihenfolge, damit FinTS erkennt, was Enable Banking eben geliefert hat.
+// „Jetzt abrufen“: Enable Banking, danach die ING-Konten über FinTS. In dieser Reihenfolge, damit FinTS erkennt,
+// was Enable Banking eben geliefert hat. Der Server schickt die Angaben des Browsers mit, dann gilt das Limit von 4
+// Abrufen in 24 Stunden nicht; nur wenn eine Bank das ablehnt, zählt der Abruf.
 async function abrufen() {
   ruftAb.value = true;
   const zeilen: string[] = [];
   let neu = 0;
   let warnen = false;
   try {
-    if (daten.value?.eingerichtet && abrufFrei.value) {
+    if (daten.value?.eingerichtet) {
       try {
         const e = await api.kontenAbrufen();
         // Ein ING-Konto ohne freie Abrufe holt gleich FinTS, das ist kein Problem
@@ -107,30 +108,44 @@ async function abrufen() {
   }
 }
 
-// ING-Konten über FinTS beim Öffnen und wenn die App wieder in den Vordergrund kommt (nach einer Push-Nachricht
-// der ING); der Server ruft höchstens alle zwei Minuten ab und fragt keine Freigabe nach, auf die die ING wartet.
+// Beim Öffnen und wenn die App wieder in den Vordergrund kommt (nach einer Push-Nachricht der Bank): Enable Banking
+// nur mit den Angaben des Browsers, also ohne das Tageslimit anzutasten, danach die ING-Konten über FinTS. Der Server
+// ruft je Konto höchstens alle zwei Minuten ab und fragt keine Freigabe nach, auf die die ING wartet.
 const mitIng = computed(() => !!daten.value?.ing?.eingerichtet);
-const ingLaeuft = ref(false);
+const oeffnetGerade = ref(false);
 
-async function ingAutomatisch() {
-  if (!mitIng.value || ingLaeuft.value || ruftAb.value) return;
-  ingLaeuft.value = true;
+async function beimOeffnen() {
+  if (oeffnetGerade.value || ruftAb.value || !daten.value) return;
+  if (!daten.value.eingerichtet && !mitIng.value) return;
+  oeffnetGerade.value = true;
+  let neu = false;
   try {
-    const e = await api.ingAbrufen(true);
-    if (e.uebersprungen) return;
-    if (e.freigabe) {
-      toast.add({ severity: "warn", summary: "Keine Freigabe in der ING-App", detail: e.fehler, life: 8000 });
+    if (daten.value.eingerichtet) {
+      try {
+        neu = (await api.kontenAbrufen(true)).konten.some((k) => !k.uebersprungen);
+      } catch {
+        // Beim Öffnen still; der Fehler steht danach am Konto bzw. im Log
+      }
     }
-    await laden(false);
-  } catch {
-    // Beim Öffnen still; der Fehler steht danach am Konto bzw. im Log
+    if (mitIng.value) {
+      try {
+        const e = await api.ingAbrufen(true);
+        neu ||= !e.uebersprungen;
+        if (e.freigabe) {
+          toast.add({ severity: "warn", summary: "Keine Freigabe in der ING-App", detail: e.fehler, life: 8000 });
+        }
+      } catch {
+        // wie oben
+      }
+    }
+    if (neu) await laden(false);
   } finally {
-    ingLaeuft.value = false;
+    oeffnetGerade.value = false;
   }
 }
 
 function sichtbar() {
-  if (document.visibilityState === "visible") void ingAutomatisch();
+  if (document.visibilityState === "visible") void beimOeffnen();
 }
 
 // Depotbestand über FinTS; verlangt die ING eine Freigabe in der App, wartet der Server bis zu zwei Minuten
@@ -210,7 +225,7 @@ async function einlesen(ereignis: Event) {
 
 onMounted(async () => {
   await laden();
-  void ingAutomatisch();
+  void beimOeffnen();
   document.addEventListener("visibilitychange", sichtbar);
 });
 onUnmounted(() => document.removeEventListener("visibilitychange", sichtbar));
@@ -241,8 +256,6 @@ const abrufzeiten = computed(() => {
   const z = (daten.value?.zeiten ?? []).map((t) => t.replace(/^0(\d)/, "$1"));
   return z.length > 1 ? `${z.slice(0, -1).join(", ")} und ${z.at(-1)}` : (z[0] ?? "");
 });
-// Knopf nur, wenn noch mindestens ein Konto einen Abruf frei hat (PSD2: 4 in 24 Stunden)
-const abrufFrei = computed(() => konten.value.some((k) => k.abrufe_frei > 0));
 
 function warnung(k: BankKonto): string {
   if (k.fehler) return k.fehler;
@@ -407,7 +420,7 @@ const gefiltert = computed(() =>
             <template v-else>Zuletzt abgerufen: {{ zeit(letzterAbruf) }}</template>
             <template v-if="abrufzeiten"> · automatisch um {{ abrufzeiten }} Uhr</template>
             <template v-if="mitIng && (!gewaehlt || gewaehlt.ing)"> · ING stündlich 7–22 Uhr</template>
-            <i v-if="ingLaeuft" v-tooltip.bottom="'ING wird über FinTS abgerufen'" class="pi pi-spin pi-spinner ml-1 text-xs" />
+            <i v-if="oeffnetGerade" v-tooltip.bottom="'Konten werden abgerufen'" class="pi pi-spin pi-spinner ml-1 text-xs" />
           </div>
         </div>
         <div class="flex items-center gap-3">
@@ -429,17 +442,16 @@ const gefiltert = computed(() =>
           />
           <Button
             v-tooltip.bottom="
-              (abrufFrei
-                ? `Banken erlauben ${daten?.abrufe_je_tag ?? 4} Abrufe je Konto in 24 Stunden`
-                : 'Für heute sind alle Abrufe über Enable Banking verbraucht') +
-              (mitIng ? '; die ING-Konten kommen über FinTS ohne Limit' : '')
+              'Ruft alle Konten ab; mit dir als Auslöser gilt das Limit von ' +
+              `${daten?.abrufe_je_tag ?? 4} Abrufen in 24 Stunden nicht` +
+              (mitIng ? ', die ING-Konten kommen über FinTS' : '')
             "
             icon="pi pi-refresh"
             label="Jetzt abrufen"
             size="small"
             severity="secondary"
             :loading="ruftAb"
-            :disabled="!mitIng && (!abrufFrei || !daten?.eingerichtet)"
+            :disabled="!mitIng && !daten?.eingerichtet"
             @click="abrufen"
           />
         </div>

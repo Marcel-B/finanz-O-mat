@@ -78,6 +78,7 @@ class FakeFints:
         return {"accounts": self.konten}
 
     def get_holdings(self, konto):
+        assert konto.bic[4:6] == "DE"  # python-fints liest die Länderkennung aus der BIC
         self.abgefragt.append(konto)
         return self.bestand
 

@@ -34,6 +34,7 @@ from .db import Datenbank
 log = logging.getLogger(__name__)
 
 ING_BLZ = "50010517"
+ING_BIC = "INGDDEFFXXX"  # python-fints braucht für die Depotaufstellung eine BIC (Länderkennung daraus)
 ING_FINTS = "https://fints.ing.de/fints/"
 ZUGANG = "ing"  # Schlüssel des gespeicherten FinTS-Zustands
 FREIGABE_WARTEN = timedelta(minutes=2)
@@ -130,6 +131,7 @@ class FintsKonto:
 class Sitzung:
     depots: list[Depot] = field(default_factory=list)
     konten: list[FintsKonto] = field(default_factory=list)
+    depot_ibans: set[str] = field(default_factory=set)  # bei ``konten`` übergangen: Depots haben keine Umsätze
 
 
 @dataclass
@@ -275,18 +277,29 @@ class IngFints:
         gefunden = depots_aus(info)
         if not gefunden:
             raise DepotFehler(f"Die ING meldet für diesen Zugang kein Depot (gemeldete Konten: {konten_text(info)})")
+        try:  # die SEPA-Konten tragen die BIC, die Kontoinformationen nicht
+            sepa = {a.iban: a for a in f.get_sepa_accounts() or [] if a.iban}
+        except Exception:  # noqa: BLE001 – dann die BIC der ING
+            log.debug("SEPA-Konten nicht abrufbar", exc_info=True)
+            sepa = {}
         depots = []
         for d in gefunden:
-            konto = SEPAAccount(iban=d.get("iban"), bic=None, accountnumber=d["account_number"],
-                                subaccount=d.get("subaccount_number"), blz=ING_BLZ)
+            bekannt = sepa.get(d.get("iban"))
+            konto = SEPAAccount(iban=d.get("iban"), bic=(bekannt.bic if bekannt else None) or ING_BIC,
+                                accountnumber=d["account_number"], subaccount=d.get("subaccount_number"),
+                                blz=ING_BLZ)
             bestand = self._freigeben(f, f.get_holdings(konto), bis, hinweis) or []
             depots.append(Depot(nummer=d["account_number"], name=(d.get("product_name") or "Depot").strip(),
                                 waehrung=(d.get("currency") or "EUR").upper(),
                                 positionen=[p for p in map(position_aus, bestand) if p]))
         return depots
 
-    def _konten(self, f, ab: date, ibans: set[str] | None, bis: float, hinweis) -> list[FintsKonto]:
+    def _konten(self, f, ab: date, ibans: set[str] | None, bis: float, hinweis,
+                depot_ibans: set[str] | None = None) -> list[FintsKonto]:
         """Saldo, gebuchte und vorgemerkte Buchungen je Konto (``ibans``: nur diese, ``None``: alle).
+
+        Depots meldet die ING mit IBAN unter den SEPA-Konten; sie kommen nach ``depot_ibans`` statt in die Liste
+        (Saldo und Umsätze lehnt die ING für sie mit 9210 ab).
 
         python-fints hängt die vorgemerkten Buchungen (MT942) hinten an die gebuchten an, ohne sie zu kennzeichnen;
         deshalb einmal ohne und einmal mit: was beim zweiten Mal hinter den gebuchten kommt, ist vorgemerkt.
@@ -302,6 +315,10 @@ class IngFints:
             if not iban or (ibans is not None and iban not in ibans):
                 continue
             angabe = angaben.get(iban, {})
+            if _depot(angabe):
+                if depot_ibans is not None:
+                    depot_ibans.add(iban)
+                continue
             fk = FintsKonto(iban, name=(angabe.get("product_name") or "").strip(),
                             waehrung=(angabe.get("currency") or "EUR").upper(),
                             saldo=self._freigeben(f, f.get_balance(konto), bis, hinweis))
@@ -327,7 +344,7 @@ class IngFints:
                 if depots:
                     s.depots = self._depots(f, bis, hinweis)
                 if konten_ab:
-                    s.konten = self._konten(f, konten_ab, ibans, bis, hinweis)
+                    s.konten = self._konten(f, konten_ab, ibans, bis, hinweis, s.depot_ibans)
                 return s
         except (FinTSClientPINError, FinTSClientTemporaryAuthError) as e:
             raise _ablehnung(antworten, e) from e
