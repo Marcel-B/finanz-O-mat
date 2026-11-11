@@ -558,6 +558,13 @@ class Datenbank:
                 f"INSERT INTO bank_konten ({', '.join(felder)}) VALUES ({', '.join('?' for _ in felder)}) "
                 f"ON CONFLICT(schluessel) DO UPDATE SET {aendern}", werte)
 
+    def bank_konto_loeschen(self, schluessel: str) -> None:
+        """Ein Konto samt seinen Zeilen in der Kontenübersicht (nicht in der Buchhaltung)."""
+        with self._lock, self._con:
+            for tabelle in ("konto_buchungen", "konto_vorgemerkt"):
+                self._con.execute(f"DELETE FROM {tabelle} WHERE konto = ?", (schluessel,))
+            self._con.execute("DELETE FROM bank_konten WHERE schluessel = ?", (schluessel,))
+
     def bank_konto_fints(self, schluessel: str, zeit: str, saldo: str | None = None, waehrung: str = "",
                          saldo_stand: str = "") -> None:
         """Nach einem Abruf über FinTS (ustva/ing_konten.py): Zeitpunkt und, wenn geliefert, der Saldo."""

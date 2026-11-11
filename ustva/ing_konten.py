@@ -27,7 +27,7 @@ from decimal import Decimal
 from . import depot
 from .config import Config
 from .db import Datenbank
-from .kontoabruf import CSV_TAGE, FINTS_PRAEFIX, SEPA_PRAEFIX
+from .kontoabruf import CSV_TAGE, FINTS_PRAEFIX, FINTS_SITZUNG, SEPA_PRAEFIX
 from .models import BankKonto, Umsatz
 
 log = logging.getLogger(__name__)
@@ -137,8 +137,6 @@ def ing(k: BankKonto) -> bool:
 
 def _anlegen(db: Datenbank, fk: depot.FintsKonto) -> BankKonto:
     """Ein Konto, das nur über FinTS kommt; verbindet man es später über Enable Banking, übernimmt das die Zeile."""
-    from .kontoabruf import FINTS_SITZUNG
-
     k = BankKonto(schluessel=fk.iban, uid="", sitzung=FINTS_SITZUNG, bank="ING", land="DE", konto="ING",
                   iban=fk.iban, bezeichnung=fk.name, waehrung=fk.waehrung)
     db.bank_konto_speichern(k)
@@ -202,6 +200,9 @@ def abrufen(db: Datenbank, cfg: Config, zugang: depot.IngFints | None = None, je
                                    freigabe=a.freigabe, versucht=zeit, konten=zeit, abgelehnt=abgelehnt)
         if a.fehler:
             return a
+        for iban in sitzung.depot_ibans:  # vor der Erkennung als Konto angelegt
+            if (k := konten.get(iban)) and k.sitzung == FINTS_SITZUNG:
+                db.bank_konto_loeschen(k.schluessel)
         for fk in sitzung.konten:
             k = konten.get(fk.iban) or _anlegen(db, fk)
             a.konten.append(k.schluessel)

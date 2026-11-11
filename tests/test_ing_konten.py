@@ -125,6 +125,41 @@ def test_abruf(db):
     assert [z["betrag"] for z in db.konto_vorgemerkt(ING_IBAN)] == ["-19.99"]
 
 
+DEPOT_IBAN = "DE00500105170000000042"  # fiktiv
+
+
+class MitDepot(FakeKonten):
+    """Wie bei der echten ING: das Depot steht mit IBAN unter den SEPA-Konten, Saldo und Umsätze gibt es nicht."""
+
+    def __init__(self):
+        super().__init__(konten=[
+            {"type": 1, "account_number": "1234567890", "iban": ING_IBAN, "product_name": "Girokonto"},
+            {"type": 30, "account_number": "0000000042", "iban": DEPOT_IBAN, "product_name": "Direkt-Depot"},
+        ])
+
+    def get_sepa_accounts(self):
+        return super().get_sepa_accounts()[:1] + [
+            SEPAAccount(iban=DEPOT_IBAN, bic="INGDDEFFXXX", accountnumber="0000000042", subaccount=None,
+                        blz="50010517")]
+
+    def get_balance(self, konto):
+        assert konto.iban != DEPOT_IBAN, "Saldo des Depots abgefragt"
+        return super().get_balance(konto)
+
+    def get_transactions(self, konto, start_date=None, end_date=None, include_pending=False):
+        assert konto.iban != DEPOT_IBAN, "Umsätze des Depots abgefragt"
+        return super().get_transactions(konto, start_date, end_date, include_pending)
+
+
+def test_depot_ist_kein_konto(db):
+    # vor der Erkennung angelegt: wird entfernt
+    db.bank_konto_speichern(bankkonto(DEPOT_IBAN, sitzung=ka.FINTS_SITZUNG, uid="", bezeichnung="Direkt-Depot"))
+    db.bank_konto_speichern(bankkonto())
+    a = ing_konten.abrufen(db, CFG, zugang(MitDepot()), jetzt=JETZT)
+    assert (a.ergebnis, a.konten) == ("ok", [ING_IBAN])
+    assert db.bank_konto(DEPOT_IBAN) is None and db.bank_konto(ING_IBAN)
+
+
 def test_enable_banking_speichert_fints_nicht_zurueck(db):
     """Enable Banking hält das Konto während seines Abrufs und speichert es danach ganz."""
     db.bank_konto_speichern(bankkonto())
