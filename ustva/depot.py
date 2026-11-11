@@ -1,4 +1,6 @@
-"""Bestand des ING-Direkt-Depots über FinTS (HBCI) abrufen, für den Reiter „Konten“.
+"""Zugang zur ING über FinTS (HBCI): Bestand des Direkt-Depots für den Reiter „Konten“.
+
+Über denselben Zugang holt ustva/ing_konten.py Umsätze und Saldo der ING-Konten, ohne das Limit von PSD2.
 
 Enable Banking (PSD2) liefert nur Zahlungskonten, keine Depots. Die ING bietet über FinTS für das Direkt-Depot den
 Depotbestand mit Details je Wertpapier an, aber keine Depotumsätze (https://www.ing.de/hilfe/log-in/fints/).
@@ -6,8 +8,8 @@ Depotbestand mit Details je Wertpapier an, aber keine Depotumsätze (https://www
 Dafür braucht die App
 - eine FinTS-Produkt-ID der Deutschen Kreditwirtschaft (``FINTS_PRODUKT_ID``, kostenlos, Registrierung unter
   https://www.fints.org/de/hersteller/produktregistrierung, bis zu zwei Wochen),
-- die Zugangsnummer (letzte 10 Stellen der IBAN, ``ING_FINTS_ZUGANG``) und die PIN fürs Internetbanking
-  (``ING_FINTS_PIN``).
+- Benutzername (``ING_FINTS_ZUGANG``) und Passwort (``ING_FINTS_PIN``) des Online-Bankings, wie beim Login im
+  Browser (https://www.ing.de/hilfe/log-in/fints/); vor der Umstellung der ING 2026 Zugangsnummer und PIN.
 
 Verlangt die ING eine starke Kundenauthentifizierung, schickt sie eine Freigabe in die ING-App. Der Abruf wartet
 darauf bis zu zwei Minuten. Im Hintergrund wird danach nicht erneut gefragt, bis ein Abruf von Hand (Knopf oder
@@ -19,6 +21,7 @@ Nur eine Übersicht, mit der Buchhaltung hat das Depot nichts zu tun.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -37,6 +40,7 @@ FREIGABE_WARTEN = timedelta(minutes=2)
 ERSTE_NACHFRAGE = 5  # Sekunden bis zur ersten Nachfrage, ob in der App freigegeben wurde
 NACHFRAGE = 3
 DEPOT_KONTOARTEN = range(50, 60)  # FinTS-Kontoart 50–59: Depot
+SPERRE = threading.Lock()  # immer nur ein Dialog mit der ING (Hintergrund, Knopf, Kommandozeile)
 
 
 class DepotFehler(RuntimeError):
@@ -45,6 +49,32 @@ class DepotFehler(RuntimeError):
 
 class FreigabeNoetig(DepotFehler):
     """Die ING wollte eine Freigabe in der App, die nicht rechtzeitig kam (oder im Hintergrund nicht gefragt wird)."""
+
+
+class AnmeldungAbgelehnt(DepotFehler):
+    """Die ING hat die Anmeldung abgelehnt (Passwort, Benutzername, Produkt-ID oder gesperrter Zugang).
+
+    Danach wird es automatisch nicht erneut versucht: Nach mehreren Fehlversuchen sperrt die ING den Zugang.
+    """
+
+
+def angehalten(stand: dict) -> str:
+    """Warum ein automatischer Abruf (Hintergrund, Öffnen des Reiters) gerade nicht bei der ING anfragt."""
+    if stand.get("abgelehnt"):
+        return "die ING hat die Anmeldung abgelehnt; Zugangsdaten prüfen und einmal von Hand abrufen"
+    if stand.get("freigabe"):
+        return "wartet auf Freigabe in der ING-App; einmal von Hand abrufen"
+    return ""
+
+
+def _ablehnung(antworten: list[tuple[str, str]], fehler: Exception) -> AnmeldungAbgelehnt:
+    """Die Antworten der ING mit Fehlercode; python-fints meldet bei jeder Ablehnung nur „PIN wrong?“."""
+    texte = "; ".join(dict.fromkeys(f"{code} {text}".strip() for code, text in antworten if code.startswith("9")))
+    return AnmeldungAbgelehnt(
+        f"Die ING hat die Anmeldung abgelehnt ({texte or type(fehler).__name__}). Benutzername und Passwort des "
+        "Online-Bankings und die Produkt-ID prüfen (finanz-o-mat-fints); eine neue Produkt-ID kann bei der ING erst "
+        "nach Tagen freigeschaltet sein. Automatisch wird es nicht erneut versucht, nach mehreren Fehlversuchen "
+        "sperrt die ING den Zugang.")
 
 
 def eingerichtet(cfg: Config) -> bool:
@@ -82,6 +112,24 @@ class Depot:
     @property
     def wert(self) -> Decimal:
         return sum((p.wert or Decimal(0) for p in self.positionen), Decimal(0))
+
+
+@dataclass
+class FintsKonto:
+    """Ein Zahlungskonto aus einer Sitzung: Saldo und Buchungen, wie python-fints sie liefert (mt940)."""
+
+    iban: str
+    name: str = ""  # Produktname laut Bank, z. B. „Extra-Konto“
+    waehrung: str = "EUR"
+    saldo: object | None = None  # mt940.models.Balance
+    gebucht: list = field(default_factory=list)  # mt940.models.Transaction
+    vorgemerkt: list = field(default_factory=list)
+
+
+@dataclass
+class Sitzung:
+    depots: list[Depot] = field(default_factory=list)
+    konten: list[FintsKonto] = field(default_factory=list)
 
 
 @dataclass
@@ -126,9 +174,28 @@ def position_aus(h) -> Position | None:
                     wert=wert, einstand=_dec(getattr(h, "acquisitionprice", None)))
 
 
+def _depot(a: dict) -> bool:
+    """Kontoart 50–59, der Geschäftsvorfall Depotaufstellung (HKWPD) oder „Depot“ im Produktnamen."""
+    if not a.get("account_number"):
+        return False
+    if a.get("type") in DEPOT_KONTOARTEN:
+        return True
+    if any(getattr(op, "name", op) == "GET_HOLDINGS" and erlaubt
+           for op, erlaubt in (a.get("supported_operations") or {}).items()):
+        return True
+    return "depot" in (a.get("product_name") or "").lower()
+
+
 def depots_aus(info: dict) -> list[dict]:
-    """Die Depots aus den Kontoinformationen der Bank (UPD), über die Kontoart erkannt."""
-    return [a for a in info.get("accounts", []) if a.get("type") in DEPOT_KONTOARTEN and a.get("account_number")]
+    """Die Depots aus den Kontoinformationen der Bank (UPD)."""
+    return [a for a in info.get("accounts", []) if _depot(a)]
+
+
+def konten_text(info: dict) -> str:
+    """Was die Bank als Konten meldet, für eine Fehlermeldung: Kontoart, Produkt, letzte vier Ziffern."""
+    teile = [f"Kontoart {a.get('type')} „{(a.get('product_name') or '').strip() or '?'}“ "
+             f"…{str(a.get('account_number') or '')[-4:]}" for a in info.get("accounts", [])]
+    return "; ".join(teile) or "keine"
 
 
 def _client(cfg: Config, zustand: bytes | None):
@@ -136,6 +203,24 @@ def _client(cfg: Config, zustand: bytes | None):
 
     return FinTS3PinTanClient(ING_BLZ, cfg.ing_fints_zugang, cfg.ing_fints_pin, ING_FINTS,
                               product_id=cfg.fints_produkt_id, from_data=zustand)
+
+
+def _antworten_merken(f) -> list[tuple[str, str]]:
+    """Merkt sich die Rückmeldungen der Bank (Code, Text).
+
+    python-fints schreibt sie während der Anmeldung nicht ins Log und wirft bei jeder Ablehnung dieselbe Ausnahme.
+    """
+    antworten: list[tuple[str, str]] = []
+    verarbeiten = getattr(f, "_process_response", None)
+    if verarbeiten is None:
+        return antworten
+
+    def merken(dialog, segment, antwort):
+        antworten.append((str(getattr(antwort, "code", "") or ""), str(getattr(antwort, "text", "") or "")))
+        return verarbeiten(dialog, segment, antwort)
+
+    f._process_response = merken
+    return antworten
 
 
 class IngFints:
@@ -183,28 +268,69 @@ class IngFints:
         if verfahren:
             f.set_tan_mechanism(verfahren[0])
 
-    def abrufen(self, warten: timedelta = FREIGABE_WARTEN,
-                hinweis: Callable[[str], None] | None = None) -> list[Depot]:
+    def _depots(self, f, bis: float, hinweis) -> list[Depot]:
         from fints.models import SEPAAccount
+
+        info = f.get_information()
+        gefunden = depots_aus(info)
+        if not gefunden:
+            raise DepotFehler(f"Die ING meldet für diesen Zugang kein Depot (gemeldete Konten: {konten_text(info)})")
+        depots = []
+        for d in gefunden:
+            konto = SEPAAccount(iban=d.get("iban"), bic=None, accountnumber=d["account_number"],
+                                subaccount=d.get("subaccount_number"), blz=ING_BLZ)
+            bestand = self._freigeben(f, f.get_holdings(konto), bis, hinweis) or []
+            depots.append(Depot(nummer=d["account_number"], name=(d.get("product_name") or "Depot").strip(),
+                                waehrung=(d.get("currency") or "EUR").upper(),
+                                positionen=[p for p in map(position_aus, bestand) if p]))
+        return depots
+
+    def _konten(self, f, ab: date, ibans: set[str] | None, bis: float, hinweis) -> list[FintsKonto]:
+        """Saldo, gebuchte und vorgemerkte Buchungen je Konto (``ibans``: nur diese, ``None``: alle).
+
+        python-fints hängt die vorgemerkten Buchungen (MT942) hinten an die gebuchten an, ohne sie zu kennzeichnen;
+        deshalb einmal ohne und einmal mit: was beim zweiten Mal hinter den gebuchten kommt, ist vorgemerkt.
+        """
+        ergebnis = []
+        try:
+            angaben = {(a.get("iban") or "").replace(" ", "").upper(): a
+                       for a in f.get_information().get("accounts", [])}
+        except Exception:  # noqa: BLE001 – nur für den Namen des Kontos
+            angaben = {}
+        for konto in self._freigeben(f, f.get_sepa_accounts(), bis, hinweis) or []:
+            iban = (konto.iban or "").replace(" ", "").upper()
+            if not iban or (ibans is not None and iban not in ibans):
+                continue
+            angabe = angaben.get(iban, {})
+            fk = FintsKonto(iban, name=(angabe.get("product_name") or "").strip(),
+                            waehrung=(angabe.get("currency") or "EUR").upper(),
+                            saldo=self._freigeben(f, f.get_balance(konto), bis, hinweis))
+            fk.gebucht = list(self._freigeben(f, f.get_transactions(konto, ab), bis, hinweis) or [])
+            alle = list(self._freigeben(f, f.get_transactions(konto, ab, include_pending=True), bis, hinweis) or [])
+            fk.vorgemerkt = alle[len(fk.gebucht):]
+            ergebnis.append(fk)
+        return ergebnis
+
+    def abrufen(self, warten: timedelta = FREIGABE_WARTEN, hinweis: Callable[[str], None] | None = None,
+                depots: bool = True, konten_ab: date | None = None, ibans: set[str] | None = None) -> Sitzung:
+        """Eine Sitzung: die Depots und, mit ``konten_ab``, Saldo und Buchungen der Konten (``ibans``: nur diese)."""
+        from fints.exceptions import FinTSClientPINError, FinTSClientTemporaryAuthError
 
         bis = self._uhr() + warten.total_seconds()
         f = self._fabrik(self.cfg, self.zustand)
+        antworten = _antworten_merken(f)
         try:
             self._verfahren_waehlen(f)
             with f:
                 self._freigeben(f, f.init_tan_response, bis, hinweis)
-                gefunden = depots_aus(f.get_information())
-                if not gefunden:
-                    raise DepotFehler("Die ING meldet für diesen Zugang kein Depot")
-                depots = []
-                for d in gefunden:
-                    konto = SEPAAccount(iban=d.get("iban"), bic=None, accountnumber=d["account_number"],
-                                        subaccount=d.get("subaccount_number"), blz=ING_BLZ)
-                    bestand = self._freigeben(f, f.get_holdings(konto), bis, hinweis) or []
-                    depots.append(Depot(nummer=d["account_number"], name=(d.get("product_name") or "Depot").strip(),
-                                        waehrung=(d.get("currency") or "EUR").upper(),
-                                        positionen=[p for p in map(position_aus, bestand) if p]))
-                return depots
+                s = Sitzung()
+                if depots:
+                    s.depots = self._depots(f, bis, hinweis)
+                if konten_ab:
+                    s.konten = self._konten(f, konten_ab, ibans, bis, hinweis)
+                return s
+        except (FinTSClientPINError, FinTSClientTemporaryAuthError) as e:
+            raise _ablehnung(antworten, e) from e
         finally:
             try:  # Systemkennung, Bank- und Nutzerdaten fürs nächste Mal (ohne PIN)
                 self.zustand = f.deconstruct(including_private=True)
@@ -216,17 +342,27 @@ def abrufen(db: Datenbank, cfg: Config, zugang: IngFints | None = None, jetzt: d
             warten: timedelta = FREIGABE_WARTEN, hinweis: Callable[[str], None] | None = None,
             hintergrund: bool = False) -> DepotAbruf:
     """Holt den Bestand aller Depots des Zugangs und ersetzt die gespeicherten Positionen."""
-    jetzt = jetzt or datetime.now(UTC)
+    with SPERRE:
+        return _abrufen(db, cfg, zugang, jetzt or datetime.now(UTC), warten, hinweis, hintergrund)
+
+
+def _abrufen(db, cfg, zugang, jetzt, warten, hinweis, hintergrund) -> DepotAbruf:
     a = DepotAbruf()
     stand = db.fints_zustand(ZUGANG) or {}
-    if hintergrund and stand.get("freigabe"):
-        a.uebersprungen = "wartet auf Freigabe in der ING-App; einmal von Hand abrufen"
+    if hintergrund and angehalten(stand):
+        a.uebersprungen = angehalten(stand)
         return a
+    abgelehnt = None
     try:
         zugang = zugang or IngFints(cfg, stand.get("daten"))
-        a.depots = zugang.abrufen(warten=warten, hinweis=hinweis)
+        a.depots = zugang.abrufen(warten=warten, hinweis=hinweis).depots
+        abgelehnt = False
     except FreigabeNoetig as e:
         a.freigabe, a.fehler = True, str(e)
+        abgelehnt = False  # die Anmeldung selbst hat geklappt
+    except AnmeldungAbgelehnt as e:
+        a.fehler, abgelehnt = str(e), True
+        log.warning("Depotabruf: %s", e)
     except DepotFehler as e:
         a.fehler = str(e)
     except Exception as e:  # noqa: BLE001 – Fehler der Bank oder von python-fints landen beim Depot
@@ -234,7 +370,7 @@ def abrufen(db: Datenbank, cfg: Config, zugang: IngFints | None = None, jetzt: d
         a.fehler = f"{type(e).__name__}: {e}"
     zeit = jetzt.isoformat(timespec="seconds")
     db.fints_zustand_speichern(ZUGANG, daten=zugang.zustand if zugang else None, fehler=a.fehler,
-                               freigabe=a.freigabe, versucht=zeit)
+                               freigabe=a.freigabe, versucht=zeit, abgelehnt=abgelehnt)
     for d in a.depots:
         db.depot_speichern(d, zeit)
     return a

@@ -172,7 +172,7 @@ def test_tan_statt_app(db):
 
 def test_kein_depot_und_bankfehler(db):
     a = depot.abrufen(db, CFG, zugang(FakeFints(konten=[{"type": 1, "account_number": "1"}])), jetzt=JETZT)
-    assert "kein Depot" in a.fehler
+    assert a.fehler == "Die ING meldet für diesen Zugang kein Depot (gemeldete Konten: Kontoart 1 „?“ …1)"
     a = depot.abrufen(db, CFG, zugang(FakeFints(fehler=ConnectionError("Bank antwortet nicht"))), jetzt=JETZT)
     assert a.fehler == "ConnectionError: Bank antwortet nicht"
     assert db.fints_zustand(depot.ZUGANG)["fehler"] == a.fehler
@@ -216,7 +216,7 @@ def test_api(db):
                                          depot_fabrik=lambda cfg, z: zugang(fake, z)))
     client = TestClient(app)
     leer = client.get("/api/konten").json()
-    assert leer["depot"] == {"eingerichtet": True, "fehler": "", "freigabe": False, "versucht": ""}
+    assert leer["depot"] == {"eingerichtet": True, "fehler": "", "freigabe": False, "versucht": "", "abgelehnt": False}
     assert leer["depots"] == []
 
     antwort = client.post("/api/konten/depot/abrufen").json()
@@ -260,3 +260,69 @@ def test_befehl(db, capsys):
 @pytest.mark.parametrize("kontoart, depot_", [(50, True), (59, True), (1, False), (None, False)])
 def test_depots_aus(kontoart, depot_):
     assert bool(depot.depots_aus({"accounts": [{"type": kontoart, "account_number": "1"}]})) is depot_
+
+
+def test_depot_ohne_kontoart():
+    """Manche Banken melden das Depot nicht als Kontoart 50–59; dann über HKWPD oder den Produktnamen."""
+    from fints.client import FinTSOperations
+
+    ueber_wpd = {"type": 1, "account_number": "2", "product_name": "Wertpapiere",
+                 "supported_operations": {FinTSOperations.GET_HOLDINGS: True, FinTSOperations.GET_BALANCE: False}}
+    ueber_name = {"type": None, "account_number": "3", "product_name": "Direkt-Depot"}
+    giro = {"type": 1, "account_number": "1234567890", "product_name": "Girokonto",
+            "supported_operations": {FinTSOperations.GET_HOLDINGS: False}}
+    info = {"accounts": [ueber_wpd, ueber_name, giro]}
+    assert depot.depots_aus(info) == [ueber_wpd, ueber_name]
+    assert depot.konten_text({"accounts": [giro]}) == "Kontoart 1 „Girokonto“ …7890"
+    assert depot.konten_text({"accounts": []}) == "keine"
+
+
+class AbgelehnteAnmeldung(FakeFints):
+    """Die ING lehnt die Anmeldung ab; python-fints wirft dann immer „PIN wrong?“."""
+
+    def __init__(self, code="9942", text="PIN falsch", **kw):
+        super().__init__(**kw)
+        self.code, self.text = code, text
+        self.anmeldungen = 0
+
+    def _process_response(self, dialog, segment, antwort):
+        pass
+
+    def fetch_tan_mechanisms(self):
+        from fints.exceptions import FinTSClientPINError
+
+        self.anmeldungen += 1
+        self._process_response(None, None, SimpleNamespace(code="3920", text="Zugelassene Verfahren"))
+        self._process_response(None, None, SimpleNamespace(code="9800", text="Dialog abgebrochen"))
+        self._process_response(None, None, SimpleNamespace(code=self.code, text=self.text))
+        raise FinTSClientPINError("Error during dialog initialization, PIN wrong?")
+
+
+def test_anmeldung_abgelehnt(db):
+    fake = AbgelehnteAnmeldung()
+    a = depot.abrufen(db, CFG, zugang(fake), jetzt=JETZT)
+    assert a.ergebnis == "fehler"
+    assert "9800 Dialog abgebrochen; 9942 PIN falsch" in a.fehler and "3920" not in a.fehler
+    assert "PIN wrong" not in a.fehler
+    stand = db.fints_zustand(depot.ZUGANG)
+    assert stand["abgelehnt"] is True and stand["fehler"] == a.fehler
+
+    # Automatisch nicht noch einmal, sonst sperrt die ING nach drei falschen PINs
+    a = depot.abrufen(db, CFG, zugang(fake), jetzt=JETZT, hintergrund=True)
+    assert "abgelehnt" in a.uebersprungen and fake.anmeldungen == 1
+
+    # Von Hand wird es versucht; klappt es, läuft der Hintergrund wieder
+    assert depot.abrufen(db, CFG, zugang(FakeFints()), jetzt=JETZT).ergebnis == "ok"
+    assert db.fints_zustand(depot.ZUGANG)["abgelehnt"] is False
+    assert depot.abrufen(db, CFG, zugang(FakeFints()), jetzt=JETZT, hintergrund=True).ergebnis == "ok"
+
+
+def test_anmeldung_ohne_text_der_bank(db):
+    from fints.exceptions import FinTSClientTemporaryAuthError
+
+    class Gesperrt(FakeFints):
+        def fetch_tan_mechanisms(self):
+            raise FinTSClientTemporaryAuthError("Account is temporarily locked.")
+
+    a = depot.abrufen(db, CFG, zugang(Gesperrt()), jetzt=JETZT)
+    assert "(FinTSClientTemporaryAuthError)" in a.fehler and db.fints_zustand(depot.ZUGANG)["abgelehnt"]

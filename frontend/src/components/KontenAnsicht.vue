@@ -7,7 +7,7 @@ import DataTable from "primevue/datatable";
 import Message from "primevue/message";
 import Tag from "primevue/tag";
 import { useToast } from "primevue/usetoast";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
 import { api, type BankKonto, type KontenUebersicht, type KontoBuchung } from "@/api";
 import { betrag, datum, passtZurSuche, suchtext } from "@/format";
@@ -31,8 +31,8 @@ const gewaehltesDepot = computed(() => depots.value.find((d) => d.schluessel ===
 const mitDepot = computed(() => depots.value.length > 0 || !!daten.value?.depot.eingerichtet);
 const nachSchluessel = computed(() => Object.fromEntries(konten.value.map((k) => [k.schluessel, k])));
 
-async function laden() {
-  laedt.value = true;
+async function laden(anzeigen = true) {
+  if (anzeigen) laedt.value = true;
   fehler.value = "";
   try {
     daten.value = await api.konten();
@@ -58,24 +58,79 @@ watch(auswahl, async () => {
   }
 });
 
+// „Jetzt abrufen“: Enable Banking (max. 4-mal in 24 Stunden je Konto), danach die ING-Konten über FinTS ohne
+// Limit. In dieser Reihenfolge, damit FinTS erkennt, was Enable Banking eben geliefert hat.
 async function abrufen() {
   ruftAb.value = true;
+  const zeilen: string[] = [];
+  let neu = 0;
+  let warnen = false;
   try {
-    const e = await api.kontenAbrufen();
-    const probleme = e.konten.filter((k) => k.fehler || k.uebersprungen);
-    const neu = e.konten.reduce((n, k) => n + k.neu, 0);
+    if (daten.value?.eingerichtet && abrufFrei.value) {
+      try {
+        const e = await api.kontenAbrufen();
+        // Ein ING-Konto ohne freie Abrufe holt gleich FinTS, das ist kein Problem
+        const probleme = e.konten.filter(
+          (k) => k.fehler || (k.uebersprungen && !(mitIng.value && nachSchluessel.value[k.schluessel]?.ing)),
+        );
+        neu += e.konten.reduce((n, k) => n + k.neu, 0);
+        warnen ||= probleme.some((k) => k.fehler);
+        zeilen.push(...probleme.map((k) => `${k.name}: ${k.fehler || k.uebersprungen}`));
+      } catch (e) {
+        warnen = true;
+        zeilen.push((e as Error).message);
+      }
+    }
+    if (mitIng.value) {
+      toast.add({ severity: "info", summary: "ING wird abgerufen", detail: "Falls die ING fragt: in der ING-App freigeben.", life: 5000 });
+      try {
+        const e = await api.ingAbrufen();
+        neu += e.neu;
+        if (e.fehler) {
+          warnen = true;
+          zeilen.push(`ING: ${e.freigabe ? "keine Freigabe in der ING-App" : e.fehler}`);
+        }
+      } catch (e) {
+        warnen = true;
+        zeilen.push(`ING: ${(e as Error).message}`);
+      }
+    }
     toast.add({
-      severity: probleme.some((k) => k.fehler) ? "warn" : "success",
+      severity: warnen ? "warn" : "success",
       summary: neu ? `${neu} neue Umsätze` : "Keine neuen Umsätze",
-      detail: probleme.map((k) => `${k.name}: ${k.fehler || k.uebersprungen}`).join(" · ") || undefined,
-      life: probleme.length ? 8000 : 3000,
+      detail: zeilen.join(" · ") || undefined,
+      life: zeilen.length ? 8000 : 3000,
     });
     await laden();
-  } catch (e) {
-    toast.add({ severity: "error", summary: "Abruf fehlgeschlagen", detail: (e as Error).message, life: 8000 });
   } finally {
     ruftAb.value = false;
   }
+}
+
+// ING-Konten über FinTS beim Öffnen und wenn die App wieder in den Vordergrund kommt (nach einer Push-Nachricht
+// der ING); der Server ruft höchstens alle zwei Minuten ab und fragt keine Freigabe nach, auf die die ING wartet.
+const mitIng = computed(() => !!daten.value?.ing?.eingerichtet);
+const ingLaeuft = ref(false);
+
+async function ingAutomatisch() {
+  if (!mitIng.value || ingLaeuft.value || ruftAb.value) return;
+  ingLaeuft.value = true;
+  try {
+    const e = await api.ingAbrufen(true);
+    if (e.uebersprungen) return;
+    if (e.freigabe) {
+      toast.add({ severity: "warn", summary: "Keine Freigabe in der ING-App", detail: e.fehler, life: 8000 });
+    }
+    await laden(false);
+  } catch {
+    // Beim Öffnen still; der Fehler steht danach am Konto bzw. im Log
+  } finally {
+    ingLaeuft.value = false;
+  }
+}
+
+function sichtbar() {
+  if (document.visibilityState === "visible") void ingAutomatisch();
 }
 
 // Depotbestand über FinTS; verlangt die ING eine Freigabe in der App, wartet der Server bis zu zwei Minuten
@@ -153,7 +208,12 @@ async function einlesen(ereignis: Event) {
   }
 }
 
-onMounted(laden);
+onMounted(async () => {
+  await laden();
+  void ingAutomatisch();
+  document.addEventListener("visibilitychange", sichtbar);
+});
+onUnmounted(() => document.removeEventListener("visibilitychange", sichtbar));
 
 // Uhrzeit in der Zeitzone des Browsers
 function zeit(iso: string | null | undefined): string {
@@ -173,9 +233,9 @@ const ibanLang = (iban: string) => iban.replace(/(.{4})/g, "$1 ").trim();
 
 const summe = computed(() => Object.entries(daten.value?.summen ?? {}));
 const depotSumme = computed(() => depots.value.reduce((s, d) => s + Number(d.wert ?? 0), 0));
-const letzterAbruf = computed(() =>
-  konten.value.map((k) => k.abgerufen).filter(Boolean).sort().at(-1) ?? "",
-);
+// Enable Banking und FinTS schreiben UTC-Zeitpunkte, die sich als Text sortieren lassen
+const zuletzt = (k: BankKonto) => [k.abgerufen, k.fints].filter(Boolean).sort().at(-1) ?? "";
+const letzterAbruf = computed(() => konten.value.map(zuletzt).filter(Boolean).sort().at(-1) ?? "");
 // „9:00, 12:30, 16:00 und 19:30“
 const abrufzeiten = computed(() => {
   const z = (daten.value?.zeiten ?? []).map((t) => t.replace(/^0(\d)/, "$1"));
@@ -340,10 +400,14 @@ const gefiltert = computed(() =>
           </div>
           <div class="text-sm text-muted-color">
             <template v-if="gewaehlt">
-              Saldo vom {{ zeit(gewaehlt.saldo_stand) }} · Freigabe bis {{ zeit(gewaehlt.freigabe_bis.slice(0, 10)) }}
+              Saldo vom {{ zeit(gewaehlt.saldo_stand) }}
+              <template v-if="!gewaehlt.nur_fints"> · Freigabe bis {{ zeit(gewaehlt.freigabe_bis.slice(0, 10)) }}</template>
+              <template v-if="gewaehlt.fints"> · über FinTS {{ zeit(gewaehlt.fints) }}</template>
             </template>
             <template v-else>Zuletzt abgerufen: {{ zeit(letzterAbruf) }}</template>
             <template v-if="abrufzeiten"> · automatisch um {{ abrufzeiten }} Uhr</template>
+            <template v-if="mitIng && (!gewaehlt || gewaehlt.ing)"> · ING stündlich 7–22 Uhr</template>
+            <i v-if="ingLaeuft" v-tooltip.bottom="'ING wird über FinTS abgerufen'" class="pi pi-spin pi-spinner ml-1 text-xs" />
           </div>
         </div>
         <div class="flex items-center gap-3">
@@ -365,21 +429,29 @@ const gefiltert = computed(() =>
           />
           <Button
             v-tooltip.bottom="
-              abrufFrei
+              (abrufFrei
                 ? `Banken erlauben ${daten?.abrufe_je_tag ?? 4} Abrufe je Konto in 24 Stunden`
-                : 'Für heute sind alle Abrufe verbraucht'
+                : 'Für heute sind alle Abrufe über Enable Banking verbraucht') +
+              (mitIng ? '; die ING-Konten kommen über FinTS ohne Limit' : '')
             "
             icon="pi pi-refresh"
             label="Jetzt abrufen"
             size="small"
             severity="secondary"
             :loading="ruftAb"
-            :disabled="!abrufFrei || !daten?.eingerichtet"
+            :disabled="!mitIng && (!abrufFrei || !daten?.eingerichtet)"
             @click="abrufen"
           />
         </div>
       </div>
 
+      <Message v-if="mitIng && daten?.depot.abgelehnt && (!gewaehlt || gewaehlt.ing)" severity="error" class="mb-3">
+        {{ daten.depot.fehler }}
+      </Message>
+      <Message v-else-if="mitIng && daten?.depot.freigabe && (!gewaehlt || gewaehlt.ing)" severity="warn" class="mb-3">
+        Die ING wartet auf eine Freigabe in der App. Automatisch fragt der Abruf nicht erneut nach; einmal „Jetzt
+        abrufen“ und in der ING-App bestätigen.
+      </Message>
       <Message v-if="gewaehlt && warnung(gewaehlt)" severity="warn" class="mb-3">
         {{ warnung(gewaehlt) }}<template v-if="gewaehlt.freigabe_tage !== null && gewaehlt.freigabe_tage <= 14">
           · erneuern im Container: <code>finanz-o-mat bank verbinden --bank {{ gewaehlt.bank }}</code></template

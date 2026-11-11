@@ -85,8 +85,8 @@ class Config:
 
     # Bestand des ING-Direkt-Depots über FinTS (siehe ustva/depot.py); PSD2 liefert keine Depots
     fints_produkt_id: str = ""  # Produkt-ID der Deutschen Kreditwirtschaft
-    ing_fints_zugang: str = ""  # Zugangsnummer: die letzten 10 Stellen der IBAN
-    ing_fints_pin: str = ""  # PIN fürs Internetbanking
+    ing_fints_zugang: str = ""  # Benutzername des Online-Bankings (vor der Umstellung 2026: Zugangsnummer)
+    ing_fints_pin: str = ""  # Passwort des Online-Bankings (vorher Internetbanking-PIN)
 
     ezb_kurse: bool = True  # Monatsmittel der EZB-Referenzkurse abrufen, wenn kein Kurs hinterlegt ist
 

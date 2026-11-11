@@ -127,6 +127,7 @@ class BankKonto:
     saldo_stand: str = ""
     abrufe: str = ""  # ISO-Zeitpunkte, mit Leerzeichen getrennt
     fehler: str = ""
+    fints: str = ""  # letzter Abruf über FinTS (nur ING, ustva/ing_konten.py), ohne das Limit von PSD2
 
 
 @dataclass

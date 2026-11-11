@@ -73,6 +73,7 @@ nano /etc/finanz-o-mat/finanz-o-mat.env      # Werte in "…", ohne " \ $ `
 systemctl restart finanz-o-mat
 journalctl -u finanz-o-mat -f                # Log
 finanz-o-mat passwort --zuruecksetzen        # Passwort vergessen (in der App gesetztes Passwort löschen)
+finanz-o-mat-fints                           # FinTS-Zugang zur ING (Depot, Konten) abfragen und eintragen
 ```
 
 Kennzahlen auf der Kommandozeile, z. B. per Cronjob im Container:

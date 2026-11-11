@@ -20,6 +20,7 @@
     python -m ustva bank abrufen --konto DE… --trocken  Probelauf für ein Konto: zeigen, nichts speichern
     python -m ustva bank einlesen auszug.xml [--trocken]  alte Auszüge (CAMT.053) in die Kontenübersicht
     python -m ustva bank depot [--warten 120]           Bestand des ING-Direkt-Depots über FinTS holen
+    python -m ustva bank ing [--warten 120]             Saldo und Umsätze der ING-Konten über FinTS (ohne Limit)
 """
 
 from __future__ import annotations
@@ -295,6 +296,31 @@ def depot_befehl(args, cfg: Config, db: Datenbank, zugang=None) -> int:
     return 0
 
 
+def ing_befehl(args, cfg: Config, db: Datenbank, zugang=None) -> int:
+    from datetime import timedelta
+
+    from . import depot, ing_konten
+
+    if not depot.eingerichtet(cfg) and zugang is None:
+        print("FinTS nicht eingerichtet: FINTS_PRODUKT_ID, ING_FINTS_ZUGANG und ING_FINTS_PIN setzen "
+              "(siehe README).", file=sys.stderr)
+        return 1
+    a = ing_konten.abrufen(db, cfg, zugang, warten=timedelta(seconds=args.warten),
+                           hinweis=lambda t: print(t, flush=True))
+    if a.fehler:
+        print(f"Abruf der ING-Konten fehlgeschlagen: {a.fehler}", file=sys.stderr)
+        return 1
+    if a.uebersprungen:
+        print(f"Übersprungen: {a.uebersprungen}")
+        return 0
+    for schluessel in a.konten:
+        k = db.bank_konto(schluessel)
+        if k:
+            print(f"{k.bezeichnung or k.bank} …{k.iban[-4:]}: Saldo {k.saldo or '–'} {k.waehrung}")
+    print(f"{a.neu} neu in der Kontenübersicht, {a.vorgemerkt} vorgemerkt")
+    return 0
+
+
 def bank_befehl(args, cfg: Config, db: Datenbank, eingabe=input, client=None) -> int:
     from datetime import UTC, datetime
 
@@ -360,6 +386,8 @@ def bank_befehl(args, cfg: Config, db: Datenbank, eingabe=input, client=None) ->
         return 1 if fehler else 0
     if args.schritt == "depot":
         return depot_befehl(args, cfg, db)
+    if args.schritt == "ing":
+        return ing_befehl(args, cfg, db)
     try:
         eb = ka.EnableBanking.aus_config(cfg, client)
         if args.schritt == "banken":
@@ -498,6 +526,8 @@ def main(argv: list[str] | None = None) -> int:
     b6.add_argument("--trocken", action="store_true", help="Probelauf: nur zählen, nichts speichern")
     b7 = bk_sub.add_parser("depot", help="Bestand des ING-Direkt-Depots über FinTS holen (Freigabe in der ING-App)")
     b7.add_argument("--warten", type=int, default=120, help="Sekunden, die auf die Freigabe in der App gewartet wird")
+    b8 = bk_sub.add_parser("ing", help="Saldo und Umsätze der ING-Konten über FinTS holen (ohne das Limit von PSD2)")
+    b8.add_argument("--warten", type=int, default=120, help="Sekunden, die auf die Freigabe in der App gewartet wird")
     args = parser.parse_args(argv)
 
     cfg = Config.aus_umgebung()

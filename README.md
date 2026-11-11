@@ -245,9 +245,11 @@ Verlust je Position, und hat mit der Buchhaltung nichts zu tun.
 
 1. Eine FinTS-Produkt-ID bei der Deutschen Kreditwirtschaft beantragen
    (https://www.fints.org/de/hersteller/produktregistrierung, kostenlos, dauert bis zu zwei Wochen).
-2. In `/etc/finanz-o-mat/finanz-o-mat.env` (bzw. `.env`) eintragen:
-   `FINTS_PRODUKT_ID="<Produkt-ID>"`, `ING_FINTS_ZUGANG="<Zugangsnummer>"` (die letzten 10 Stellen der IBAN) und
-   `ING_FINTS_PIN="<PIN fürs Internetbanking>"`. Die Datei ist nur für den Dienst lesbar.
+2. Im Container `finanz-o-mat-fints` aufrufen: fragt Produkt-ID, Benutzername und Passwort des Online-Bankings ab
+   (wie beim Login im Browser; vor der Umstellung der ING 2026 Zugangsnummer und Internetbanking-PIN, nie App-PIN
+   oder DiBa-Key), trägt sie in `/etc/finanz-o-mat/finanz-o-mat.env` ein (`FINTS_PRODUKT_ID`, `ING_FINTS_ZUGANG`,
+   `ING_FINTS_PIN`; die Datei ist nur für den Dienst lesbar), startet den Dienst neu und ruft auf Wunsch gleich ab.
+   Von Hand geht es genauso, ohne Container in der `.env`.
 3. Einmal von Hand abrufen, im Reiter „Konten“ („Depots“ → „Abrufen“) oder im Container mit `finanz-o-mat bank depot`,
    und den Zugriff in der ING-App freigeben.
 
@@ -255,8 +257,28 @@ Verlust je Position, und hat mit der Buchhaltung nichts zu tun.
 - Verlangt die ING eine Freigabe, wartet der Abruf bis zu zwei Minuten darauf. Kommt sie im Hintergrund nicht, fragt
   der Dienst nicht erneut (sonst käme bei jedem Abruf eine Anfrage aufs Telefon), bis ein Abruf von Hand sie wieder
   bekommen hat. Alle 90 Tage verlangt die ING außerdem einen Login im Online-Banking.
+- Lehnt die ING die Anmeldung ab, steht ihre Meldung mit Code im Fehler; danach fragen Hintergrund und Öffnen des
+  Reiters nicht mehr an, bis ein Abruf von Hand geklappt hat (sonst droht die Sperre nach mehreren Fehlversuchen).
 - Die App merkt sich die Systemkennung und die Bankdaten von FinTS in der Datenbank (ohne PIN) und je Tag den Wert
   des Depots.
+
+### ING-Konten sofort (FinTS)
+
+Über Enable Banking erlaubt PSD2 nur vier Abrufe je Konto in 24 Stunden; nach einer Push-Nachricht der ING steht die
+Buchung dann oft erst Stunden später in der Übersicht. Über denselben FinTS-Zugang wie das Depot holt die App Saldo,
+Buchungen und vorgemerkte Buchungen der ING-Konten ohne dieses Limit:
+
+- beim Öffnen des Reiters „Konten“ und wenn die App wieder in den Vordergrund kommt (höchstens alle zwei Minuten),
+- mit „Jetzt abrufen“ (erst Enable Banking, dann FinTS),
+- im Dienst stündlich von 7 bis 22 Uhr,
+- im Container mit `finanz-o-mat bank ing`.
+
+Abgerufen werden alle Konten des Zugangs, die letzten 14 Tage. Ein Konto, das nicht über Enable Banking verbunden ist
+(etwa das Extra-Konto, Tagesgeld), legt der erste Abruf in der Kontenübersicht an; Enable Banking lässt es aus. Die
+Umsätze landen nur in der Kontenübersicht; in die Buchhaltung bringt sie weiter Enable Banking. Dessen nächster Abruf
+übernimmt die Zeile, die schon über FinTS kam (gleicher Betrag, Buchungstag bis drei Tage auseinander), und FinTS legt
+nichts an, was Enable Banking schon geliefert hat. Wartet die ING auf eine Freigabe in der App, fragen das Öffnen und
+der Hintergrund nicht erneut nach, bis „Jetzt abrufen“ sie wieder bekommen hat.
 
 ## Paperless-ngx
 
@@ -398,6 +420,8 @@ stehen dort nur Anzahlen und Laufzeiten, keine Beträge, Namen oder Rechnungsnum
 | `finanzomat_bankkonto_info{bank,konto,buchhaltung}` | je verbundenem Konto; `konto` ist der Bankname, bei mehreren Konten einer Bank mit Nummer (keine IBAN) |
 | `finanzomat_bankkonto_freigabe_tage`, `…_freigabe_bis_timestamp_seconds` | Restlaufzeit der Freigabe der Bank, für einen Alarm vor dem Ablauf |
 | `finanzomat_bankkonto_letzter_abruf_timestamp_seconds`, `…_abrufe_frei`, `…_fehler`, `…_umsaetze` | letzter erfolgreicher Abruf, freie Abrufe in 24 Stunden, Fehler beim letzten Abruf, Umsätze in der Übersicht (kein Saldo) |
+| `finanzomat_bankkonto_fints_abruf_timestamp_seconds` | letzter erfolgreicher Abruf über FinTS (nur ING) |
+| `finanzomat_ing_fints_abruf_total{ausloeser,ergebnis}`, `finanzomat_ing_fints_umsaetze_total` | Abrufe der ING-Konten über FinTS (oeffnen, knopf, zeitplan) und neu gekommene Umsätze |
 | `finanzomat_depotabruf_total{ausloeser,ergebnis}` | Depotabrufe über FinTS: ok, fehler, freigabe (App-Freigabe fehlt), uebersprungen |
 | `finanzomat_depot_positionen{bank,depot}`, `…_letzter_abruf_timestamp_seconds` | Wertpapiere je Depot und letzter erfolgreicher Abruf (kein Wert, keine Depotnummer) |
 | `finanzomat_depot_freigabe_noetig`, `finanzomat_depot_fehler` | 1, wenn der Depotabruf auf eine Freigabe in der ING-App wartet bzw. zuletzt fehlschlug |
