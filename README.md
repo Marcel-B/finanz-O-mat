@@ -258,6 +258,23 @@ Verlust je Position, und hat mit der Buchhaltung nichts zu tun.
 - Die App merkt sich die Systemkennung und die Bankdaten von FinTS in der Datenbank (ohne PIN) und je Tag den Wert
   des Depots.
 
+### ING-Konten sofort (FinTS)
+
+Über Enable Banking erlaubt PSD2 nur vier Abrufe je Konto in 24 Stunden; nach einer Push-Nachricht der ING steht die
+Buchung dann oft erst Stunden später in der Übersicht. Über denselben FinTS-Zugang wie das Depot holt die App Saldo,
+Buchungen und vorgemerkte Buchungen der ING-Konten ohne dieses Limit:
+
+- beim Öffnen des Reiters „Konten“ und wenn die App wieder in den Vordergrund kommt (höchstens alle zwei Minuten),
+- mit „Jetzt abrufen“ (erst Enable Banking, dann FinTS),
+- im Dienst stündlich von 7 bis 22 Uhr,
+- im Container mit `finanz-o-mat bank ing`.
+
+Abgerufen werden nur ING-Konten, die schon über Enable Banking verbunden sind (gleiche IBAN), die letzten 14 Tage. Sie
+landen nur in der Kontenübersicht; in die Buchhaltung bringt sie weiter Enable Banking. Dessen nächster Abruf
+übernimmt die Zeile, die schon über FinTS kam (gleicher Betrag, Buchungstag bis drei Tage auseinander), und FinTS legt
+nichts an, was Enable Banking schon geliefert hat. Wartet die ING auf eine Freigabe in der App, fragen das Öffnen und
+der Hintergrund nicht erneut nach, bis „Jetzt abrufen“ sie wieder bekommen hat.
+
 ## Paperless-ngx
 
 1. In Paperless unter „Profil“ ein API-Token erzeugen und in der App unter „Einstellungen“ mit der URL eintragen
@@ -398,6 +415,8 @@ stehen dort nur Anzahlen und Laufzeiten, keine Beträge, Namen oder Rechnungsnum
 | `finanzomat_bankkonto_info{bank,konto,buchhaltung}` | je verbundenem Konto; `konto` ist der Bankname, bei mehreren Konten einer Bank mit Nummer (keine IBAN) |
 | `finanzomat_bankkonto_freigabe_tage`, `…_freigabe_bis_timestamp_seconds` | Restlaufzeit der Freigabe der Bank, für einen Alarm vor dem Ablauf |
 | `finanzomat_bankkonto_letzter_abruf_timestamp_seconds`, `…_abrufe_frei`, `…_fehler`, `…_umsaetze` | letzter erfolgreicher Abruf, freie Abrufe in 24 Stunden, Fehler beim letzten Abruf, Umsätze in der Übersicht (kein Saldo) |
+| `finanzomat_bankkonto_fints_abruf_timestamp_seconds` | letzter erfolgreicher Abruf über FinTS (nur ING) |
+| `finanzomat_ing_fints_abruf_total{ausloeser,ergebnis}`, `finanzomat_ing_fints_umsaetze_total` | Abrufe der ING-Konten über FinTS (oeffnen, knopf, zeitplan) und neu gekommene Umsätze |
 | `finanzomat_depotabruf_total{ausloeser,ergebnis}` | Depotabrufe über FinTS: ok, fehler, freigabe (App-Freigabe fehlt), uebersprungen |
 | `finanzomat_depot_positionen{bank,depot}`, `…_letzter_abruf_timestamp_seconds` | Wertpapiere je Depot und letzter erfolgreicher Abruf (kein Wert, keine Depotnummer) |
 | `finanzomat_depot_freigabe_noetig`, `finanzomat_depot_fehler` | 1, wenn der Depotabruf auf eine Freigabe in der ING-App wartet bzw. zuletzt fehlschlug |

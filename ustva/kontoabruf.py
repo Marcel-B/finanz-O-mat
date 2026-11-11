@@ -47,6 +47,8 @@ from .models import BankKonto, Umsatz
 API = "https://api.enablebanking.com"
 PRAEFIX = "eb:"  # Prüfsummen abgerufener Umsätze; CSV-Umsätze haben eine reine SHA-256
 IMPORT_PRAEFIX = "camt:"  # aus einer CAMT.053-Datei eingelesen (ustva/camt.py)
+FINTS_PRAEFIX = "fints:"  # über FinTS abgerufen (ustva/ing_konten.py); zählt wie eingelesen
+EINGELESEN = (IMPORT_PRAEFIX, FINTS_PRAEFIX)  # ein Abruf über Enable Banking übernimmt diese Zeilen
 HOECHSTE_FREIGABE = timedelta(days=180)
 ERSTER_ABRUF = timedelta(days=90)  # so weit liefern die meisten Banken ohne neue Freigabe zurück
 UEBERLAPPUNG = timedelta(days=7)  # späte Buchungen mit älterem Buchungstag mitnehmen
@@ -369,11 +371,11 @@ def pruefsummen(buchungen: list[tuple[dict, Umsatz]], konto: BankKonto) -> None:
 
 
 def aus_csv(u: Umsatz) -> bool:
-    return not u.pruefsumme.startswith((PRAEFIX, IMPORT_PRAEFIX))
+    return not u.pruefsumme.startswith((PRAEFIX, *EINGELESEN))
 
 
 def eingelesen(u: Umsatz) -> bool:
-    return u.pruefsumme.startswith(IMPORT_PRAEFIX)
+    return u.pruefsumme.startswith(EINGELESEN)
 
 
 def _gleich(a: Umsatz, b: Umsatz) -> bool:
@@ -497,7 +499,7 @@ def buchhaltung_uebernehmen(db: Datenbank, cfg: Config, k: BankKonto, buchungen:
 
 
 def eingelesene_uebernehmen(db: Datenbank, schluessel: str, umsaetze: list[Umsatz]) -> int:
-    """Abgerufene Umsätze, die schon aus einer CAMT-Datei in der Übersicht stehen, übernehmen deren Zeile.
+    """Abgerufene Umsätze, die schon aus einer CAMT-Datei oder über FinTS in der Übersicht stehen, nehmen deren Zeile.
 
     Die Zeile bekommt die Prüfsumme der Schnittstelle, damit sie beim Speichern nicht ein zweites Mal entsteht.
     """
@@ -508,7 +510,7 @@ def eingelesene_uebernehmen(db: Datenbank, schluessel: str, umsaetze: list[Umsat
             continue
         kandidaten = [z for z in db.konto_buchungen_von_bis(schluessel, u.buchungsdatum - tage,
                                                             u.buchungsdatum + tage)
-                      if z["pruefsumme"].startswith(IMPORT_PRAEFIX) and Decimal(z["betrag"]) == u.betrag]
+                      if z["pruefsumme"].startswith(EINGELESEN) and Decimal(z["betrag"]) == u.betrag]
         if kandidaten:
             z = min(kandidaten, key=lambda z: abs((date.fromisoformat(z["buchungsdatum"]) - u.buchungsdatum).days))
             db.konto_buchung_umschluesseln(z["pruefsumme"], u.pruefsumme)  # zählt danach als abgerufen
@@ -645,6 +647,8 @@ def faellige_zeit(zeiten: list[str], jetzt: datetime, nachholen: timedelta = NAC
 class Hintergrundabruf:
     """Ruft im Dienst zu festen Uhrzeiten ab (``KONTOABRUF_ZEITEN``, Standard 9:00, 12:30, 16:00, 19:30).
 
+    Die ING-Konten zusätzlich über FinTS jede Stunde von 7 bis 22 Uhr, wenn der Zugang eingerichtet ist.
+
     Nachts nicht. Ist der Dienst zur Abrufzeit aus, holt er den Abruf bis zu einer Stunde später nach. Konten, die
     seit der Abrufzeit schon abgerufen wurden (Knopf, Kommandozeile, Neustart), lässt er aus.
     """
@@ -658,12 +662,14 @@ class Hintergrundabruf:
         self._faden: threading.Thread | None = None
         self._eb: EnableBanking | None = None
         self._erledigt: datetime | None = None  # zuletzt bearbeitete Abrufzeit
+        self._ing_versucht: datetime | None = None  # zuletzt versuchter Abruf der ING-Konten über FinTS
 
     def einmal(self, eb: EnableBanking | None = None, jetzt: datetime | None = None) -> Abrufe | None:
         from . import depot
         from .einstellungen import wirksam
 
         jetzt = jetzt or datetime.now(UTC)
+        self._ing(jetzt)
         punkt = faellige_zeit(self.zeiten, jetzt.astimezone(self.tz))
         if punkt is None or punkt == self._erledigt:
             return None
@@ -679,6 +685,34 @@ class Hintergrundabruf:
         finally:
             if mit_depot:
                 self._depot(cfg, jetzt)
+
+    def _ing(self, jetzt: datetime) -> None:
+        """ING-Konten über FinTS stündlich von 7 bis 22 Uhr (ustva/ing_konten.py), vor den Abrufzeiten, damit
+        Enable Banking danach die schon da stehenden Zeilen übernimmt."""
+        from . import depot, ing_konten, monitoring
+        from .einstellungen import wirksam
+
+        if not ing_konten.tageszeit(jetzt, self.tz):
+            return
+        if self._ing_versucht and jetzt - self._ing_versucht < ing_konten.TAKT:
+            return  # auch nach einem Fehler erst in einer Stunde wieder
+        cfg = wirksam(self.cfg, self.db)
+        if not depot.eingerichtet(cfg) or not any(ing_konten.ing(k) for k in self.db.bank_konten()):
+            return
+        self._ing_versucht = jetzt
+        try:  # ein Abruf von Hand oder beim Öffnen in den letzten Minuten reicht
+            a = ing_konten.abrufen(self.db, cfg, jetzt=jetzt, hintergrund=True,
+                                   wenn_aelter=ing_konten.TAKT - timedelta(minutes=10))
+        except Exception:  # der Faden darf nicht sterben
+            log.exception("ING-Konten über FinTS im Hintergrund fehlgeschlagen")
+            return
+        monitoring.ing_abruf_zaehlen(a, "zeitplan")
+        if a.fehler:
+            log.warning("ING-Konten über FinTS: %s", a.fehler)
+        elif a.uebersprungen:
+            log.info("ING-Konten über FinTS: %s", a.uebersprungen)
+        else:
+            log.info("ING-Konten über FinTS: %d neu, %d vorgemerkt", a.neu, a.vorgemerkt)
 
     def _depot(self, cfg: Config, jetzt: datetime) -> None:
         """Depotbestand über FinTS (ustva/depot.py); fragt im Hintergrund keine Freigabe in der App nach."""

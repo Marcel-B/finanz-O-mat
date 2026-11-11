@@ -62,6 +62,9 @@ ENABLE_BANKING_DAUER = Histogram("finanzomat_enable_banking_request_duration_sec
                                  buckets=(0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60))
 DEPOTABRUFE = Counter("finanzomat_depotabruf_total", "Depotabrufe über FinTS je Auslöser und Ergebnis",
                       ["ausloeser", "ergebnis"])
+ING_ABRUFE = Counter("finanzomat_ing_fints_abruf_total", "Abrufe der ING-Konten über FinTS je Auslöser und Ergebnis",
+                     ["ausloeser", "ergebnis"])
+ING_UMSAETZE = Counter("finanzomat_ing_fints_umsaetze_total", "Über FinTS neu in die Kontenübersicht gekommene Umsätze")
 
 STUFEN = {logging.DEBUG: "debug", logging.INFO: "info", logging.WARNING: "warning"}
 # Diese Logger schreibt der Versender selbst; sie dürfen nicht wieder bei ihm landen
@@ -111,6 +114,13 @@ def kontoabruf_zaehlen(abrufe, ausloeser: str) -> None:
 def depotabruf_zaehlen(abruf, ausloeser: str) -> None:
     """Zählt das Ergebnis von depot.abrufen(): ok, fehler, freigabe (App-Freigabe fehlt) oder uebersprungen."""
     DEPOTABRUFE.labels(ausloeser, abruf.ergebnis).inc()
+
+
+def ing_abruf_zaehlen(abruf, ausloeser: str) -> None:
+    """Zählt das Ergebnis von ing_konten.abrufen(): ok, fehler, freigabe oder uebersprungen."""
+    ING_ABRUFE.labels(ausloeser, abruf.ergebnis).inc()
+    if abruf.neu:
+        ING_UMSAETZE.inc(abruf.neu)
 
 
 def konto_namen(konten) -> dict[str, str]:
@@ -201,6 +211,8 @@ class Bestand:
                                 "Ablauf der Freigabe der Bank", labels=labels)
         zuletzt = GaugeMetricFamily("finanzomat_bankkonto_letzter_abruf_timestamp_seconds",
                                     "Letzter erfolgreicher Abruf", labels=labels)
+        fints = GaugeMetricFamily("finanzomat_bankkonto_fints_abruf_timestamp_seconds",
+                                  "Letzter erfolgreicher Abruf über FinTS (nur ING)", labels=labels)
         frei = GaugeMetricFamily("finanzomat_bankkonto_abrufe_frei", "Freie Abrufe in den letzten 24 Stunden (PSD2: 4)",
                                  labels=labels)
         fehler = GaugeMetricFamily("finanzomat_bankkonto_fehler", "1, wenn der letzte Abruf fehlgeschlagen ist",
@@ -216,10 +228,12 @@ class Bestand:
                 bis.add_metric(werte, zeit)
             if zeit := _zeitpunkt(k.abgerufen):
                 zuletzt.add_metric(werte, zeit)
+            if zeit := _zeitpunkt(k.fints):
+                fints.add_metric(werte, zeit)
             frei.add_metric(werte, ka.abrufe_frei(k, jetzt))
             fehler.add_metric(werte, 1 if k.fehler else 0)
             umsaetze.add_metric(werte, self.db.konto_buchungen_anzahl(k.schluessel))
-        yield from (info, tage, bis, zuletzt, frei, fehler, umsaetze)
+        yield from (info, tage, bis, zuletzt, fints, frei, fehler, umsaetze)
 
     def _depots(self):
         """Je Depot: Anzahl der Positionen und letzter Abruf; dazu, ob der FinTS-Zugang auf eine Freigabe wartet.

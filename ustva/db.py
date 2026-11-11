@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS bank_konten (  -- Konten mit Freigabe über Enable Ba
     saldo TEXT NOT NULL DEFAULT '',
     saldo_stand TEXT NOT NULL DEFAULT '',
     abrufe TEXT NOT NULL DEFAULT '',
-    fehler TEXT NOT NULL DEFAULT ''
+    fehler TEXT NOT NULL DEFAULT '',
+    fints TEXT NOT NULL DEFAULT ''  -- letzter Abruf über FinTS (ustva/ing_konten.py)
 );
 CREATE TABLE IF NOT EXISTS konto_vorgemerkt (  -- vorgemerkte Umsätze, bei jedem Abruf je Konto ersetzt
     konto TEXT NOT NULL,  -- bank_konten.schluessel
@@ -108,7 +109,8 @@ CREATE TABLE IF NOT EXISTS fints_zustand (  -- FinTS-Zugang (ustva/depot.py): Ba
     daten BLOB,  -- python-fints deconstruct(), ohne PIN
     fehler TEXT NOT NULL DEFAULT '',
     freigabe INTEGER NOT NULL DEFAULT 0,  -- 1: wartet auf eine Freigabe in der App, im Hintergrund nicht fragen
-    versucht TEXT NOT NULL DEFAULT ''
+    versucht TEXT NOT NULL DEFAULT '',
+    konten TEXT NOT NULL DEFAULT ''  -- letzter erfolgreicher Abruf der Konten
 );
 CREATE TABLE IF NOT EXISTS depots (  -- Depots in der Kontenübersicht, nur Bestand
     schluessel TEXT PRIMARY KEY,
@@ -366,9 +368,11 @@ class Datenbank:
             if "abgeglichen" not in spalten:
                 self._con.execute("ALTER TABLE sitzungen ADD COLUMN abgeglichen REAL NOT NULL DEFAULT 0")
             spalten = {z["name"] for z in self._con.execute("PRAGMA table_info(bank_konten)")}
-            for spalte in ("saldo", "saldo_stand", "abrufe", "fehler"):  # von vor der Kontenübersicht
+            for spalte in ("saldo", "saldo_stand", "abrufe", "fehler", "fints"):  # von vor Übersicht bzw. FinTS
                 if spalte not in spalten:
                     self._con.execute(f"ALTER TABLE bank_konten ADD COLUMN {spalte} TEXT NOT NULL DEFAULT ''")
+            if "konten" not in {z["name"] for z in self._con.execute("PRAGMA table_info(fints_zustand)")}:
+                self._con.execute("ALTER TABLE fints_zustand ADD COLUMN konten TEXT NOT NULL DEFAULT ''")
 
     # Einstellungen aus der Oberfläche (überschreiben die Umgebungsvariablen)
     def einstellungen(self) -> dict[str, str]:
@@ -540,13 +544,24 @@ class Datenbank:
         return next((k for k in self.bank_konten() if k.schluessel == schluessel), None)
 
     def bank_konto_speichern(self, k: BankKonto) -> None:
+        """Legt an oder ersetzt; ``fints`` schreibt nur ``bank_konto_fints`` (der Abruf über Enable Banking hält
+        das Konto während des Abrufs und würde sonst einen FinTS-Abruf von inzwischen überschreiben)."""
         felder = [f.name for f in fields(BankKonto)]
         werte = [int(v) if isinstance(v, bool) else v for v in (getattr(k, f) for f in felder)]
+        aendern = ", ".join(f"{f} = excluded.{f}" for f in felder[1:] if f != "fints")
         with self._lock, self._con:
             self._con.execute(
                 f"INSERT INTO bank_konten ({', '.join(felder)}) VALUES ({', '.join('?' for _ in felder)}) "
-                f"ON CONFLICT(schluessel) DO UPDATE SET {', '.join(f'{f} = excluded.{f}' for f in felder[1:])}",
-                werte)
+                f"ON CONFLICT(schluessel) DO UPDATE SET {aendern}", werte)
+
+    def bank_konto_fints(self, schluessel: str, zeit: str, saldo: str | None = None, waehrung: str = "",
+                         saldo_stand: str = "") -> None:
+        """Nach einem Abruf über FinTS (ustva/ing_konten.py): Zeitpunkt und, wenn geliefert, der Saldo."""
+        with self._lock, self._con:
+            self._con.execute("UPDATE bank_konten SET fints = ? WHERE schluessel = ?", (zeit, schluessel))
+            if saldo is not None:
+                self._con.execute("UPDATE bank_konten SET saldo = ?, waehrung = ?, saldo_stand = ? "
+                                  "WHERE schluessel = ?", (saldo, waehrung, saldo_stand, schluessel))
 
     # Kontenübersicht (getrennt von den Umsätzen der Buchhaltung)
     def konto_buchungen_speichern(self, konto: str, umsaetze: list[Umsatz]) -> int:
@@ -615,11 +630,12 @@ class Datenbank:
         return None if z is None else dict(z) | {"freigabe": bool(z["freigabe"])}
 
     def fints_zustand_speichern(self, schluessel: str, *, daten: bytes | None = None, fehler: str | None = None,
-                                freigabe: bool | None = None, versucht: str | None = None) -> None:
+                                freigabe: bool | None = None, versucht: str | None = None,
+                                konten: str | None = None) -> None:
         """Nur die übergebenen Felder; ``daten=None`` lässt den gespeicherten Zustand stehen."""
         with self._lock, self._con:
             self._con.execute("INSERT OR IGNORE INTO fints_zustand (schluessel) VALUES (?)", (schluessel,))
-            for spalte, wert in (("daten", daten), ("fehler", fehler), ("versucht", versucht),
+            for spalte, wert in (("daten", daten), ("fehler", fehler), ("versucht", versucht), ("konten", konten),
                                  ("freigabe", None if freigabe is None else int(freigabe))):
                 if wert is not None:
                     self._con.execute(f"UPDATE fints_zustand SET {spalte} = ? WHERE schluessel = ?",

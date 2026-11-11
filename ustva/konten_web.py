@@ -15,7 +15,7 @@ from decimal import Decimal
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
-from . import camt, depot, monitoring
+from . import camt, depot, ing_konten, monitoring
 from . import kontoabruf as ka
 from .config import Config
 from .db import Datenbank
@@ -42,6 +42,8 @@ def _konto(k: BankKonto, jetzt: datetime) -> dict:
         "naechster_frei": frei.isoformat(timespec="seconds") if frei else None,
         "fehler": k.fehler,
         "buchhaltung": k.aktiv,
+        "fints": k.fints,  # letzter Abruf über FinTS (nur ING)
+        "ing": ing_konten.ing(k),
     }
 
 
@@ -76,6 +78,10 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
             "depot": {"eingerichtet": depot.eingerichtet(cfg), "fehler": zustand.get("fehler", ""),
                       "freigabe": bool(zustand.get("freigabe")), "versucht": zustand.get("versucht", "")},
             "depots": _depots(db),
+            # ING-Konten über FinTS: beim Öffnen, mit „Jetzt abrufen“ und stündlich (ustva/ing_konten.py)
+            "ing": {"eingerichtet": depot.eingerichtet(cfg) and any(ing_konten.ing(k) for k in db.bank_konten()),
+                    "versucht": zustand.get("konten", ""),
+                    "beim_oeffnen": int(ing_konten.BEIM_OEFFNEN.total_seconds())},
             "zeiten": cfg.kontoabruf_zeiten if eingerichtet or depot.eingerichtet(cfg) else [],
             "abrufe_je_tag": ka.ABRUFE_JE_TAG,
             "summen": {w: str(b) for w, b in summen.items()},
@@ -112,6 +118,26 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
         return {"fehler": a.fehler, "freigabe": a.freigabe,
                 "depots": [{"schluessel": d.schluessel, "name": d.name, "positionen": len(d.positionen)}
                            for d in a.depots]}
+
+    @r.post("/api/konten/ing/abrufen")
+    async def ing_abrufen(automatisch: bool = False):
+        """Saldo und Umsätze der ING-Konten über FinTS, ohne das Limit von PSD2.
+
+        ``automatisch`` (beim Öffnen des Reiters): nur, wenn der letzte Abruf älter als zwei Minuten ist, und ohne
+        erneut nach einer Freigabe in der App zu fragen, auf die die ING schon wartet.
+        """
+        cfg = aktuell()
+        if not depot.eingerichtet(cfg):
+            raise HTTPException(400, "FinTS nicht eingerichtet (FINTS_PRODUKT_ID, ING_FINTS_ZUGANG, ING_FINTS_PIN)")
+        zustand = (db.fints_zustand(depot.ZUGANG) or {}).get("daten")
+        zugang = depot_fabrik(cfg, zustand) if depot_fabrik else None
+        a = await run_in_threadpool(ing_konten.abrufen, db, cfg, zugang, jetzt=_jetzt(), hintergrund=automatisch,
+                                    wenn_aelter=ing_konten.BEIM_OEFFNEN if automatisch else None)
+        monitoring.ing_abruf_zaehlen(a, "oeffnen" if automatisch else "knopf")
+        if a.fehler:
+            log.warning("ING-Konten über FinTS: %s", a.fehler)
+        return {"fehler": a.fehler, "freigabe": a.freigabe, "uebersprungen": a.uebersprungen, "neu": a.neu,
+                "vorgemerkt": a.vorgemerkt, "konten": a.konten}
 
     @r.post("/api/konten/einlesen")
     async def einlesen(request: Request):

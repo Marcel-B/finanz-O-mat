@@ -477,6 +477,24 @@ export interface BankKonto {
   naechster_frei: string | null;
   fehler: string;
   buchhaltung: boolean; // Umsätze gehen auch in die Buchhaltung
+  fints: string; // letzter Abruf über FinTS (nur ING, ohne das Limit von PSD2)
+  ing: boolean;
+}
+
+// ING-Konten über FinTS: beim Öffnen des Reiters, mit „Jetzt abrufen“ und stündlich von 7 bis 22 Uhr
+export interface IngZugang {
+  eingerichtet: boolean;
+  versucht: string;
+  beim_oeffnen: number; // Sekunden: beim Öffnen nicht öfter abrufen
+}
+
+export interface IngAbruf {
+  fehler: string;
+  freigabe: boolean;
+  uebersprungen: string;
+  neu: number;
+  vorgemerkt: number;
+  konten: string[];
 }
 
 export interface KontenUebersicht {
@@ -485,6 +503,7 @@ export interface KontenUebersicht {
   abrufe_je_tag: number;
   depot: DepotZugang;
   depots: Depot[];
+  ing: IngZugang;
   summen: Record<string, string>;
   konten: BankKonto[];
 }
@@ -600,6 +619,8 @@ export const api = {
   depotBestand: (schluessel: string) =>
     anfrage<DepotBestand>(`/api/konten/depot?schluessel=${encodeURIComponent(schluessel)}`),
   depotAbrufen: () => post<DepotAbruf>("/api/konten/depot/abrufen"),
+  ingAbrufen: (automatisch = false) =>
+    post<IngAbruf>(`/api/konten/ing/abrufen${automatisch ? "?automatisch=true" : ""}`),
   anmeldung: () => anfrage<Anmeldung>("/api/anmeldung"),
   anmelden: (benutzer: string, passwort: string) => post<Anmeldung>("/api/anmelden", { benutzer, passwort }),
   // Bei Identity-Anmeldung kommt die Adresse zum Abmelden beim Identity-Server zurück

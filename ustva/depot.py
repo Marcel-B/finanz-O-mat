@@ -1,4 +1,6 @@
-"""Bestand des ING-Direkt-Depots über FinTS (HBCI) abrufen, für den Reiter „Konten“.
+"""Zugang zur ING über FinTS (HBCI): Bestand des Direkt-Depots für den Reiter „Konten“.
+
+Über denselben Zugang holt ustva/ing_konten.py Umsätze und Saldo der ING-Konten, ohne das Limit von PSD2.
 
 Enable Banking (PSD2) liefert nur Zahlungskonten, keine Depots. Die ING bietet über FinTS für das Direkt-Depot den
 Depotbestand mit Details je Wertpapier an, aber keine Depotumsätze (https://www.ing.de/hilfe/log-in/fints/).
@@ -19,6 +21,7 @@ Nur eine Übersicht, mit der Buchhaltung hat das Depot nichts zu tun.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -37,6 +40,7 @@ FREIGABE_WARTEN = timedelta(minutes=2)
 ERSTE_NACHFRAGE = 5  # Sekunden bis zur ersten Nachfrage, ob in der App freigegeben wurde
 NACHFRAGE = 3
 DEPOT_KONTOARTEN = range(50, 60)  # FinTS-Kontoart 50–59: Depot
+SPERRE = threading.Lock()  # immer nur ein Dialog mit der ING (Hintergrund, Knopf, Kommandozeile)
 
 
 class DepotFehler(RuntimeError):
@@ -82,6 +86,22 @@ class Depot:
     @property
     def wert(self) -> Decimal:
         return sum((p.wert or Decimal(0) for p in self.positionen), Decimal(0))
+
+
+@dataclass
+class FintsKonto:
+    """Ein Zahlungskonto aus einer Sitzung: Saldo und Buchungen, wie python-fints sie liefert (mt940)."""
+
+    iban: str
+    saldo: object | None = None  # mt940.models.Balance
+    gebucht: list = field(default_factory=list)  # mt940.models.Transaction
+    vorgemerkt: list = field(default_factory=list)
+
+
+@dataclass
+class Sitzung:
+    depots: list[Depot] = field(default_factory=list)
+    konten: list[FintsKonto] = field(default_factory=list)
 
 
 @dataclass
@@ -183,28 +203,55 @@ class IngFints:
         if verfahren:
             f.set_tan_mechanism(verfahren[0])
 
-    def abrufen(self, warten: timedelta = FREIGABE_WARTEN,
-                hinweis: Callable[[str], None] | None = None) -> list[Depot]:
+    def _depots(self, f, bis: float, hinweis) -> list[Depot]:
         from fints.models import SEPAAccount
 
+        gefunden = depots_aus(f.get_information())
+        if not gefunden:
+            raise DepotFehler("Die ING meldet für diesen Zugang kein Depot")
+        depots = []
+        for d in gefunden:
+            konto = SEPAAccount(iban=d.get("iban"), bic=None, accountnumber=d["account_number"],
+                                subaccount=d.get("subaccount_number"), blz=ING_BLZ)
+            bestand = self._freigeben(f, f.get_holdings(konto), bis, hinweis) or []
+            depots.append(Depot(nummer=d["account_number"], name=(d.get("product_name") or "Depot").strip(),
+                                waehrung=(d.get("currency") or "EUR").upper(),
+                                positionen=[p for p in map(position_aus, bestand) if p]))
+        return depots
+
+    def _konten(self, f, ab: date, ibans: set[str], bis: float, hinweis) -> list[FintsKonto]:
+        """Saldo, gebuchte und vorgemerkte Buchungen je Konto.
+
+        python-fints hängt die vorgemerkten Buchungen (MT942) hinten an die gebuchten an, ohne sie zu kennzeichnen;
+        deshalb einmal ohne und einmal mit: was beim zweiten Mal hinter den gebuchten kommt, ist vorgemerkt.
+        """
+        ergebnis = []
+        for konto in self._freigeben(f, f.get_sepa_accounts(), bis, hinweis) or []:
+            iban = (konto.iban or "").replace(" ", "").upper()
+            if iban not in ibans:
+                continue
+            fk = FintsKonto(iban, saldo=self._freigeben(f, f.get_balance(konto), bis, hinweis))
+            fk.gebucht = list(self._freigeben(f, f.get_transactions(konto, ab), bis, hinweis) or [])
+            alle = list(self._freigeben(f, f.get_transactions(konto, ab, include_pending=True), bis, hinweis) or [])
+            fk.vorgemerkt = alle[len(fk.gebucht):]
+            ergebnis.append(fk)
+        return ergebnis
+
+    def abrufen(self, warten: timedelta = FREIGABE_WARTEN, hinweis: Callable[[str], None] | None = None,
+                depots: bool = True, konten_ab: date | None = None, ibans: set[str] | None = None) -> Sitzung:
+        """Eine Sitzung: die Depots und, mit ``konten_ab``, Saldo und Buchungen der Konten in ``ibans``."""
         bis = self._uhr() + warten.total_seconds()
         f = self._fabrik(self.cfg, self.zustand)
         try:
             self._verfahren_waehlen(f)
             with f:
                 self._freigeben(f, f.init_tan_response, bis, hinweis)
-                gefunden = depots_aus(f.get_information())
-                if not gefunden:
-                    raise DepotFehler("Die ING meldet für diesen Zugang kein Depot")
-                depots = []
-                for d in gefunden:
-                    konto = SEPAAccount(iban=d.get("iban"), bic=None, accountnumber=d["account_number"],
-                                        subaccount=d.get("subaccount_number"), blz=ING_BLZ)
-                    bestand = self._freigeben(f, f.get_holdings(konto), bis, hinweis) or []
-                    depots.append(Depot(nummer=d["account_number"], name=(d.get("product_name") or "Depot").strip(),
-                                        waehrung=(d.get("currency") or "EUR").upper(),
-                                        positionen=[p for p in map(position_aus, bestand) if p]))
-                return depots
+                s = Sitzung()
+                if depots:
+                    s.depots = self._depots(f, bis, hinweis)
+                if konten_ab:
+                    s.konten = self._konten(f, konten_ab, ibans or set(), bis, hinweis)
+                return s
         finally:
             try:  # Systemkennung, Bank- und Nutzerdaten fürs nächste Mal (ohne PIN)
                 self.zustand = f.deconstruct(including_private=True)
@@ -216,7 +263,11 @@ def abrufen(db: Datenbank, cfg: Config, zugang: IngFints | None = None, jetzt: d
             warten: timedelta = FREIGABE_WARTEN, hinweis: Callable[[str], None] | None = None,
             hintergrund: bool = False) -> DepotAbruf:
     """Holt den Bestand aller Depots des Zugangs und ersetzt die gespeicherten Positionen."""
-    jetzt = jetzt or datetime.now(UTC)
+    with SPERRE:
+        return _abrufen(db, cfg, zugang, jetzt or datetime.now(UTC), warten, hinweis, hintergrund)
+
+
+def _abrufen(db, cfg, zugang, jetzt, warten, hinweis, hintergrund) -> DepotAbruf:
     a = DepotAbruf()
     stand = db.fints_zustand(ZUGANG) or {}
     if hintergrund and stand.get("freigabe"):
@@ -224,7 +275,7 @@ def abrufen(db: Datenbank, cfg: Config, zugang: IngFints | None = None, jetzt: d
         return a
     try:
         zugang = zugang or IngFints(cfg, stand.get("daten"))
-        a.depots = zugang.abrufen(warten=warten, hinweis=hinweis)
+        a.depots = zugang.abrufen(warten=warten, hinweis=hinweis).depots
     except FreigabeNoetig as e:
         a.freigabe, a.fehler = True, str(e)
     except DepotFehler as e:
