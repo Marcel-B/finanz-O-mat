@@ -8,8 +8,8 @@ Depotbestand mit Details je Wertpapier an, aber keine Depotumsätze (https://www
 Dafür braucht die App
 - eine FinTS-Produkt-ID der Deutschen Kreditwirtschaft (``FINTS_PRODUKT_ID``, kostenlos, Registrierung unter
   https://www.fints.org/de/hersteller/produktregistrierung, bis zu zwei Wochen),
-- die Zugangsnummer (letzte 10 Stellen der IBAN, ``ING_FINTS_ZUGANG``) und die PIN fürs Internetbanking
-  (``ING_FINTS_PIN``).
+- Benutzername (``ING_FINTS_ZUGANG``) und Passwort (``ING_FINTS_PIN``) des Online-Bankings, wie beim Login im
+  Browser (https://www.ing.de/hilfe/log-in/fints/); vor der Umstellung der ING 2026 Zugangsnummer und PIN.
 
 Verlangt die ING eine starke Kundenauthentifizierung, schickt sie eine Freigabe in die ING-App. Der Abruf wartet
 darauf bis zu zwei Minuten. Im Hintergrund wird danach nicht erneut gefragt, bis ein Abruf von Hand (Knopf oder
@@ -52,9 +52,9 @@ class FreigabeNoetig(DepotFehler):
 
 
 class AnmeldungAbgelehnt(DepotFehler):
-    """Die ING hat die Anmeldung abgelehnt (PIN, Zugangsnummer, Produkt-ID oder gesperrter Zugang).
+    """Die ING hat die Anmeldung abgelehnt (Passwort, Benutzername, Produkt-ID oder gesperrter Zugang).
 
-    Danach wird es automatisch nicht erneut versucht: Nach drei falschen PINs sperrt die ING den Zugang.
+    Danach wird es automatisch nicht erneut versucht: Nach mehreren Fehlversuchen sperrt die ING den Zugang.
     """
 
 
@@ -71,9 +71,10 @@ def _ablehnung(antworten: list[tuple[str, str]], fehler: Exception) -> Anmeldung
     """Die Antworten der ING mit Fehlercode; python-fints meldet bei jeder Ablehnung nur „PIN wrong?“."""
     texte = "; ".join(dict.fromkeys(f"{code} {text}".strip() for code, text in antworten if code.startswith("9")))
     return AnmeldungAbgelehnt(
-        f"Die ING hat die Anmeldung abgelehnt ({texte or type(fehler).__name__}). Zugangsnummer, PIN und Produkt-ID "
-        "prüfen (finanz-o-mat-fints); eine neue Produkt-ID kann bei der ING erst nach Tagen freigeschaltet sein. "
-        "Automatisch wird es nicht erneut versucht, nach drei falschen PINs sperrt die ING den Zugang.")
+        f"Die ING hat die Anmeldung abgelehnt ({texte or type(fehler).__name__}). Benutzername und Passwort des "
+        "Online-Bankings und die Produkt-ID prüfen (finanz-o-mat-fints); eine neue Produkt-ID kann bei der ING erst "
+        "nach Tagen freigeschaltet sein. Automatisch wird es nicht erneut versucht, nach mehreren Fehlversuchen "
+        "sperrt die ING den Zugang.")
 
 
 def eingerichtet(cfg: Config) -> bool:

@@ -2,7 +2,7 @@
 
 Wofür: Kommt eine Push-Nachricht der ING, soll die Buchung beim Öffnen des Reiters „Konten“ schon dastehen. Über
 Enable Banking geht das nur viermal am Tag; FinTS ist die eigene Schnittstelle der Bank, über die der Inhaber
-selbst abruft, da gilt das Limit nicht. Den Zugang (Produkt-ID, Zugangsnummer, PIN, Freigabe in der App) teilt
+selbst abruft, da gilt das Limit nicht. Den Zugang (Produkt-ID, Benutzername, Passwort, Freigabe in der App) teilt
 sich der Abruf mit dem Depot (ustva/depot.py).
 
 Abgerufen wird beim Öffnen des Reiters (höchstens alle zwei Minuten), mit „Jetzt abrufen“ und im Hintergrund

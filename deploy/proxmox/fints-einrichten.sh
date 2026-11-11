@@ -5,10 +5,12 @@
 #   finanz-o-mat-fints              (nach einem Update installiert)
 #   bash deploy/proxmox/fints-einrichten.sh
 #
-# Abgefragt werden FINTS_PRODUKT_ID (Registrierungsnummer der Deutschen Kreditwirtschaft), ING_FINTS_ZUGANG
-# (Zugangsnummer, die letzten 10 Stellen der IBAN) und ING_FINTS_PIN (PIN fürs Internetbanking). Produkt-ID und PIN
-# werden verdeckt eingegeben und nie ausgegeben; sie landen nur in /etc/finanz-o-mat/finanz-o-mat.env (root und
-# Dienstbenutzer, 640). Eingabetaste ohne Wert behält einen schon eingetragenen Wert.
+# Abgefragt werden FINTS_PRODUKT_ID (Registrierungsnummer der Deutschen Kreditwirtschaft), ING_FINTS_ZUGANG (der
+# selbst gewählte Benutzername des Online-Bankings; vor der Umstellung der ING 2026 die Zugangsnummer) und
+# ING_FINTS_PIN (das Passwort des Online-Bankings, vorher die Internetbanking-PIN; nicht die App-PIN, nicht der
+# DiBa-Key). Produkt-ID und Passwort werden verdeckt eingegeben und nie ausgegeben; sie landen nur in
+# /etc/finanz-o-mat/finanz-o-mat.env (root und Dienstbenutzer, 640). Eingabetaste ohne Wert behält einen schon
+# eingetragenen Wert.
 
 set -Eeuo pipefail
 
@@ -29,17 +31,25 @@ abbruch() {
 exec 3<"${EINGABE:-/dev/tty}" || abbruch "Keine Tastatur: bitte in einer interaktiven Sitzung ausführen."
 
 env_wert() {
-    # Wert einer Variable aus der Konfiguration, ohne Anführungszeichen
-    sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$ENV_DATEI" | tail -n1
+    # Wert einer Variable aus der Konfiguration, ohne die Anführungszeichen drumherum
+    local wert
+    wert=$(grep "^$1=" "$ENV_DATEI" | tail -n1) || true
+    wert=${wert#*=}
+    if [[ $wert == \'*\' || $wert == \"*\" ]] && ((${#wert} >= 2)); then
+        wert=${wert:1:${#wert}-2}
+    fi
+    printf '%s' "$wert"
 }
 
 zulaessig() {
-    # Die Datei wird von der Shell gelesen (finanz-o-mat) und von systemd: keine " \ $ ` und kein Zeilenumbruch
-    [[ $1 != *[\"\\\$\`]* && $1 != *$'\n'* ]]
+    # Werte stehen in einfachen Anführungszeichen: Shell (finanz-o-mat) und systemd nehmen darin alles wörtlich,
+    # nur ' selbst und Zeilenumbrüche gehen nicht
+    [[ $1 != *\'* && $1 != *$'\n'* ]]
 }
 
 fragen() {
-    # fragen VARIABLE "Text" verdeckt|offen → neuer Wert in ANTWORT (leer: bisherigen behalten)
+    # fragen VARIABLE "Text" verdeckt|offen|passwort → neuer Wert in ANTWORT (leer: bisherigen behalten);
+    # ein Passwort bleibt wie getippt, sonst fallen Leerzeichen weg
     local name=$1 text=$2 art=$3 bisher eingabe
     bisher=$(env_wert "$name")
     if [[ -n $bisher ]]; then
@@ -50,41 +60,36 @@ fragen() {
         fi
     fi
     while true; do
-        if [[ $art == verdeckt ]]; then
-            read -r -s -u 3 -p "$text: " eingabe
+        if [[ $art != offen ]]; then
+            IFS= read -r -s -u 3 -p "$text: " eingabe
             echo
         else
-            read -r -u 3 -p "$text: " eingabe
+            IFS= read -r -u 3 -p "$text: " eingabe
         fi
-        eingabe=${eingabe//[[:space:]]/}
+        [[ $art == passwort ]] || eingabe=${eingabe//[[:space:]]/}
         if [[ -z $eingabe ]]; then
             [[ -n $bisher ]] && { ANTWORT=$bisher; return; }
             warn "Bitte einen Wert eingeben."
             continue
         fi
-        zulaessig "$eingabe" || { warn "Bitte ohne \" \\ \$ \` eingeben."; continue; }
+        zulaessig "$eingabe" || { warn "Ein ' kann die Konfiguration nicht aufnehmen."; continue; }
         ANTWORT=$eingabe
         return
     done
 }
 
 info "FinTS-Zugang für die ING einrichten ($ENV_DATEI)"
-echo "Produkt-ID und PIN werden beim Tippen nicht angezeigt."
+echo "Benutzername und Passwort sind die des Online-Bankings im Browser (nicht App-PIN, nicht DiBa-Key)."
+echo "Produkt-ID und Passwort werden beim Tippen nicht angezeigt."
 echo
 
 fragen FINTS_PRODUKT_ID "Produkt-ID (Registrierungsnummer aus der Mail der Deutschen Kreditwirtschaft)" verdeckt
 produkt=$ANTWORT
 
-while true; do
-    fragen ING_FINTS_ZUGANG "Zugangsnummer (letzte 10 Stellen der IBAN, oder die ganze IBAN)" offen
-    zugang=${ANTWORT^^}
-    # Aus einer ganzen IBAN die Kontonummer nehmen: DE.. 50010517 + 10 Stellen
-    [[ $zugang =~ ^DE[0-9]{2}50010517([0-9]{10})$ ]] && zugang=${BASH_REMATCH[1]}
-    [[ $zugang =~ ^[0-9]{10}$ ]] && break
-    warn "Die Zugangsnummer hat 10 Ziffern (bzw. eine IBAN der ING mit 22 Zeichen)."
-done
+fragen ING_FINTS_ZUGANG "Benutzername des Online-Bankings (vor der Umstellung: Zugangsnummer)" offen
+zugang=$ANTWORT
 
-fragen ING_FINTS_PIN "PIN fürs Internetbanking" verdeckt
+fragen ING_FINTS_PIN "Passwort des Online-Bankings (vor der Umstellung: Internetbanking-PIN)" passwort
 pin=$ANTWORT
 
 # In eine Kopie neben der Datei schreiben und tauschen; Besitzer und Rechte bleiben. Die Werte gehen über die
@@ -93,12 +98,12 @@ neu=$(mktemp "$ENV_DATEI.XXXXXX")
 trap 'rm -f "$neu"' EXIT
 chmod --reference="$ENV_DATEI" "$neu"
 chown --reference="$ENV_DATEI" "$neu"
-FINTS_PRODUKT_ID=$produkt ING_FINTS_ZUGANG=$zugang ING_FINTS_PIN=$pin awk '
+FINTS_PRODUKT_ID=$produkt ING_FINTS_ZUGANG=$zugang ING_FINTS_PIN=$pin awk -v q="'" '
     BEGIN { n = split("FINTS_PRODUKT_ID ING_FINTS_ZUGANG ING_FINTS_PIN", namen, " ") }
     {
         for (i = 1; i <= n; i++) {
             if (index($0, namen[i] "=") == 1) {
-                if (!(namen[i] in gesetzt)) print namen[i] "=\"" ENVIRON[namen[i]] "\""
+                if (!(namen[i] in gesetzt)) print namen[i] "=" q ENVIRON[namen[i]] q
                 gesetzt[namen[i]] = 1
                 next
             }
@@ -109,13 +114,13 @@ FINTS_PRODUKT_ID=$produkt ING_FINTS_ZUGANG=$zugang ING_FINTS_PIN=$pin awk '
         fehlt = 0
         for (i = 1; i <= n; i++) if (!(namen[i] in gesetzt)) fehlt = 1
         if (fehlt) print "\n# FinTS-Zugang zur ING (Depot und Konten), siehe README"
-        for (i = 1; i <= n; i++) if (!(namen[i] in gesetzt)) print namen[i] "=\"" ENVIRON[namen[i]] "\""
+        for (i = 1; i <= n; i++) if (!(namen[i] in gesetzt)) print namen[i] "=" q ENVIRON[namen[i]] q
     }
 ' "$ENV_DATEI" >"$neu"
 mv "$neu" "$ENV_DATEI"
 trap - EXIT
 unset produkt pin
-ok "Eingetragen: Produkt-ID, Zugangsnummer …${zugang: -4}, PIN"
+ok "Eingetragen: Produkt-ID, Benutzername …${zugang: -3}, Passwort"
 
 if [[ -d /run/systemd/system ]]; then
     systemctl restart "$DIENST"
