@@ -76,7 +76,8 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
         return {
             "eingerichtet": eingerichtet,
             "depot": {"eingerichtet": depot.eingerichtet(cfg), "fehler": zustand.get("fehler", ""),
-                      "freigabe": bool(zustand.get("freigabe")), "versucht": zustand.get("versucht", "")},
+                      "freigabe": bool(zustand.get("freigabe")), "versucht": zustand.get("versucht", ""),
+                      "abgelehnt": bool(zustand.get("abgelehnt"))},
             "depots": _depots(db),
             # ING-Konten über FinTS: beim Öffnen, mit „Jetzt abrufen“ und stündlich (ustva/ing_konten.py)
             "ing": {"eingerichtet": depot.eingerichtet(cfg) and any(ing_konten.ing(k) for k in db.bank_konten()),

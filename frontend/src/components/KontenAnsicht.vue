@@ -444,7 +444,10 @@ const gefiltert = computed(() =>
         </div>
       </div>
 
-      <Message v-if="mitIng && daten?.depot.freigabe && (!gewaehlt || gewaehlt.ing)" severity="warn" class="mb-3">
+      <Message v-if="mitIng && daten?.depot.abgelehnt && (!gewaehlt || gewaehlt.ing)" severity="error" class="mb-3">
+        {{ daten.depot.fehler }}
+      </Message>
+      <Message v-else-if="mitIng && daten?.depot.freigabe && (!gewaehlt || gewaehlt.ing)" severity="warn" class="mb-3">
         Die ING wartet auf eine Freigabe in der App. Automatisch fragt der Abruf nicht erneut nach; einmal „Jetzt
         abrufen“ und in der ING-App bestätigen.
       </Message>

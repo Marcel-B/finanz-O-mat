@@ -110,7 +110,8 @@ CREATE TABLE IF NOT EXISTS fints_zustand (  -- FinTS-Zugang (ustva/depot.py): Ba
     fehler TEXT NOT NULL DEFAULT '',
     freigabe INTEGER NOT NULL DEFAULT 0,  -- 1: wartet auf eine Freigabe in der App, im Hintergrund nicht fragen
     versucht TEXT NOT NULL DEFAULT '',
-    konten TEXT NOT NULL DEFAULT ''  -- letzter erfolgreicher Abruf der Konten
+    konten TEXT NOT NULL DEFAULT '',  -- letzter Abruf der Konten (auch ein fehlgeschlagener)
+    abgelehnt INTEGER NOT NULL DEFAULT 0  -- 1: die ING hat die Anmeldung abgelehnt, automatisch nicht erneut versuchen
 );
 CREATE TABLE IF NOT EXISTS depots (  -- Depots in der Kontenübersicht, nur Bestand
     schluessel TEXT PRIMARY KEY,
@@ -371,8 +372,11 @@ class Datenbank:
             for spalte in ("saldo", "saldo_stand", "abrufe", "fehler", "fints"):  # von vor Übersicht bzw. FinTS
                 if spalte not in spalten:
                     self._con.execute(f"ALTER TABLE bank_konten ADD COLUMN {spalte} TEXT NOT NULL DEFAULT ''")
-            if "konten" not in {z["name"] for z in self._con.execute("PRAGMA table_info(fints_zustand)")}:
+            spalten = {z["name"] for z in self._con.execute("PRAGMA table_info(fints_zustand)")}
+            if "konten" not in spalten:
                 self._con.execute("ALTER TABLE fints_zustand ADD COLUMN konten TEXT NOT NULL DEFAULT ''")
+            if "abgelehnt" not in spalten:
+                self._con.execute("ALTER TABLE fints_zustand ADD COLUMN abgelehnt INTEGER NOT NULL DEFAULT 0")
 
     # Einstellungen aus der Oberfläche (überschreiben die Umgebungsvariablen)
     def einstellungen(self) -> dict[str, str]:
@@ -627,16 +631,17 @@ class Datenbank:
     def fints_zustand(self, schluessel: str) -> dict | None:
         with self._lock:
             z = self._con.execute("SELECT * FROM fints_zustand WHERE schluessel = ?", (schluessel,)).fetchone()
-        return None if z is None else dict(z) | {"freigabe": bool(z["freigabe"])}
+        return None if z is None else dict(z) | {"freigabe": bool(z["freigabe"]), "abgelehnt": bool(z["abgelehnt"])}
 
     def fints_zustand_speichern(self, schluessel: str, *, daten: bytes | None = None, fehler: str | None = None,
                                 freigabe: bool | None = None, versucht: str | None = None,
-                                konten: str | None = None) -> None:
+                                konten: str | None = None, abgelehnt: bool | None = None) -> None:
         """Nur die übergebenen Felder; ``daten=None`` lässt den gespeicherten Zustand stehen."""
         with self._lock, self._con:
             self._con.execute("INSERT OR IGNORE INTO fints_zustand (schluessel) VALUES (?)", (schluessel,))
             for spalte, wert in (("daten", daten), ("fehler", fehler), ("versucht", versucht), ("konten", konten),
-                                 ("freigabe", None if freigabe is None else int(freigabe))):
+                                 ("freigabe", None if freigabe is None else int(freigabe)),
+                                 ("abgelehnt", None if abgelehnt is None else int(abgelehnt))):
                 if wert is not None:
                     self._con.execute(f"UPDATE fints_zustand SET {spalte} = ? WHERE schluessel = ?",
                                       (wert, schluessel))

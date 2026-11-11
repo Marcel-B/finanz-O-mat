@@ -164,27 +164,33 @@ def abrufen(db: Datenbank, cfg: Config, zugang: depot.IngFints | None = None, je
         if wenn_aelter is not None and not faellig(db, jetzt, wenn_aelter):
             a.uebersprungen = "gerade erst abgerufen"
             return a
-        if hintergrund and stand.get("freigabe"):
-            a.uebersprungen = "wartet auf Freigabe in der ING-App; einmal von Hand abrufen"
+        if hintergrund and depot.angehalten(stand):
+            a.uebersprungen = depot.angehalten(stand)
             return a
         konten = {k.iban: k for k in db.bank_konten() if ing(k)}
         if not konten:
             a.uebersprungen = "kein Konto der ING verbunden"
             return a
         zeit = jetzt.isoformat(timespec="seconds")
+        abgelehnt = None
         try:
             zugang = zugang or depot.IngFints(cfg, stand.get("daten"))
             sitzung = zugang.abrufen(warten=warten, hinweis=hinweis, depots=False,
                                      konten_ab=jetzt.date() - ZEITRAUM, ibans=set(konten))
+            abgelehnt = False
         except depot.FreigabeNoetig as e:
             a.freigabe, a.fehler = True, str(e)
+            abgelehnt = False
+        except depot.AnmeldungAbgelehnt as e:
+            a.fehler, abgelehnt = str(e), True
+            log.warning("ING-Konten über FinTS: %s", e)
         except depot.DepotFehler as e:
             a.fehler = str(e)
         except Exception as e:  # noqa: BLE001 – Fehler der Bank oder von python-fints
             log.warning("ING-Konten über FinTS fehlgeschlagen", exc_info=True)
             a.fehler = f"{type(e).__name__}: {e}"
         db.fints_zustand_speichern(depot.ZUGANG, daten=zugang.zustand if zugang else None, fehler=a.fehler,
-                                   freigabe=a.freigabe, versucht=zeit, konten=zeit)
+                                   freigabe=a.freigabe, versucht=zeit, konten=zeit, abgelehnt=abgelehnt)
         if a.fehler:
             return a
         for fk in sitzung.konten:

@@ -537,6 +537,7 @@ export interface DepotZugang {
   fehler: string;
   freigabe: boolean; // wartet auf eine Freigabe in der ING-App
   versucht: string;
+  abgelehnt: boolean; // die ING hat die Anmeldung abgelehnt; automatisch wird nicht erneut angefragt
 }
 
 export interface DepotPosition {

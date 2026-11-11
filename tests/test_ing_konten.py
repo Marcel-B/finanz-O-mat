@@ -272,3 +272,19 @@ def test_befehl(db, capsys):
     assert "ING-App freigeben" in out and "Girokonto …7890: Saldo 2447.51 EUR" in out
     assert "2 neu in der Kontenübersicht, 1 vorgemerkt" in out
     assert ing_befehl(args, Config(), db) == 1
+
+
+def test_anmeldung_abgelehnt_haelt_automatik_an(db):
+    from .test_depot import AbgelehnteAnmeldung
+
+    db.bank_konto_speichern(bankkonto())
+    fake = AbgelehnteAnmeldung()
+    a = ing_konten.abrufen(db, CFG, zugang(fake), jetzt=JETZT)
+    assert a.ergebnis == "fehler" and "9942 PIN falsch" in a.fehler
+    auto = ing_konten.abrufen(db, CFG, zugang(fake), jetzt=JETZT + timedelta(hours=1), hintergrund=True,
+                              wenn_aelter=ing_konten.BEIM_OEFFNEN)
+    assert "abgelehnt" in auto.uebersprungen and fake.anmeldungen == 1
+    # auch der Depotabruf im Hintergrund nicht
+    assert "abgelehnt" in depot.abrufen(db, CFG, zugang(fake), jetzt=JETZT, hintergrund=True).uebersprungen
+    assert ing_konten.abrufen(db, CFG, zugang(FakeKonten()), jetzt=JETZT + timedelta(hours=2)).ergebnis == "ok"
+    assert db.fints_zustand(depot.ZUGANG)["abgelehnt"] is False

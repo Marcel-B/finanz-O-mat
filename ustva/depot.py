@@ -51,6 +51,31 @@ class FreigabeNoetig(DepotFehler):
     """Die ING wollte eine Freigabe in der App, die nicht rechtzeitig kam (oder im Hintergrund nicht gefragt wird)."""
 
 
+class AnmeldungAbgelehnt(DepotFehler):
+    """Die ING hat die Anmeldung abgelehnt (PIN, Zugangsnummer, Produkt-ID oder gesperrter Zugang).
+
+    Danach wird es automatisch nicht erneut versucht: Nach drei falschen PINs sperrt die ING den Zugang.
+    """
+
+
+def angehalten(stand: dict) -> str:
+    """Warum ein automatischer Abruf (Hintergrund, Öffnen des Reiters) gerade nicht bei der ING anfragt."""
+    if stand.get("abgelehnt"):
+        return "die ING hat die Anmeldung abgelehnt; Zugangsdaten prüfen und einmal von Hand abrufen"
+    if stand.get("freigabe"):
+        return "wartet auf Freigabe in der ING-App; einmal von Hand abrufen"
+    return ""
+
+
+def _ablehnung(antworten: list[tuple[str, str]], fehler: Exception) -> AnmeldungAbgelehnt:
+    """Die Antworten der ING mit Fehlercode; python-fints meldet bei jeder Ablehnung nur „PIN wrong?“."""
+    texte = "; ".join(dict.fromkeys(f"{code} {text}".strip() for code, text in antworten if code.startswith("9")))
+    return AnmeldungAbgelehnt(
+        f"Die ING hat die Anmeldung abgelehnt ({texte or type(fehler).__name__}). Zugangsnummer, PIN und Produkt-ID "
+        "prüfen (finanz-o-mat-fints); eine neue Produkt-ID kann bei der ING erst nach Tagen freigeschaltet sein. "
+        "Automatisch wird es nicht erneut versucht, nach drei falschen PINs sperrt die ING den Zugang.")
+
+
 def eingerichtet(cfg: Config) -> bool:
     return bool(cfg.fints_produkt_id and cfg.ing_fints_zugang and cfg.ing_fints_pin)
 
@@ -158,6 +183,24 @@ def _client(cfg: Config, zustand: bytes | None):
                               product_id=cfg.fints_produkt_id, from_data=zustand)
 
 
+def _antworten_merken(f) -> list[tuple[str, str]]:
+    """Merkt sich die Rückmeldungen der Bank (Code, Text).
+
+    python-fints schreibt sie während der Anmeldung nicht ins Log und wirft bei jeder Ablehnung dieselbe Ausnahme.
+    """
+    antworten: list[tuple[str, str]] = []
+    verarbeiten = getattr(f, "_process_response", None)
+    if verarbeiten is None:
+        return antworten
+
+    def merken(dialog, segment, antwort):
+        antworten.append((str(getattr(antwort, "code", "") or ""), str(getattr(antwort, "text", "") or "")))
+        return verarbeiten(dialog, segment, antwort)
+
+    f._process_response = merken
+    return antworten
+
+
 class IngFints:
     """Der Weg zur ING über python-fints; in den Tests ersetzt ``client_fabrik`` den echten Client."""
 
@@ -240,8 +283,11 @@ class IngFints:
     def abrufen(self, warten: timedelta = FREIGABE_WARTEN, hinweis: Callable[[str], None] | None = None,
                 depots: bool = True, konten_ab: date | None = None, ibans: set[str] | None = None) -> Sitzung:
         """Eine Sitzung: die Depots und, mit ``konten_ab``, Saldo und Buchungen der Konten in ``ibans``."""
+        from fints.exceptions import FinTSClientPINError, FinTSClientTemporaryAuthError
+
         bis = self._uhr() + warten.total_seconds()
         f = self._fabrik(self.cfg, self.zustand)
+        antworten = _antworten_merken(f)
         try:
             self._verfahren_waehlen(f)
             with f:
@@ -252,6 +298,8 @@ class IngFints:
                 if konten_ab:
                     s.konten = self._konten(f, konten_ab, ibans or set(), bis, hinweis)
                 return s
+        except (FinTSClientPINError, FinTSClientTemporaryAuthError) as e:
+            raise _ablehnung(antworten, e) from e
         finally:
             try:  # Systemkennung, Bank- und Nutzerdaten fürs nächste Mal (ohne PIN)
                 self.zustand = f.deconstruct(including_private=True)
@@ -270,14 +318,20 @@ def abrufen(db: Datenbank, cfg: Config, zugang: IngFints | None = None, jetzt: d
 def _abrufen(db, cfg, zugang, jetzt, warten, hinweis, hintergrund) -> DepotAbruf:
     a = DepotAbruf()
     stand = db.fints_zustand(ZUGANG) or {}
-    if hintergrund and stand.get("freigabe"):
-        a.uebersprungen = "wartet auf Freigabe in der ING-App; einmal von Hand abrufen"
+    if hintergrund and angehalten(stand):
+        a.uebersprungen = angehalten(stand)
         return a
+    abgelehnt = None
     try:
         zugang = zugang or IngFints(cfg, stand.get("daten"))
         a.depots = zugang.abrufen(warten=warten, hinweis=hinweis).depots
+        abgelehnt = False
     except FreigabeNoetig as e:
         a.freigabe, a.fehler = True, str(e)
+        abgelehnt = False  # die Anmeldung selbst hat geklappt
+    except AnmeldungAbgelehnt as e:
+        a.fehler, abgelehnt = str(e), True
+        log.warning("Depotabruf: %s", e)
     except DepotFehler as e:
         a.fehler = str(e)
     except Exception as e:  # noqa: BLE001 – Fehler der Bank oder von python-fints landen beim Depot
@@ -285,7 +339,7 @@ def _abrufen(db, cfg, zugang, jetzt, warten, hinweis, hintergrund) -> DepotAbruf
         a.fehler = f"{type(e).__name__}: {e}"
     zeit = jetzt.isoformat(timespec="seconds")
     db.fints_zustand_speichern(ZUGANG, daten=zugang.zustand if zugang else None, fehler=a.fehler,
-                               freigabe=a.freigabe, versucht=zeit)
+                               freigabe=a.freigabe, versucht=zeit, abgelehnt=abgelehnt)
     for d in a.depots:
         db.depot_speichern(d, zeit)
     return a
