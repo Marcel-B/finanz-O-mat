@@ -265,13 +265,18 @@ EOF
 #!/bin/sh
 exec bash $APP_DIR/deploy/proxmox/ct-backup.sh "\$@"
 EOF
-    chmod 755 /usr/local/bin/finanz-o-mat /usr/local/bin/finanz-o-mat-update /usr/local/bin/finanz-o-mat-backup
+    cat >/usr/local/bin/finanz-o-mat-fints <<EOF
+#!/bin/sh
+exec bash $APP_DIR/deploy/proxmox/fints-einrichten.sh "\$@"
+EOF
+    chmod 755 /usr/local/bin/finanz-o-mat /usr/local/bin/finanz-o-mat-update /usr/local/bin/finanz-o-mat-backup \
+        /usr/local/bin/finanz-o-mat-fints
     # Manche Shells im Container (z. B. über die Proxmox-Konsole) haben /usr/local/bin nicht im PATH
     local befehl
-    for befehl in finanz-o-mat finanz-o-mat-update finanz-o-mat-backup; do
+    for befehl in finanz-o-mat finanz-o-mat-update finanz-o-mat-backup finanz-o-mat-fints; do
         ln -sfn "/usr/local/bin/$befehl" "/usr/bin/$befehl"
     done
-    ok "Befehle: finanz-o-mat, finanz-o-mat-update, finanz-o-mat-backup"
+    ok "Befehle: finanz-o-mat, finanz-o-mat-update, finanz-o-mat-backup, finanz-o-mat-fints"
 
     # Regelmäßig nach neuen Versionen sehen
     cat >/etc/systemd/system/$DIENST-pruefen.service <<EOF

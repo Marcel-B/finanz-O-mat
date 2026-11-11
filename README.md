@@ -245,9 +245,10 @@ Verlust je Position, und hat mit der Buchhaltung nichts zu tun.
 
 1. Eine FinTS-Produkt-ID bei der Deutschen Kreditwirtschaft beantragen
    (https://www.fints.org/de/hersteller/produktregistrierung, kostenlos, dauert bis zu zwei Wochen).
-2. In `/etc/finanz-o-mat/finanz-o-mat.env` (bzw. `.env`) eintragen:
-   `FINTS_PRODUKT_ID="<Produkt-ID>"`, `ING_FINTS_ZUGANG="<Zugangsnummer>"` (die letzten 10 Stellen der IBAN) und
-   `ING_FINTS_PIN="<PIN fürs Internetbanking>"`. Die Datei ist nur für den Dienst lesbar.
+2. Im Container `finanz-o-mat-fints` aufrufen: fragt Produkt-ID, Zugangsnummer (die letzten 10 Stellen der IBAN)
+   und PIN fürs Internetbanking ab, trägt sie in `/etc/finanz-o-mat/finanz-o-mat.env` ein (`FINTS_PRODUKT_ID`,
+   `ING_FINTS_ZUGANG`, `ING_FINTS_PIN`; die Datei ist nur für den Dienst lesbar), startet den Dienst neu und ruft auf
+   Wunsch gleich ab. Von Hand geht es genauso, ohne Container in der `.env`.
 3. Einmal von Hand abrufen, im Reiter „Konten“ („Depots“ → „Abrufen“) oder im Container mit `finanz-o-mat bank depot`,
    und den Zugriff in der ING-App freigeben.
 
