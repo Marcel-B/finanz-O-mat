@@ -172,7 +172,7 @@ def test_tan_statt_app(db):
 
 def test_kein_depot_und_bankfehler(db):
     a = depot.abrufen(db, CFG, zugang(FakeFints(konten=[{"type": 1, "account_number": "1"}])), jetzt=JETZT)
-    assert "kein Depot" in a.fehler
+    assert a.fehler == "Die ING meldet für diesen Zugang kein Depot (gemeldete Konten: Kontoart 1 „?“ …1)"
     a = depot.abrufen(db, CFG, zugang(FakeFints(fehler=ConnectionError("Bank antwortet nicht"))), jetzt=JETZT)
     assert a.fehler == "ConnectionError: Bank antwortet nicht"
     assert db.fints_zustand(depot.ZUGANG)["fehler"] == a.fehler
@@ -260,6 +260,21 @@ def test_befehl(db, capsys):
 @pytest.mark.parametrize("kontoart, depot_", [(50, True), (59, True), (1, False), (None, False)])
 def test_depots_aus(kontoart, depot_):
     assert bool(depot.depots_aus({"accounts": [{"type": kontoart, "account_number": "1"}]})) is depot_
+
+
+def test_depot_ohne_kontoart():
+    """Manche Banken melden das Depot nicht als Kontoart 50–59; dann über HKWPD oder den Produktnamen."""
+    from fints.client import FinTSOperations
+
+    ueber_wpd = {"type": 1, "account_number": "2", "product_name": "Wertpapiere",
+                 "supported_operations": {FinTSOperations.GET_HOLDINGS: True, FinTSOperations.GET_BALANCE: False}}
+    ueber_name = {"type": None, "account_number": "3", "product_name": "Direkt-Depot"}
+    giro = {"type": 1, "account_number": "1234567890", "product_name": "Girokonto",
+            "supported_operations": {FinTSOperations.GET_HOLDINGS: False}}
+    info = {"accounts": [ueber_wpd, ueber_name, giro]}
+    assert depot.depots_aus(info) == [ueber_wpd, ueber_name]
+    assert depot.konten_text({"accounts": [giro]}) == "Kontoart 1 „Girokonto“ …7890"
+    assert depot.konten_text({"accounts": []}) == "keine"
 
 
 class AbgelehnteAnmeldung(FakeFints):

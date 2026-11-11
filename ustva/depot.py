@@ -172,9 +172,28 @@ def position_aus(h) -> Position | None:
                     wert=wert, einstand=_dec(getattr(h, "acquisitionprice", None)))
 
 
+def _depot(a: dict) -> bool:
+    """Kontoart 50–59, der Geschäftsvorfall Depotaufstellung (HKWPD) oder „Depot“ im Produktnamen."""
+    if not a.get("account_number"):
+        return False
+    if a.get("type") in DEPOT_KONTOARTEN:
+        return True
+    if any(getattr(op, "name", op) == "GET_HOLDINGS" and erlaubt
+           for op, erlaubt in (a.get("supported_operations") or {}).items()):
+        return True
+    return "depot" in (a.get("product_name") or "").lower()
+
+
 def depots_aus(info: dict) -> list[dict]:
-    """Die Depots aus den Kontoinformationen der Bank (UPD), über die Kontoart erkannt."""
-    return [a for a in info.get("accounts", []) if a.get("type") in DEPOT_KONTOARTEN and a.get("account_number")]
+    """Die Depots aus den Kontoinformationen der Bank (UPD)."""
+    return [a for a in info.get("accounts", []) if _depot(a)]
+
+
+def konten_text(info: dict) -> str:
+    """Was die Bank als Konten meldet, für eine Fehlermeldung: Kontoart, Produkt, letzte vier Ziffern."""
+    teile = [f"Kontoart {a.get('type')} „{(a.get('product_name') or '').strip() or '?'}“ "
+             f"…{str(a.get('account_number') or '')[-4:]}" for a in info.get("accounts", [])]
+    return "; ".join(teile) or "keine"
 
 
 def _client(cfg: Config, zustand: bytes | None):
@@ -250,9 +269,10 @@ class IngFints:
     def _depots(self, f, bis: float, hinweis) -> list[Depot]:
         from fints.models import SEPAAccount
 
-        gefunden = depots_aus(f.get_information())
+        info = f.get_information()
+        gefunden = depots_aus(info)
         if not gefunden:
-            raise DepotFehler("Die ING meldet für diesen Zugang kein Depot")
+            raise DepotFehler(f"Die ING meldet für diesen Zugang kein Depot (gemeldete Konten: {konten_text(info)})")
         depots = []
         for d in gefunden:
             konto = SEPAAccount(iban=d.get("iban"), bic=None, accountnumber=d["account_number"],
