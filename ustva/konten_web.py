@@ -159,14 +159,23 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
         return {"auszuege": [e.to_dict() for e in ergebnisse]}
 
     @r.post("/api/konten/abrufen")
-    async def abrufen():
+    async def abrufen(request: Request, automatisch: bool = False):
+        """Saldo und Umsätze über Enable Banking, mit den PSU-Headern des Browsers (dann ohne das Tageslimit).
+
+        ``automatisch`` (beim Öffnen des Reiters): nur Konten, deren letzter Abruf älter als zwei Minuten ist, und
+        nie ein Abruf, der zum Limit zählt.
+        """
         cfg = aktuell()
+        if automatisch and not cfg.enable_banking_app_id:
+            return {"zugeordnet": 0, "konten": []}
         try:
             eb = eb_fabrik(cfg)
         except ka.KontoabrufFehler as e:
             raise HTTPException(400, str(e)) from e
-        e = await run_in_threadpool(ka.abrufen, db, cfg, eb, jetzt=_jetzt())
-        monitoring.kontoabruf_zaehlen(e, "knopf")
+        psu = ka.psu_header(request.client.host if request.client else "", request.headers)
+        e = await run_in_threadpool(ka.abrufen, db, cfg, eb, jetzt=_jetzt(), psu=psu,
+                                    wenn_aelter=ka.ANWESEND_ABSTAND if automatisch else None)
+        monitoring.kontoabruf_zaehlen(e, "oeffnen" if automatisch else "knopf")
         return {"zugeordnet": e.zugeordnet, "konten": [
             {"schluessel": a.konto.schluessel, "name": a.konto.bezeichnung or a.konto.bank, "neu": a.uebersicht,
              "fehler": a.fehler, "uebersprungen": a.uebersprungen} for a in e.konten]}

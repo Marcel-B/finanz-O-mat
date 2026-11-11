@@ -62,6 +62,7 @@ class Bank:
         self.buchungen = buchungen
         self.state = None
         self.anfragen = []
+        self.psu_ablehnen = False  # wie eine Bank, die Abrufe mit PSU-Headern nicht annimmt
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         token = request.headers["authorization"].removeprefix("Bearer ")
@@ -69,6 +70,8 @@ class Bank:
         jwt.decode(token, self.oeffentlich, algorithms=["RS256"], audience="api.enablebanking.com")
         self.anfragen.append(request)
         pfad = request.url.path
+        if self.psu_ablehnen and "psu-ip-address" in request.headers and pfad.startswith("/accounts/"):
+            return httpx.Response(422, json={"message": "Wrong PSU headers"})
         if pfad == "/application":
             return httpx.Response(200, json={"redirect_urls": ["https://finanz.example/bank-verbunden"]})
         if pfad == "/aspsps":
@@ -291,6 +294,93 @@ def test_abruflimit_und_faellig(db, eb):
     assert not a.uebersprungen and not a.fehler
 
 
+PSU = {"Psu-Ip-Address": "100.64.0.7", "Psu-User-Agent": "Safari"}
+
+
+def test_psu_header():
+    kopf = {"user-agent": "Mozilla/5.0 (iPhone)", "accept": "application/json", "accept-language": "de-DE",
+            "cookie": "geheim", "referer": " "}
+    assert ka.psu_header("100.64.0.7", kopf) == {
+        "Psu-Ip-Address": "100.64.0.7", "Psu-User-Agent": "Mozilla/5.0 (iPhone)", "Psu-Accept": "application/json",
+        "Psu-Accept-Language": "de-DE"}
+    assert ka.psu_header("", kopf) == {}  # alle oder keine: ohne IP-Adresse gar keine
+
+
+def test_abrufen_mit_inhaber_ohne_limit(db, eb, monkeypatch):
+    monkeypatch.setattr(ka, "_PSU_ABGELEHNT", set())
+    db.bank_konto_speichern(konto())
+    for stunde in range(4):
+        ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=stunde))
+    eb.api_nachbau.anfragen.clear()
+    a = ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=5), psu=PSU).konten[0]
+    assert not a.uebersprungen and not a.fehler
+    anfragen = eb.api_nachbau.anfragen
+    assert {r.url.path for r in anfragen} == {"/accounts/u-1/transactions", "/accounts/u-1/balances"}
+    assert all(r.headers["psu-ip-address"] == "100.64.0.7" and r.headers["psu-user-agent"] == "Safari"
+               for r in anfragen)
+    k = db.bank_konto(IBAN)
+    assert len(ka.abrufe_24h(k, JETZT + timedelta(hours=5))) == 4  # zählt nicht zum Limit
+    assert k.abgerufen == (JETZT + timedelta(hours=5)).isoformat(timespec="seconds")
+
+    # Beim Öffnen: höchstens alle zwei Minuten, und nie ohne den Inhaber
+    eb.api_nachbau.anfragen.clear()
+    oeffnen = dict(psu=PSU, wenn_aelter=ka.ANWESEND_ABSTAND)
+    assert not ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=5, minutes=1), **oeffnen).konten
+    assert not ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=6),
+                          wenn_aelter=ka.ANWESEND_ABSTAND).konten
+    assert not eb.api_nachbau.anfragen
+    a = ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=5, minutes=3), **oeffnen).konten[0]
+    assert not a.uebersprungen and eb.api_nachbau.anfragen
+    # Ohne den Inhaber gilt das Limit weiter
+    assert ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=6)).konten[0].uebersprungen
+
+
+def test_bank_lehnt_psu_header_ab(db, eb, monkeypatch):
+    monkeypatch.setattr(ka, "_PSU_ABGELEHNT", set())
+    eb.api_nachbau.psu_ablehnen = True
+    db.bank_konto_speichern(konto())
+    # Knopf: gezählter Abruf ohne die Header
+    a = ka.abrufen(db, Config(), eb, jetzt=JETZT, psu=PSU).konten[0]
+    assert not a.fehler and not a.uebersprungen and a.uebersicht == 6
+    k = db.bank_konto(IBAN)
+    assert (len(ka.abrufe_24h(k, JETZT)), k.fehler) == (1, "")
+    # Beim Öffnen danach gar nicht mehr (bis zum Neustart)
+    eb.api_nachbau.anfragen.clear()
+    assert not ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=1), psu=PSU,
+                          wenn_aelter=ka.ANWESEND_ABSTAND).konten
+    assert not eb.api_nachbau.anfragen
+    # Ein neues Konto lehnt beim Öffnen ab: übersprungen, nicht gezählt, kein Fehler
+    monkeypatch.setattr(ka, "_PSU_ABGELEHNT", set())
+    a = ka.abrufen(db, Config(), eb, jetzt=JETZT + timedelta(hours=1), psu=PSU,
+                   wenn_aelter=ka.ANWESEND_ABSTAND).konten[0]
+    assert a.uebersprungen and not a.fehler
+    assert len(ka.abrufe_24h(db.bank_konto(IBAN), JETZT + timedelta(hours=1))) == 1
+
+
+def test_api_abrufen_mit_psu_headern(db, eb, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from ustva import konten_web
+
+    monkeypatch.setattr(ka, "_PSU_ABGELEHNT", set())
+    db.bank_konto_speichern(konto())
+    cfg = Config(enable_banking_app_id="app-123")
+    app = FastAPI()
+    app.include_router(konten_web.router(db, lambda: cfg, eb_fabrik=lambda c: eb, jetzt=lambda: JETZT))
+    client = TestClient(app, headers={"User-Agent": "Safari"})
+    antwort = client.post("/api/konten/abrufen", params={"automatisch": "true"})
+    assert antwort.status_code == 200 and antwort.json()["konten"][0]["neu"] == 6
+    r = eb.api_nachbau.anfragen[0]
+    assert (r.headers["psu-ip-address"], r.headers["psu-user-agent"]) == ("testclient", "Safari")
+    # gleich noch einmal: zu früh
+    assert client.post("/api/konten/abrufen", params={"automatisch": "true"}).json()["konten"] == []
+    # ohne Enable Banking beim Öffnen still
+    cfg = Config()
+    assert client.post("/api/konten/abrufen", params={"automatisch": "true"}).json() == {"zugeordnet": 0,
+                                                                                       "konten": []}
+
+
 def test_einschalten_uebernimmt_aus_uebersicht(db, eb):
     db.bank_konto_speichern(privat())
     ka.abrufen(db, Config(), eb, jetzt=JETZT)
@@ -451,8 +541,9 @@ def test_api_konten(db, eb):
     daten = client.get("/api/konten").json()
     assert daten["summen"] == {"EUR": "1264.75"}
     ing, n26 = daten["konten"]
+    # Der Knopf schickt die PSU-Header mit, der Abruf zählt nicht zum Limit
     assert (ing["bank"], ing["saldo"], ing["buchhaltung"], ing["abrufe_frei"], ing["freigabe_tage"]) == (
-        "ING", "194.98", False, 3, 171)
+        "ING", "194.98", False, 4, 171)
     assert (n26["bank"], n26["buchhaltung"]) == ("N26", True)
     alle = client.get("/api/konten/buchungen").json()
     nur_ing = client.get("/api/konten/buchungen", params={"konto": PRIVAT_IBAN}).json()

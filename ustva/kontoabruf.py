@@ -56,6 +56,11 @@ UEBERLAPPUNG = timedelta(days=7)  # späte Buchungen mit älterem Buchungstag mi
 CSV_TAGE = 3  # Abstand Buchungstag CSV ↔ Schnittstelle, in dem ein Umsatz als derselbe gilt
 SEITEN = 100  # höchstens so viele Seiten Umsätze je Abruf
 ABRUFE_JE_TAG = 4  # PSD2 (RTS Art. 36 Abs. 5): ohne Anmeldung bei der Bank höchstens 4-mal in 24 Stunden
+# Ist der Inhaber dabei (Reiter offen, Knopf gedrückt), gehen seine IP-Adresse und Browserangaben als PSU-Header mit.
+# Dann gilt das Limit von Art. 36 Abs. 5 nicht (https://enablebanking.com/docs/faq). Beim Öffnen höchstens so oft:
+ANWESEND_ABSTAND = timedelta(minutes=2)
+PSU_HEADER = {"user-agent": "Psu-User-Agent", "accept": "Psu-Accept", "accept-language": "Psu-Accept-Language",
+              "accept-encoding": "Psu-Accept-Encoding", "referer": "Psu-Referer"}
 ZEITZONE = "Europe/Berlin"  # für die festen Abrufzeiten im Dienst
 NACHHOLEN = timedelta(hours=1)  # verpasste Abrufzeit (Dienst war aus) so lange nachholen
 # Bevorzugte Saldoarten: gebucht (Zwischenstand, Tagesende), dann erwartet und verfügbar
@@ -68,7 +73,21 @@ log = logging.getLogger(__name__)
 
 
 class KontoabrufFehler(RuntimeError):
-    pass
+    def __init__(self, text: str, status: int | None = None):
+        super().__init__(text)
+        self.status = status  # HTTP-Status von Enable Banking, falls es geantwortet hat
+
+
+def psu_header(ip: str, kopfzeilen) -> dict[str, str]:
+    """PSU-Header aus der Anfrage des Browsers: Enable Banking reicht sie an die Bank weiter, die den Abruf dann
+    als vom Inhaber ausgelöst behandelt. Ohne IP-Adresse keine (alle oder keine, sagt Enable Banking)."""
+    if not ip:
+        return {}
+    psu = {"Psu-Ip-Address": ip}
+    for name, psu_name in PSU_HEADER.items():
+        if wert := (kopfzeilen.get(name) or "").strip():
+            psu[psu_name] = wert[:500]
+    return psu
 
 
 def _schluessel_laden(pfad: Path) -> bytes:
@@ -120,14 +139,14 @@ class EnableBanking:
         self._token = (token, jetzt + 3600)
         return token
 
-    def _anfrage(self, methode: str, pfad: str, **kwargs) -> dict:
+    def _anfrage(self, methode: str, pfad: str, psu: dict[str, str] | None = None, **kwargs) -> dict:
         from . import monitoring
 
         endpunkt = _endpunkt(pfad)
         start = time.perf_counter()
         try:
-            antwort = self.client.request(methode, self.api + pfad, headers={"Authorization": f"Bearer {self._jwt()}"},
-                                          **kwargs)
+            antwort = self.client.request(methode, self.api + pfad,
+                                          headers={"Authorization": f"Bearer {self._jwt()}", **(psu or {})}, **kwargs)
         except httpx.HTTPError as e:
             monitoring.ENABLE_BANKING.labels(endpunkt, "nicht_erreichbar").inc()
             raise KontoabrufFehler(f"Enable Banking nicht erreichbar: {e}") from e
@@ -135,7 +154,8 @@ class EnableBanking:
             monitoring.ENABLE_BANKING_DAUER.labels(endpunkt).observe(time.perf_counter() - start)
         monitoring.ENABLE_BANKING.labels(endpunkt, str(antwort.status_code)).inc()
         if antwort.status_code >= 400:
-            raise KontoabrufFehler(f"Enable Banking {antwort.status_code}: {_fehlertext(antwort)}")
+            raise KontoabrufFehler(f"Enable Banking {antwort.status_code}: {_fehlertext(antwort)}",
+                                   antwort.status_code)
         return antwort.json() if antwort.content else {}
 
     def anwendung(self) -> dict:
@@ -160,17 +180,17 @@ class EnableBanking:
     def sitzung_anlegen(self, code: str) -> dict:
         return self._anfrage("POST", "/sessions", json={"code": code})
 
-    def salden(self, uid: str) -> list[dict]:
-        return self._anfrage("GET", f"/accounts/{uid}/balances").get("balances") or []
+    def salden(self, uid: str, psu: dict[str, str] | None = None) -> list[dict]:
+        return self._anfrage("GET", f"/accounts/{uid}/balances", psu).get("balances") or []
 
-    def umsaetze(self, uid: str, von: date, bis: date | None = None) -> list[dict]:
+    def umsaetze(self, uid: str, von: date, bis: date | None = None, psu: dict[str, str] | None = None) -> list[dict]:
         params: dict[str, str] = {"date_from": von.isoformat()}
         if bis:
             params["date_to"] = bis.isoformat()
         alle: list[dict] = []
         schluessel = None
         for _ in range(SEITEN):
-            antwort = self._anfrage("GET", f"/accounts/{uid}/transactions",
+            antwort = self._anfrage("GET", f"/accounts/{uid}/transactions", psu,
                                     params=params | ({"continuation_key": schluessel} if schluessel else {}))
             alle += antwort.get("transactions") or []
             neu = antwort.get("continuation_key")
@@ -537,16 +557,32 @@ def aus_uebersicht(db: Datenbank, cfg: Config, k: BankKonto, umrechner=None) -> 
 
 
 _SPERRE = threading.Lock()  # Hintergrund und Knopf in der App rufen nicht gleichzeitig ab
+# Konten, deren Bank einen Abruf mit PSU-Headern abgelehnt hat (bis zum Neustart): Beim Öffnen werden sie nicht
+# mehr abgerufen, der Knopf ruft sie wieder mit Limit ab
+_PSU_ABGELEHNT: set[str] = set()
+PSU_ABLEHNUNG = {400, 403, 422}
+
+
+def _zuletzt(k: BankKonto) -> datetime | None:
+    try:
+        z = datetime.fromisoformat(k.abgerufen) if k.abgerufen else None
+    except ValueError:
+        return None
+    return z.replace(tzinfo=UTC) if z and z.tzinfo is None else z
 
 
 def abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, von: date | None = None, heute: date | None = None,
             jetzt: datetime | None = None, umrechner=None, trocken: bool = False, nur: str = "",
-            faellig_nach: timedelta | None = None) -> Abrufe:
+            faellig_nach: timedelta | None = None, psu: dict[str, str] | None = None,
+            wenn_aelter: timedelta | None = None) -> Abrufe:
     """Holt Saldo und Umsätze aller verbundenen Konten (``nur``: nur dieses).
 
     Alle Konten landen in der Kontenübersicht; in die Buchhaltung (Kontoumsätze) nur die eingeschalteten.
     Je Konto höchstens ``ABRUFE_JE_TAG`` Abrufe in 24 Stunden, so viel erlaubt PSD2 ohne Anmeldung bei der Bank.
     ``faellig_nach``: nur Konten, deren letzter Abruf mindestens so lange her ist (regelmäßiger Abruf).
+    ``psu``: der Inhaber ist dabei (siehe ``psu_header``); solche Abrufe zählen nicht zum Limit. Lehnt die Bank sie
+    ab, ruft der Knopf das Konto mit Limit ab. ``wenn_aelter`` (beim Öffnen): nur mit ``psu``, nur Konten, deren
+    letzter Abruf so lange her ist, und ohne Rückfall auf einen gezählten Abruf.
     ``trocken``: Probelauf, der nichts speichert; die neuen Umsätze stehen in ``Abruf.umsaetze``.
     """
     from .bank import abgleich_ausfuehren
@@ -561,22 +597,35 @@ def abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, von: date | None = No
             zeiten = abrufe_24h(k, jetzt)
             if faellig_nach is not None and zeiten and jetzt - zeiten[-1] < faellig_nach:
                 continue
+            anwesend = psu if psu and k.schluessel not in _PSU_ABGELEHNT else None
+            if wenn_aelter is not None and (not anwesend or ((z := _zuletzt(k)) and jetzt - z < wenn_aelter)):
+                continue
             a = Abruf(k)
             ergebnis.konten.append(a)
             tage = tage_gueltig(k, jetzt)
-            if tage is not None and tage < 0 and faellig_nach is not None:
+            if tage is not None and tage < 0 and (faellig_nach is not None or wenn_aelter is not None):
                 a.uebersprungen = "Freigabe abgelaufen"  # die Übersicht zeigt das ohnehin
                 continue
             if tage is not None and tage < 0:
                 a.fehler = "Freigabe abgelaufen, bitte neu verbinden"
-            elif len(zeiten) >= ABRUFE_JE_TAG:
+            elif len(zeiten) >= ABRUFE_JE_TAG and not anwesend:
                 frei = naechster_freier_abruf(k, jetzt)
                 a.uebersprungen = (f"{ABRUFE_JE_TAG} Abrufe in 24 Stunden erreicht, wieder ab "
                                    f"{frei.astimezone():%d.%m. %H:%M} Uhr" if frei else "Abruflimit erreicht")
                 continue
             else:
-                _konto_abrufen(db, cfg, eb, k, a, von or (date.fromisoformat(k.bis) - UEBERLAPPUNG if k.bis
-                                                          else heute - ERSTER_ABRUF), jetzt, trocken)
+                start = von or (date.fromisoformat(k.bis) - UEBERLAPPUNG if k.bis else heute - ERSTER_ABRUF)
+                if not _konto_abrufen(db, cfg, eb, k, a, start, jetzt, trocken, anwesend):
+                    # Bank nimmt die PSU-Header nicht: mit dem Knopf als gezählter Abruf, beim Öffnen gar nicht
+                    a.fehler = ""
+                    if wenn_aelter is not None:
+                        a.uebersprungen = "Bank nimmt Abrufe ohne Limit nicht an"
+                    elif len(zeiten) >= ABRUFE_JE_TAG:
+                        frei = naechster_freier_abruf(k, jetzt)
+                        a.uebersprungen = (f"{ABRUFE_JE_TAG} Abrufe in 24 Stunden erreicht, wieder ab "
+                                           f"{frei.astimezone():%d.%m. %H:%M} Uhr" if frei else "Abruflimit erreicht")
+                    else:
+                        _konto_abrufen(db, cfg, eb, k, a, start, jetzt, trocken, None)
             if not trocken:
                 k.fehler = a.fehler
                 db.bank_konto_speichern(k)
@@ -586,17 +635,23 @@ def abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, von: date | None = No
 
 
 def _konto_abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, k: BankKonto, a: Abruf, start: date,
-                   jetzt: datetime, trocken: bool) -> None:
-    k.abrufe = " ".join([*(z.isoformat(timespec="seconds") for z in abrufe_24h(k, jetzt)),
-                         jetzt.isoformat(timespec="seconds")])
+                   jetzt: datetime, trocken: bool, psu: dict[str, str] | None = None) -> bool:
+    """False: die Bank hat den Abruf mit ``psu`` abgelehnt (nichts gespeichert, zählt nicht)."""
+    if not psu:  # mit dem Inhaber dabei zählt der Abruf nicht zum Limit
+        k.abrufe = " ".join([*(z.isoformat(timespec="seconds") for z in abrufe_24h(k, jetzt)),
+                             jetzt.isoformat(timespec="seconds")])
     try:
-        roh = eb.umsaetze(k.uid, start)
+        roh = eb.umsaetze(k.uid, start, psu=psu)
     except KontoabrufFehler as e:
+        if psu and e.status in PSU_ABLEHNUNG:
+            log.warning("%s nimmt Abrufe mit PSU-Headern nicht an: %s", k.bank, e)
+            _PSU_ABGELEHNT.add(k.schluessel)
+            return False
         a.fehler = str(e)
         if trocken:
-            return
+            return True
         db.bank_konto_speichern(k)  # der Abruf zählt trotzdem
-        return
+        return True
     buchungen, vorgemerkt = [], []
     for tx in roh:
         if (u := umsatz_aus(tx, k)) is not None:
@@ -610,12 +665,12 @@ def _konto_abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, k: BankKonto, 
     if k.aktiv or trocken:
         buchhaltung_uebernehmen(db, cfg, k, umsaetze, a, trocken)
     if trocken:
-        return
+        return True
     db.konto_vorgemerkt_ersetzen(k.schluessel, vorgemerkt)
     eingelesene_uebernehmen(db, k.schluessel, umsaetze)
     a.uebersicht = db.konto_buchungen_speichern(k.schluessel, umsaetze)
     try:
-        if (saldo := saldo_aus(eb.salden(k.uid))) is not None:
+        if (saldo := saldo_aus(eb.salden(k.uid, psu))) is not None:
             k.saldo, k.waehrung, stichtag = str(saldo[0]), saldo[1], saldo[2]
             k.saldo_stand = stichtag if stichtag and stichtag[:10] != jetzt.date().isoformat() \
                 else jetzt.isoformat(timespec="seconds")
@@ -625,6 +680,7 @@ def _konto_abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, k: BankKonto, 
     if letzte and (not k.bis or letzte.isoformat() > k.bis):
         k.bis = letzte.isoformat()
     k.abgerufen = jetzt.isoformat(timespec="seconds")
+    return True
 
 
 def zeitzone() -> tzinfo | None:

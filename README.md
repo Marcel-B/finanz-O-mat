@@ -224,9 +224,14 @@ finanz-o-mat bank konten                     # Konten, Saldo, Freigabe, letzter 
   Abruf ersetzt; in die Buchhaltung kommen sie erst, wenn die Bank sie bucht.
 - Der Dienst ruft selbst ab, zu den Uhrzeiten in `KONTOABRUF_ZEITEN` (Standard `09:00,12:30,16:00,19:30`, deutsche
   Zeit, nachts nicht; `aus` = nur von Hand). War der Dienst zur Abrufzeit aus, holt er den Abruf bis zu einer Stunde
-  später nach. Ohne Anmeldung bei der Bank erlaubt PSD2 höchstens vier Abrufe je Konto in 24 Stunden; die App zählt
-  mit und lässt weitere aus, auch beim Knopf „Jetzt abrufen“ im Reiter „Konten“ und bei `bank abrufen`. Ein Klick auf
-  den Knopf verbraucht also einen der vier, dann fällt der nächste geplante Abruf unter Umständen aus.
+  später nach. Ohne den Inhaber erlaubt PSD2 höchstens vier Abrufe je Konto in 24 Stunden; die App zählt diese
+  mit und lässt weitere aus, auch bei `bank abrufen`.
+- **Mit dir als Auslöser ohne Limit:** Beim Öffnen des Reiters „Konten“, wenn die App wieder in den Vordergrund kommt
+  (höchstens alle zwei Minuten je Konto) und mit „Jetzt abrufen“ schickt die App IP-Adresse und Browserangaben der
+  Anfrage als PSU-Header (`Psu-Ip-Address`, `Psu-User-Agent`, …) an Enable Banking. Die Bank sieht dann, dass du
+  dabei bist, und das Tageslimit gilt nicht ([FAQ von Enable Banking](https://enablebanking.com/docs/faq)); solche
+  Abrufe zählen nicht zu den vier. Lehnt eine Bank sie ab, ruft der Knopf das Konto als gezählten Abruf ab, und
+  beim Öffnen wird es bis zum nächsten Neustart des Dienstes ausgelassen (Warnung im Log).
 - **Alte Auszüge einlesen:** Was weiter zurückliegt, als die Bank liefert, kommt als CAMT.053-Datei dazu, etwa aus
   MoneyMoney (Ablage → Exportieren → CAMT.053): im Reiter „Konten“ über „Auszüge einlesen“ oder im Container mit
   `finanz-o-mat bank einlesen datei.xml` (`--trocken` zählt nur). Die Umsätze gehen in die Kontenübersicht des
@@ -414,7 +419,7 @@ stehen dort nur Anzahlen und Laufzeiten, keine Beträge, Namen oder Rechnungsnum
 | `finanzomat_backup_ok`, `finanzomat_backup_last_success_timestamp_seconds` | Stand des Nextcloud-Backups (nur im Container) |
 | `finanzomat_update_available` | 1, wenn eine neue Version bereitsteht (nur im Container) |
 | `finanzomat_loki_dropped_total` | Zeilen, die Loki nicht erreicht haben |
-| `finanzomat_kontoabruf_total{bank,ausloeser,ergebnis}` | Kontoabrufe über Enable Banking: `zeitplan` oder `knopf`; ok, fehler, uebersprungen |
+| `finanzomat_kontoabruf_total{bank,ausloeser,ergebnis}` | Kontoabrufe über Enable Banking: `zeitplan`, `knopf` oder `oeffnen`; ok, fehler, uebersprungen |
 | `finanzomat_kontoabruf_umsaetze_total{bank,ziel}` | neu abgerufene Umsätze, `uebersicht` (Reiter „Konten“) oder `buchhaltung` |
 | `finanzomat_enable_banking_requests_total{endpunkt,status}`, `…_request_duration_seconds{endpunkt}` | Anfragen an die API von Enable Banking (`accounts/transactions`, `accounts/balances`, …) |
 | `finanzomat_bankkonto_info{bank,konto,buchhaltung}` | je verbundenem Konto; `konto` ist der Bankname, bei mehreren Konten einer Bank mit Nummer (keine IBAN) |
