@@ -6,8 +6,9 @@ selbst abruft, da gilt das Limit nicht. Den Zugang (Produkt-ID, Benutzername, Pa
 sich der Abruf mit dem Depot (ustva/depot.py).
 
 Abgerufen wird beim Öffnen des Reiters (höchstens alle zwei Minuten), mit „Jetzt abrufen“ und im Hintergrund
-stündlich von 7 bis 22 Uhr. Nur Konten, die schon über Enable Banking verbunden sind (gleiche IBAN), und nur in
-die Kontenübersicht. In die Buchhaltung bringt sie weiter Enable Banking: Dessen Abruf übernimmt eine Zeile, die
+stündlich von 7 bis 22 Uhr. Alle Konten des Zugangs, nur in die Kontenübersicht: Ist eins nicht über Enable Banking
+verbunden (etwa das Extra-Konto, Tagesgeld), legt der erste Abruf es an (``BankKonto.sitzung`` = ``fints``); der
+Abruf über Enable Banking lässt es aus. In die Buchhaltung bringt sie weiter Enable Banking: Dessen Abruf übernimmt eine Zeile, die
 schon über FinTS kam (gleicher Betrag, Buchungstag bis drei Tage auseinander), statt sie doppelt anzulegen; und
 was Enable Banking schon geliefert hat, legt FinTS nicht noch einmal an.
 """
@@ -134,6 +135,17 @@ def ing(k: BankKonto) -> bool:
     return k.iban.startswith("DE") and k.iban[4:12] == depot.ING_BLZ
 
 
+def _anlegen(db: Datenbank, fk: depot.FintsKonto) -> BankKonto:
+    """Ein Konto, das nur über FinTS kommt; verbindet man es später über Enable Banking, übernimmt das die Zeile."""
+    from .kontoabruf import FINTS_SITZUNG
+
+    k = BankKonto(schluessel=fk.iban, uid="", sitzung=FINTS_SITZUNG, bank="ING", land="DE", konto="ING",
+                  iban=fk.iban, bezeichnung=fk.name, waehrung=fk.waehrung)
+    db.bank_konto_speichern(k)
+    log.info("ING-Konto …%s über FinTS neu angelegt (%s)", fk.iban[-4:], fk.name or "ohne Namen")
+    return k
+
+
 def faellig(db: Datenbank, jetzt: datetime, abstand: timedelta) -> bool:
     """Ist der letzte Abruf der Konten (auch ein fehlgeschlagener) mindestens ``abstand`` her?"""
     zuletzt = (db.fints_zustand(depot.ZUGANG) or {}).get("konten")
@@ -168,15 +180,12 @@ def abrufen(db: Datenbank, cfg: Config, zugang: depot.IngFints | None = None, je
             a.uebersprungen = depot.angehalten(stand)
             return a
         konten = {k.iban: k for k in db.bank_konten() if ing(k)}
-        if not konten:
-            a.uebersprungen = "kein Konto der ING verbunden"
-            return a
         zeit = jetzt.isoformat(timespec="seconds")
         abgelehnt = None
         try:
             zugang = zugang or depot.IngFints(cfg, stand.get("daten"))
             sitzung = zugang.abrufen(warten=warten, hinweis=hinweis, depots=False,
-                                     konten_ab=jetzt.date() - ZEITRAUM, ibans=set(konten))
+                                     konten_ab=jetzt.date() - ZEITRAUM)
             abgelehnt = False
         except depot.FreigabeNoetig as e:
             a.freigabe, a.fehler = True, str(e)
@@ -194,7 +203,7 @@ def abrufen(db: Datenbank, cfg: Config, zugang: depot.IngFints | None = None, je
         if a.fehler:
             return a
         for fk in sitzung.konten:
-            k = konten[fk.iban]
+            k = konten.get(fk.iban) or _anlegen(db, fk)
             a.konten.append(k.schluessel)
             gebucht = [u for u in (umsatz_aus(t, k) for t in fk.gebucht) if u]
             pruefsummen(k.schluessel, gebucht)

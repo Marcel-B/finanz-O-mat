@@ -44,6 +44,7 @@ def _konto(k: BankKonto, jetzt: datetime) -> dict:
         "buchhaltung": k.aktiv,
         "fints": k.fints,  # letzter Abruf über FinTS (nur ING)
         "ing": ing_konten.ing(k),
+        "nur_fints": k.sitzung == ka.FINTS_SITZUNG,  # nicht über Enable Banking verbunden
     }
 
 
@@ -80,7 +81,7 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
                       "abgelehnt": bool(zustand.get("abgelehnt"))},
             "depots": _depots(db),
             # ING-Konten über FinTS: beim Öffnen, mit „Jetzt abrufen“ und stündlich (ustva/ing_konten.py)
-            "ing": {"eingerichtet": depot.eingerichtet(cfg) and any(ing_konten.ing(k) for k in db.bank_konten()),
+            "ing": {"eingerichtet": depot.eingerichtet(cfg),
                     "versucht": zustand.get("konten", ""),
                     "beim_oeffnen": int(ing_konten.BEIM_OEFFNEN.total_seconds())},
             "zeiten": cfg.kontoabruf_zeiten if eingerichtet or depot.eingerichtet(cfg) else [],

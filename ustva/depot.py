@@ -119,6 +119,8 @@ class FintsKonto:
     """Ein Zahlungskonto aus einer Sitzung: Saldo und Buchungen, wie python-fints sie liefert (mt940)."""
 
     iban: str
+    name: str = ""  # Produktname laut Bank, z. B. „Extra-Konto“
+    waehrung: str = "EUR"
     saldo: object | None = None  # mt940.models.Balance
     gebucht: list = field(default_factory=list)  # mt940.models.Transaction
     vorgemerkt: list = field(default_factory=list)
@@ -283,18 +285,26 @@ class IngFints:
                                 positionen=[p for p in map(position_aus, bestand) if p]))
         return depots
 
-    def _konten(self, f, ab: date, ibans: set[str], bis: float, hinweis) -> list[FintsKonto]:
-        """Saldo, gebuchte und vorgemerkte Buchungen je Konto.
+    def _konten(self, f, ab: date, ibans: set[str] | None, bis: float, hinweis) -> list[FintsKonto]:
+        """Saldo, gebuchte und vorgemerkte Buchungen je Konto (``ibans``: nur diese, ``None``: alle).
 
         python-fints hängt die vorgemerkten Buchungen (MT942) hinten an die gebuchten an, ohne sie zu kennzeichnen;
         deshalb einmal ohne und einmal mit: was beim zweiten Mal hinter den gebuchten kommt, ist vorgemerkt.
         """
         ergebnis = []
+        try:
+            angaben = {(a.get("iban") or "").replace(" ", "").upper(): a
+                       for a in f.get_information().get("accounts", [])}
+        except Exception:  # noqa: BLE001 – nur für den Namen des Kontos
+            angaben = {}
         for konto in self._freigeben(f, f.get_sepa_accounts(), bis, hinweis) or []:
             iban = (konto.iban or "").replace(" ", "").upper()
-            if iban not in ibans:
+            if not iban or (ibans is not None and iban not in ibans):
                 continue
-            fk = FintsKonto(iban, saldo=self._freigeben(f, f.get_balance(konto), bis, hinweis))
+            angabe = angaben.get(iban, {})
+            fk = FintsKonto(iban, name=(angabe.get("product_name") or "").strip(),
+                            waehrung=(angabe.get("currency") or "EUR").upper(),
+                            saldo=self._freigeben(f, f.get_balance(konto), bis, hinweis))
             fk.gebucht = list(self._freigeben(f, f.get_transactions(konto, ab), bis, hinweis) or [])
             alle = list(self._freigeben(f, f.get_transactions(konto, ab, include_pending=True), bis, hinweis) or [])
             fk.vorgemerkt = alle[len(fk.gebucht):]
@@ -303,7 +313,7 @@ class IngFints:
 
     def abrufen(self, warten: timedelta = FREIGABE_WARTEN, hinweis: Callable[[str], None] | None = None,
                 depots: bool = True, konten_ab: date | None = None, ibans: set[str] | None = None) -> Sitzung:
-        """Eine Sitzung: die Depots und, mit ``konten_ab``, Saldo und Buchungen der Konten in ``ibans``."""
+        """Eine Sitzung: die Depots und, mit ``konten_ab``, Saldo und Buchungen der Konten (``ibans``: nur diese)."""
         from fints.exceptions import FinTSClientPINError, FinTSClientTemporaryAuthError
 
         bis = self._uhr() + warten.total_seconds()
@@ -317,7 +327,7 @@ class IngFints:
                 if depots:
                     s.depots = self._depots(f, bis, hinweis)
                 if konten_ab:
-                    s.konten = self._konten(f, konten_ab, ibans or set(), bis, hinweis)
+                    s.konten = self._konten(f, konten_ab, ibans, bis, hinweis)
                 return s
         except (FinTSClientPINError, FinTSClientTemporaryAuthError) as e:
             raise _ablehnung(antworten, e) from e

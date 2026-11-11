@@ -49,6 +49,7 @@ PRAEFIX = "eb:"  # Prüfsummen abgerufener Umsätze; CSV-Umsätze haben eine rei
 IMPORT_PRAEFIX = "camt:"  # aus einer CAMT.053-Datei eingelesen (ustva/camt.py)
 FINTS_PRAEFIX = "fints:"  # über FinTS abgerufen (ustva/ing_konten.py); zählt wie eingelesen
 EINGELESEN = (IMPORT_PRAEFIX, FINTS_PRAEFIX)  # ein Abruf über Enable Banking übernimmt diese Zeilen
+FINTS_SITZUNG = "fints"  # BankKonto.sitzung eines Kontos, das nur über FinTS kommt (z. B. ING Extra-Konto)
 HOECHSTE_FREIGABE = timedelta(days=180)
 ERSTER_ABRUF = timedelta(days=90)  # so weit liefern die meisten Banken ohne neue Freigabe zurück
 UEBERLAPPUNG = timedelta(days=7)  # späte Buchungen mit älterem Buchungstag mitnehmen
@@ -555,7 +556,8 @@ def abrufen(db: Datenbank, cfg: Config, eb: EnableBanking, von: date | None = No
         jetzt = jetzt or datetime.now(UTC)
         ergebnis = Abrufe()
         nur = nur.replace(" ", "").upper()
-        for k in (k for k in db.bank_konten() if not nur or nur in (k.schluessel.upper(), k.iban)):
+        for k in (k for k in db.bank_konten()
+                  if k.sitzung != FINTS_SITZUNG and (not nur or nur in (k.schluessel.upper(), k.iban))):
             zeiten = abrufe_24h(k, jetzt)
             if faellig_nach is not None and zeiten and jetzt - zeiten[-1] < faellig_nach:
                 continue
@@ -674,7 +676,7 @@ class Hintergrundabruf:
         if punkt is None or punkt == self._erledigt:
             return None
         eb_da = eb or self._eb or (self.cfg.enable_banking_app_id and self.cfg.enable_banking_schluessel)
-        konten = bool(eb_da and self.db.bank_konten())
+        konten = bool(eb_da and any(k.sitzung != FINTS_SITZUNG for k in self.db.bank_konten()))
         cfg = wirksam(self.cfg, self.db)
         mit_depot = depot.eingerichtet(cfg)
         if not konten and not mit_depot:
@@ -697,7 +699,7 @@ class Hintergrundabruf:
         if self._ing_versucht and jetzt - self._ing_versucht < ing_konten.TAKT:
             return  # auch nach einem Fehler erst in einer Stunde wieder
         cfg = wirksam(self.cfg, self.db)
-        if not depot.eingerichtet(cfg) or not any(ing_konten.ing(k) for k in self.db.bank_konten()):
+        if not depot.eingerichtet(cfg):
             return
         self._ing_versucht = jetzt
         try:  # ein Abruf von Hand oder beim Öffnen in den letzten Minuten reicht

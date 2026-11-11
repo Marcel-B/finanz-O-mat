@@ -400,7 +400,8 @@ const gefiltert = computed(() =>
           </div>
           <div class="text-sm text-muted-color">
             <template v-if="gewaehlt">
-              Saldo vom {{ zeit(gewaehlt.saldo_stand) }} · Freigabe bis {{ zeit(gewaehlt.freigabe_bis.slice(0, 10)) }}
+              Saldo vom {{ zeit(gewaehlt.saldo_stand) }}
+              <template v-if="!gewaehlt.nur_fints"> · Freigabe bis {{ zeit(gewaehlt.freigabe_bis.slice(0, 10)) }}</template>
               <template v-if="gewaehlt.fints"> · über FinTS {{ zeit(gewaehlt.fints) }}</template>
             </template>
             <template v-else>Zuletzt abgerufen: {{ zeit(letzterAbruf) }}</template>

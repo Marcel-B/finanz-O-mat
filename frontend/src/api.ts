@@ -479,6 +479,7 @@ export interface BankKonto {
   buchhaltung: boolean; // Umsätze gehen auch in die Buchhaltung
   fints: string; // letzter Abruf über FinTS (nur ING, ohne das Limit von PSD2)
   ing: boolean;
+  nur_fints: boolean; // nicht über Enable Banking verbunden (z. B. ING Extra-Konto), kommt nur über FinTS
 }
 
 // ING-Konten über FinTS: beim Öffnen des Reiters, mit „Jetzt abrufen“ und stündlich von 7 bis 22 Uhr

@@ -273,8 +273,9 @@ Buchungen und vorgemerkte Buchungen der ING-Konten ohne dieses Limit:
 - im Dienst stündlich von 7 bis 22 Uhr,
 - im Container mit `finanz-o-mat bank ing`.
 
-Abgerufen werden nur ING-Konten, die schon über Enable Banking verbunden sind (gleiche IBAN), die letzten 14 Tage. Sie
-landen nur in der Kontenübersicht; in die Buchhaltung bringt sie weiter Enable Banking. Dessen nächster Abruf
+Abgerufen werden alle Konten des Zugangs, die letzten 14 Tage. Ein Konto, das nicht über Enable Banking verbunden ist
+(etwa das Extra-Konto, Tagesgeld), legt der erste Abruf in der Kontenübersicht an; Enable Banking lässt es aus. Die
+Umsätze landen nur in der Kontenübersicht; in die Buchhaltung bringt sie weiter Enable Banking. Dessen nächster Abruf
 übernimmt die Zeile, die schon über FinTS kam (gleicher Betrag, Buchungstag bis drei Tage auseinander), und FinTS legt
 nichts an, was Enable Banking schon geliefert hat. Wartet die ING auf eine Freigabe in der App, fragen das Öffnen und
 der Hintergrund nicht erneut nach, bis „Jetzt abrufen“ sie wieder bekommen hat.

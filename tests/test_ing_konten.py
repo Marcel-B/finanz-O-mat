@@ -22,6 +22,7 @@ from .test_depot import CFG, FakeFints, zugang
 JETZT = datetime(2026, 11, 10, 15, 0, tzinfo=UTC)
 ING_IBAN = "DE00500105171234567890"  # fiktiv
 N26_IBAN = "DE00100110012345678901"
+EXTRA_IBAN = "DE00500105179999999999"  # Extra-Konto, nicht über Enable Banking verbunden
 
 GEBUCHT = """
 :20:STARTUMSE
@@ -58,6 +59,11 @@ class FakeKonten(FakeFints):
     """Dazu Konten, Saldo und Buchungen."""
 
     def __init__(self, gebucht=GEBUCHT, vorgemerkt=VORGEMERKT, **kw):
+        kw.setdefault("konten", [
+            {"type": 1, "account_number": "1234567890", "iban": ING_IBAN, "product_name": "Girokonto"},
+            {"type": 10, "account_number": "9999999999", "iban": EXTRA_IBAN, "product_name": "Extra-Konto",
+             "currency": "EUR"},
+        ])
         super().__init__(**kw)
         self.gebucht, self.vorgemerkt = gebucht, vorgemerkt
         self.zeitraum = []
@@ -65,14 +71,16 @@ class FakeKonten(FakeFints):
     def get_sepa_accounts(self):
         return [SEPAAccount(iban=ING_IBAN, bic="INGDDEFFXXX", accountnumber="1234567890", subaccount=None,
                             blz="50010517"),
-                SEPAAccount(iban="DE00500105179999999999", bic="INGDDEFFXXX", accountnumber="9999999999",
-                            subaccount=None, blz="50010517")]  # nicht verbunden: wird nicht abgerufen
+                SEPAAccount(iban=EXTRA_IBAN, bic="INGDDEFFXXX", accountnumber="9999999999",
+                            subaccount=None, blz="50010517")]
 
     def get_balance(self, konto):
-        assert konto.iban == ING_IBAN
-        return Balance("C", Amount("2447,51".replace(",", "."), "C", "EUR"), Date(2026, 11, 10))
+        betrag = "2447.51" if konto.iban == ING_IBAN else "12000.00"
+        return Balance("C", Amount(betrag, "C", "EUR"), Date(2026, 11, 10))
 
     def get_transactions(self, konto, start_date=None, end_date=None, include_pending=False):
+        if konto.iban != ING_IBAN:
+            return []
         self.zeitraum.append(start_date)
         return mt940_to_array(_mt940(self.gebucht) + (_mt940(self.vorgemerkt) if include_pending else ""))
 
@@ -87,7 +95,7 @@ def test_abruf(db):
     db.bank_konto_speichern(bankkonto(N26_IBAN, "N26"))
     fake = FakeKonten()
     a = ing_konten.abrufen(db, CFG, zugang(fake), jetzt=JETZT)
-    assert (a.ergebnis, a.konten, a.neu, a.vorgemerkt) == ("ok", [ING_IBAN], 2, 1)
+    assert (a.ergebnis, a.konten, a.neu, a.vorgemerkt) == ("ok", [ING_IBAN, EXTRA_IBAN], 2, 1)
     assert fake.zeitraum == [date(2026, 10, 27)] * 2
     assert fake.abgefragt == []  # kein Depotbestand
 
@@ -104,6 +112,10 @@ def test_abruf(db):
     assert (k.saldo, k.saldo_stand, k.fints) == ("2447.51", JETZT.isoformat(), JETZT.isoformat())
     assert k.abgerufen == "" and k.abrufe == ""  # zählt nicht zu den Abrufen über Enable Banking
     assert db.bank_konto(N26_IBAN).fints == ""
+    # Das Extra-Konto war nicht über Enable Banking verbunden: angelegt, ohne Enable Banking
+    extra = db.bank_konto(EXTRA_IBAN)
+    assert (extra.bezeichnung, extra.bank, extra.sitzung, extra.saldo, extra.aktiv) == (
+        "Extra-Konto", "ING", ka.FINTS_SITZUNG, "12000.00", False)
     assert db.fints_zustand(depot.ZUGANG)["konten"] == JETZT.isoformat()
 
     # Ein späterer Abruf legt nichts doppelt an und ersetzt die vorgemerkten
@@ -178,8 +190,6 @@ def test_nur_wenn_aelter_und_freigabe(db):
 
 
 def test_fehler_und_ohne_ing(db):
-    a = ing_konten.abrufen(db, CFG, zugang(FakeKonten()), jetzt=JETZT)
-    assert a.uebersprungen == "kein Konto der ING verbunden"
     db.bank_konto_speichern(bankkonto())
     a = ing_konten.abrufen(db, CFG, zugang(FakeKonten(fehler=RuntimeError("Bank antwortet nicht"))), jetzt=JETZT)
     assert (a.ergebnis, a.fehler) == ("fehler", "RuntimeError: Bank antwortet nicht")
@@ -205,10 +215,10 @@ def test_hintergrund_stuendlich(db, monkeypatch):
         return ing_konten.KontenAbruf()
 
     monkeypatch.setattr(ing_konten, "abrufen", abrufen)
+    ka.Hintergrundabruf(db, Config(), ["16:00"], tz=ZoneInfo("Europe/Berlin")).einmal(
+        jetzt=datetime(2026, 11, 10, 9, 0, tzinfo=UTC))
+    assert aufrufe == []  # FinTS nicht eingerichtet
     h = ka.Hintergrundabruf(db, CFG, ["16:00"], tz=ZoneInfo("Europe/Berlin"))
-    h.einmal(jetzt=datetime(2026, 11, 10, 9, 0, tzinfo=UTC))
-    assert aufrufe == []  # noch kein Konto der ING
-    db.bank_konto_speichern(bankkonto())
     h.einmal(jetzt=datetime(2026, 11, 10, 5, 59, tzinfo=UTC))  # 6:59 deutsche Zeit
     assert aufrufe == []
     for minute in (0, 30, 60, 61):
@@ -238,11 +248,12 @@ def test_api(db):
 
     antwort = client.post("/api/konten/ing/abrufen", params={"automatisch": True}).json()
     assert antwort == {"fehler": "", "freigabe": False, "uebersprungen": "", "neu": 2, "vorgemerkt": 1,
-                       "konten": [ING_IBAN]}
+                       "konten": [ING_IBAN, EXTRA_IBAN]}
     assert client.post("/api/konten/ing/abrufen", params={"automatisch": True}).json()["uebersprungen"]
     assert client.post("/api/konten/ing/abrufen").json()["uebersprungen"] == ""  # der Knopf ruft immer ab
-    (k,) = client.get("/api/konten").json()["konten"]
-    assert (k["saldo"], k["fints"]) == ("2447.51", JETZT.isoformat())
+    extra, k = client.get("/api/konten").json()["konten"]
+    assert (k["saldo"], k["fints"], k["nur_fints"]) == ("2447.51", JETZT.isoformat(), False)
+    assert (extra["name"], extra["saldo"], extra["nur_fints"]) == ("Extra-Konto", "12000.00", True)
 
     nicht = FastAPI()
     nicht.include_router(konten_web.router(db, lambda: Config()))
@@ -257,9 +268,9 @@ def test_metriken(db):
     a = ing_konten.abrufen(db, CFG, zugang(FakeKonten()), jetzt=JETZT)
     monitoring.ing_abruf_zaehlen(a, "knopf")
     text = monitoring.metriken(monitoring.Bestand(db, None, None))[0].decode()
-    assert 'finanzomat_bankkonto_fints_abruf_timestamp_seconds{bank="ING",konto="ING"}' in text
+    assert 'finanzomat_bankkonto_fints_abruf_timestamp_seconds{bank="ING",konto="ING 1"}' in text
     assert 'finanzomat_ing_fints_abruf_total{ausloeser="knopf",ergebnis="ok"}' in text
-    assert "2447" not in text and ING_IBAN not in text
+    assert "2447" not in text and "12000" not in text and ING_IBAN not in text
 
 
 def test_befehl(db, capsys):
@@ -288,3 +299,14 @@ def test_anmeldung_abgelehnt_haelt_automatik_an(db):
     assert "abgelehnt" in depot.abrufen(db, CFG, zugang(fake), jetzt=JETZT, hintergrund=True).uebersprungen
     assert ing_konten.abrufen(db, CFG, zugang(FakeKonten()), jetzt=JETZT + timedelta(hours=2)).ergebnis == "ok"
     assert db.fints_zustand(depot.ZUGANG)["abgelehnt"] is False
+
+
+def test_enable_banking_laesst_fints_konten_aus(db):
+    from ustva.models import BankKonto as BK
+
+    db.bank_konto_speichern(BK(schluessel=EXTRA_IBAN, uid="", sitzung=ka.FINTS_SITZUNG, bank="ING", land="DE",
+                               konto="ING", iban=EXTRA_IBAN))
+    assert ka.abrufen(db, CFG, eb=None, jetzt=JETZT).konten == []  # eb würde sonst gebraucht
+    assert ka.Hintergrundabruf(db, Config(enable_banking_app_id="app", enable_banking_schluessel="x"),
+                               ["16:00"], tz=ZoneInfo("Europe/Berlin")).einmal(
+        jetzt=datetime(2026, 11, 10, 15, 10, tzinfo=UTC)) is None
