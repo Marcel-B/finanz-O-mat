@@ -241,6 +241,20 @@ finanz-o-mat bank konten                     # Konten, Saldo, Freigabe, letzter 
 - Schon per CSV eingelesene Umsätze werden nicht doppelt angelegt (gleiches Konto, gleicher Betrag, Buchungstag bis
   drei Tage auseinander); Zuordnung und Markierung bleiben. Umgekehrt überspringt der CSV-Import abgerufene Umsätze.
 
+Im Reiter „Konten“:
+
+- **Eigene Namen:** Über den Stift neben dem Namen lässt sich jedes Konto und Depot umbenennen (etwa zwei
+  „Extra-Konto“ auseinanderhalten). Der Name bleibt bei jedem Abruf und neuer Freigabe; leer = wieder der Name der Bank.
+- **Vorgemerkt:** Gibt es vorgemerkte Umsätze, stehen unter dem Kontostand ihre Summe und der Stand danach. Der
+  Kontostand der Bank ist der gebuchte, die vorgemerkten Umsätze sind darin noch nicht enthalten.
+- **Zeitraum:** Links über den Umsätzen ein Zeitraum (von–bis) mit „Laufender Monat“ und „Laufendes Quartal“, rechts
+  die Volltextsuche. Der Zeitraum gilt auch für den Verlauf.
+- **Verlauf:** Kontostand je Tag als Graph (ausblendbar). Seit dieser Version merkt sich die App den Kontostand jedes
+  Tages; für die Zeit davor rechnet sie vom aktuellen Stand über die gebuchten Umsätze zurück (bis zum ersten
+  Umsatz, also so weit, wie abgerufen oder eingelesen ist). „Alle Konten“ zeigt die Summe der Euro-Konten. Beim Depot
+  zeigt der Graph den Wert je Tag, den die App seit dem ersten Depotabruf speichert (Depotumsätze liefert die ING
+  nicht, ein Zurückrechnen geht dort nicht).
+
 ### Depot der ING (FinTS)
 
 Depots gehören nicht zu PSD2, Enable Banking liefert sie deshalb nicht. Den Bestand des ING-Direkt-Depots holt die App
@@ -426,9 +440,10 @@ stehen dort nur Anzahlen und Laufzeiten, keine Beträge, Namen oder Rechnungsnum
 | `finanzomat_bankkonto_freigabe_tage`, `…_freigabe_bis_timestamp_seconds` | Restlaufzeit der Freigabe der Bank, für einen Alarm vor dem Ablauf |
 | `finanzomat_bankkonto_letzter_abruf_timestamp_seconds`, `…_abrufe_frei`, `…_fehler`, `…_umsaetze` | letzter erfolgreicher Abruf, freie Abrufe in 24 Stunden, Fehler beim letzten Abruf, Umsätze in der Übersicht (kein Saldo) |
 | `finanzomat_bankkonto_fints_abruf_timestamp_seconds` | letzter erfolgreicher Abruf über FinTS (nur ING) |
+| `finanzomat_bankkonto_vorgemerkt`, `finanzomat_bankkonto_verlauf_tage` | vorgemerkte Umsätze je Konto und Tage mit gemerktem Kontostand (Anzahlen, kein Betrag) |
 | `finanzomat_ing_fints_abruf_total{ausloeser,ergebnis}`, `finanzomat_ing_fints_umsaetze_total` | Abrufe der ING-Konten über FinTS (oeffnen, knopf, zeitplan) und neu gekommene Umsätze |
 | `finanzomat_depotabruf_total{ausloeser,ergebnis}` | Depotabrufe über FinTS: ok, fehler, freigabe (App-Freigabe fehlt), uebersprungen |
-| `finanzomat_depot_positionen{bank,depot}`, `…_letzter_abruf_timestamp_seconds` | Wertpapiere je Depot und letzter erfolgreicher Abruf (kein Wert, keine Depotnummer) |
+| `finanzomat_depot_positionen{bank,depot}`, `…_letzter_abruf_timestamp_seconds`, `…_verlauf_tage` | Wertpapiere je Depot, letzter erfolgreicher Abruf und Tage mit gemerktem Depotwert (kein Wert, keine Depotnummer) |
 | `finanzomat_depot_freigabe_noetig`, `finanzomat_depot_fehler` | 1, wenn der Depotabruf auf eine Freigabe in der ING-App wartet bzw. zuletzt fehlschlug |
 | `process_*`, `python_*` | Speicher, CPU und Garbage Collector des Prozesses |
 

@@ -9,32 +9,47 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel
 
-from . import camt, depot, ing_konten, monitoring
+from . import camt, depot, ing_konten, kontoverlauf, monitoring
 from . import kontoabruf as ka
 from .config import Config
-from .db import Datenbank
+from .db import Datenbank, stichtag
 from .models import BankKonto
 
 log = logging.getLogger(__name__)
 
 
-def _konto(k: BankKonto, jetzt: datetime) -> dict:
+class NameAenderung(BaseModel):
+    schluessel: str
+    name: str = ""
+
+
+NAME_LAENGE = 60
+
+
+def _konto(k: BankKonto, jetzt: datetime, namen: dict[str, str], vorgemerkt: dict[str, list[Decimal]]) -> dict:
     frei = ka.naechster_freier_abruf(k, jetzt)
+    offen = vorgemerkt.get(k.schluessel, [])
     return {
         "schluessel": k.schluessel,
-        "name": k.bezeichnung or k.bank,
+        "name": namen.get(k.schluessel) or k.bezeichnung or k.bank,
+        "eigener_name": namen.get(k.schluessel, ""),
         "bank": k.bank,
         "bezeichnung": k.bezeichnung,
         "iban": k.iban,
         "waehrung": k.waehrung,
         "saldo": k.saldo or None,
         "saldo_stand": k.saldo_stand,
+        # noch nicht gebuchte Umsätze (Summe, meist negativ); der Saldo der Bank ist der gebuchte
+        "vorgemerkt": str(sum(offen, Decimal(0))) if offen else None,
+        "vorgemerkt_anzahl": len(offen),
         "abgerufen": k.abgerufen,
         "freigabe_bis": k.gueltig_bis,
         "freigabe_tage": ka.tage_gueltig(k, jetzt),
@@ -48,8 +63,9 @@ def _konto(k: BankKonto, jetzt: datetime) -> dict:
     }
 
 
-def _depots(db: Datenbank) -> list[dict]:
-    return [{"schluessel": d["schluessel"], "bank": d["bank"], "name": d["name"], "waehrung": d["waehrung"],
+def _depots(db: Datenbank, namen: dict[str, str]) -> list[dict]:
+    return [{"schluessel": d["schluessel"], "bank": d["bank"], "name": namen.get(d["schluessel"]) or d["name"],
+             "eigener_name": namen.get(d["schluessel"], ""), "bezeichnung": d["name"], "waehrung": d["waehrung"],
              "wert": d["wert"] or None, "einstandswert": d["einstandswert"] or None, "stand": d["stand"],
              "abgerufen": d["abgerufen"], "positionen": d["positionen"]} for d in db.depots()]
 
@@ -67,11 +83,20 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
     def konten():
         cfg = aktuell()
         zeit = _jetzt()
-        liste = [_konto(k, zeit) for k in db.bank_konten()]
+        namen = db.konto_namen()
+        alle = db.bank_konten()
+        vorgemerkt: dict[str, list[Decimal]] = {}
+        for z in db.konto_vorgemerkt():
+            vorgemerkt.setdefault(z["konto"], []).append(Decimal(z["betrag"]))
+        liste = [_konto(k, zeit, namen, vorgemerkt) for k in alle]
         summen: dict[str, Decimal] = {}
-        for k in db.bank_konten():
+        summen_vorgemerkt: dict[str, Decimal] = {}
+        for k in alle:
             if k.saldo:
                 summen[k.waehrung] = summen.get(k.waehrung, Decimal(0)) + Decimal(k.saldo)
+            if k.schluessel in vorgemerkt:
+                summen_vorgemerkt[k.waehrung] = summen_vorgemerkt.get(k.waehrung, Decimal(0)) + sum(
+                    vorgemerkt[k.schluessel], Decimal(0))
         eingerichtet = bool(cfg.enable_banking_app_id and cfg.enable_banking_schluessel)
         zustand = db.fints_zustand(depot.ZUGANG) or {}
         return {
@@ -79,7 +104,7 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
             "depot": {"eingerichtet": depot.eingerichtet(cfg), "fehler": zustand.get("fehler", ""),
                       "freigabe": bool(zustand.get("freigabe")), "versucht": zustand.get("versucht", ""),
                       "abgelehnt": bool(zustand.get("abgelehnt"))},
-            "depots": _depots(db),
+            "depots": _depots(db, namen),
             # ING-Konten über FinTS: beim Öffnen, mit „Jetzt abrufen“ und stündlich (ustva/ing_konten.py)
             "ing": {"eingerichtet": depot.eingerichtet(cfg),
                     "versucht": zustand.get("konten", ""),
@@ -87,6 +112,7 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
             "zeiten": cfg.kontoabruf_zeiten if eingerichtet or depot.eingerichtet(cfg) else [],
             "abrufe_je_tag": ka.ABRUFE_JE_TAG,
             "summen": {w: str(b) for w, b in summen.items()},
+            "summen_vorgemerkt": {w: str(b) for w, b in summen_vorgemerkt.items()},
             "konten": sorted(liste, key=lambda k: (k["bank"].lower(), k["name"].lower(), k["iban"])),
         }
 
@@ -96,6 +122,42 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
         vorgemerkt = [z | {"pruefsumme": f"vorgemerkt:{z['konto']}:{z['nr']}", "vorgemerkt": True}
                       for z in db.konto_vorgemerkt(konto or None)]
         return vorgemerkt + [z | {"vorgemerkt": False} for z in db.konto_buchungen(konto or None)]
+
+    @r.put("/api/konten/name")
+    def name_setzen(daten: NameAenderung):
+        """Eigener Name für ein Konto oder Depot; leer = wieder der Name der Bank."""
+        bekannt = {k.schluessel for k in db.bank_konten()} | {d["schluessel"] for d in db.depots()}
+        if daten.schluessel not in bekannt:
+            raise HTTPException(404, "Konto nicht gefunden")
+        name = " ".join(daten.name.split())
+        if len(name) > NAME_LAENGE:
+            raise HTTPException(400, f"Name zu lang (höchstens {NAME_LAENGE} Zeichen)")
+        db.konto_name_setzen(daten.schluessel, name)
+        return {"schluessel": daten.schluessel, "name": name}
+
+    @r.get("/api/konten/verlauf")
+    def verlauf(konto: str | None = None):
+        """Kontostand je Tag, zurückgerechnet aus den Umsätzen (ustva/kontoverlauf.py). Ohne ``konto`` die Summe
+        aller Konten in Euro."""
+        heute = _jetzt().astimezone(ZoneInfo(ka.ZEITZONE)).date()
+        konten = db.bank_konten()
+        if konto:
+            konten = [k for k in konten if k.schluessel == konto]
+            if not konten:
+                raise HTTPException(404, "Konto nicht gefunden")
+        else:
+            konten = [k for k in konten if k.waehrung == "EUR"]
+        verlaeufe = [_verlauf(k, heute) for k in konten]
+        punkte = verlaeufe[0] if konto else kontoverlauf.summe(verlaeufe)
+        return {"waehrung": konten[0].waehrung if konto else "EUR",
+                "punkte": [{"tag": t.isoformat(), "wert": str(w)} for t, w in punkte]}
+
+    def _verlauf(k: BankKonto, heute: date) -> kontoverlauf.Verlauf:
+        buchungen = [(date.fromisoformat(z["buchungsdatum"]), Decimal(z["betrag"]))
+                     for z in db.konto_buchungen(k.schluessel)]
+        salden = {date.fromisoformat(t): Decimal(s) for t, s in db.konto_salden(k.schluessel).items()}
+        stand = date.fromisoformat(stichtag(k.saldo_stand)) if k.saldo and k.saldo_stand else None
+        return kontoverlauf.konto(Decimal(k.saldo) if k.saldo else None, stand, buchungen, salden, heute)
 
     @r.get("/api/konten/depot")
     def depot_bestand(schluessel: str):
@@ -176,8 +238,10 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
         e = await run_in_threadpool(ka.abrufen, db, cfg, eb, jetzt=_jetzt(), psu=psu,
                                     wenn_aelter=ka.ANWESEND_ABSTAND if automatisch else None)
         monitoring.kontoabruf_zaehlen(e, "oeffnen" if automatisch else "knopf")
+        namen = db.konto_namen()
         return {"zugeordnet": e.zugeordnet, "konten": [
-            {"schluessel": a.konto.schluessel, "name": a.konto.bezeichnung or a.konto.bank, "neu": a.uebersicht,
+            {"schluessel": a.konto.schluessel,
+             "name": namen.get(a.konto.schluessel) or a.konto.bezeichnung or a.konto.bank, "neu": a.uebersicht,
              "fehler": a.fehler, "uebersprungen": a.uebersprungen} for a in e.konten]}
 
     return r

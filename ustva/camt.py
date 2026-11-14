@@ -192,7 +192,7 @@ def einlesen(db: Datenbank, inhalt: bytes, trocken: bool = False) -> list[Einles
         if (k := konten.get(a.iban)) is None:
             e.fehler = "kein verbundenes Konto mit dieser IBAN (erst mit bank verbinden anlegen)"
             continue
-        e.konto = k.bezeichnung or k.bank
+        e.konto = db.konto_namen().get(k.schluessel) or k.bezeichnung or k.bank
         pruefsummen(k.schluessel, a.umsaetze)
         neu = []
         vergeben: set[str] = set()
