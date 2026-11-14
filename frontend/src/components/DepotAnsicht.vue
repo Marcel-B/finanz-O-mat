@@ -6,10 +6,11 @@ import DataTable from "primevue/datatable";
 import Message from "primevue/message";
 import { computed, ref, watch } from "vue";
 
-import { api, type Depot, type DepotPosition, type DepotZugang } from "@/api";
+import { api, type Depot, type DepotPosition, type DepotZugang, type VerlaufPunkt } from "@/api";
 import { betrag, datum, passtZurSuche, suchtext } from "@/format";
 
 import SuchFeld from "./SuchFeld.vue";
+import VerlaufChart from "./VerlaufChart.vue";
 
 const props = defineProps<{
   depot: Depot;
@@ -18,9 +19,12 @@ const props = defineProps<{
   abrufzeiten: string;
   zeit: (iso: string | null | undefined) => string;
 }>();
-const emit = defineEmits<{ abrufen: [] }>();
+const emit = defineEmits<{ abrufen: []; umbenennen: [] }>();
+// Verlauf ein- oder ausgeblendet, gemeinsam mit den Konten
+const verlaufZeigen = defineModel<boolean>("verlauf", { default: true });
 
 const positionen = ref<DepotPosition[]>([]);
+const verlauf = ref<VerlaufPunkt[] | null>(null);
 const laedt = ref(false);
 const fehler = ref("");
 const suche = ref("");
@@ -29,7 +33,9 @@ async function laden() {
   laedt.value = true;
   fehler.value = "";
   try {
-    positionen.value = (await api.depotBestand(props.depot.schluessel)).positionen;
+    const bestand = await api.depotBestand(props.depot.schluessel);
+    positionen.value = bestand.positionen;
+    verlauf.value = bestand.verlauf;
   } catch (e) {
     fehler.value = (e as Error).message;
   } finally {
@@ -73,8 +79,24 @@ const gefiltert = computed(() =>
   >
     <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
       <div class="min-w-0">
-        <h2 class="text-lg font-semibold">{{ depot.name }}</h2>
-        <div class="text-sm text-muted-color">{{ depot.bank }} · {{ depot.positionen }} Positionen</div>
+        <h2 class="text-lg font-semibold">
+          {{ depot.name }}
+          <Button
+            v-tooltip.top="'Umbenennen'"
+            icon="pi pi-pencil"
+            size="small"
+            severity="secondary"
+            text
+            rounded
+            aria-label="Umbenennen"
+            class="align-middle"
+            @click="emit('umbenennen')"
+          />
+        </h2>
+        <div class="text-sm text-muted-color">
+          {{ depot.bank }}<template v-if="depot.eigener_name"> · {{ depot.bezeichnung }}</template> ·
+          {{ depot.positionen }} Positionen
+        </div>
         <div class="text-sm text-muted-color">
           Kurse vom {{ datum(depot.stand) }} · abgerufen {{ zeit(depot.abgerufen) }}
           <template v-if="abrufzeiten"> · automatisch um {{ abrufzeiten }} Uhr</template>
@@ -109,8 +131,36 @@ const gefiltert = computed(() =>
     </Message>
     <Message v-if="fehler" severity="error" class="mb-3">{{ fehler }}</Message>
 
-    <div class="mb-2 flex justify-end">
-      <SuchFeld v-model="suche" :treffer="gefiltert.length" :gesamt="positionen.length" />
+    <div v-if="verlaufZeigen" class="mb-3">
+      <VerlaufChart :punkte="verlauf ?? []" :waehrung="depot.waehrung" :titel="`Depotwert ${depot.name}`">
+        <template #leer>
+          <template v-if="verlauf === null">Verlauf wird geladen …</template>
+          <template v-else>
+            Die App merkt sich den Depotwert je Tag<template v-if="verlauf.length"> seit dem {{ datum(verlauf[0].tag) }}</template>;
+            der Verlauf erscheint ab dem zweiten Tag.
+          </template>
+        </template>
+      </VerlaufChart>
+    </div>
+
+    <div class="mb-2 flex items-center justify-between gap-2">
+      <small v-if="verlaufZeigen && verlauf && verlauf.length > 1" class="text-muted-color">
+        Depotwert je Tag seit dem {{ datum(verlauf[0].tag) }}
+      </small>
+      <span v-else />
+      <div class="flex items-center gap-2">
+        <Button
+          v-tooltip.top="verlaufZeigen ? 'Verlauf ausblenden' : 'Verlauf einblenden'"
+          icon="pi pi-chart-line"
+          size="small"
+          :severity="verlaufZeigen ? undefined : 'secondary'"
+          :text="!verlaufZeigen"
+          :outlined="verlaufZeigen"
+          aria-label="Verlauf"
+          @click="verlaufZeigen = !verlaufZeigen"
+        />
+        <SuchFeld v-model="suche" :treffer="gefiltert.length" :gesamt="positionen.length" />
+      </div>
     </div>
     <DataTable
       :value="gefiltert"

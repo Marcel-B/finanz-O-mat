@@ -219,6 +219,13 @@ class Bestand:
                                    labels=labels)
         umsaetze = GaugeMetricFamily("finanzomat_bankkonto_umsaetze", "Umsätze in der Kontenübersicht",
                                      labels=labels)
+        vorgemerkt = GaugeMetricFamily("finanzomat_bankkonto_vorgemerkt", "Vorgemerkte, noch nicht gebuchte Umsätze",
+                                       labels=labels)
+        verlauf = GaugeMetricFamily("finanzomat_bankkonto_verlauf_tage",
+                                    "Tage mit gemerktem Kontostand (für den Verlauf)", labels=labels)
+        offen: dict[str, int] = {}
+        for z in self.db.konto_vorgemerkt():
+            offen[z["konto"]] = offen.get(z["konto"], 0) + 1
         for k in konten:
             werte = [k.bank, namen[k.schluessel]]
             info.add_metric([*werte, "ja" if k.aktiv else "nein"], 1)
@@ -233,12 +240,15 @@ class Bestand:
             frei.add_metric(werte, ka.abrufe_frei(k, jetzt))
             fehler.add_metric(werte, 1 if k.fehler else 0)
             umsaetze.add_metric(werte, self.db.konto_buchungen_anzahl(k.schluessel))
-        yield from (info, tage, bis, zuletzt, fints, frei, fehler, umsaetze)
+            vorgemerkt.add_metric(werte, offen.get(k.schluessel, 0))
+            verlauf.add_metric(werte, len(self.db.konto_salden(k.schluessel)))
+        yield from (info, tage, bis, zuletzt, fints, frei, fehler, umsaetze, vorgemerkt, verlauf)
 
     def _depots(self):
-        """Je Depot: Anzahl der Positionen und letzter Abruf; dazu, ob der FinTS-Zugang auf eine Freigabe wartet.
+        """Je Depot: Anzahl der Positionen, letzter Abruf und Tage im Verlauf; dazu, ob der FinTS-Zugang auf eine
+        Freigabe wartet.
 
-        Keine Werte oder Depotnummern, /metrics ist ohne Anmeldung erreichbar.
+        Keine Werte, Depotnummern oder eigenen Namen, /metrics ist ohne Anmeldung erreichbar.
         """
         from . import depot
 
@@ -249,12 +259,15 @@ class Bestand:
         positionen = GaugeMetricFamily("finanzomat_depot_positionen", "Wertpapiere im Depot", labels=["bank", "depot"])
         zuletzt = GaugeMetricFamily("finanzomat_depot_letzter_abruf_timestamp_seconds",
                                     "Letzter erfolgreicher Depotabruf", labels=["bank", "depot"])
+        verlauf = GaugeMetricFamily("finanzomat_depot_verlauf_tage", "Tage mit gemerktem Depotwert (für den Verlauf)",
+                                    labels=["bank", "depot"])
         for d in depots:
             werte = [d["bank"], d["name"]]
             positionen.add_metric(werte, d["positionen"])
             if zeit := _zeitpunkt(d["abgerufen"]):
                 zuletzt.add_metric(werte, zeit)
-        yield from (positionen, zuletzt)
+            verlauf.add_metric(werte, len(self.db.depot_werte(d["schluessel"])))
+        yield from (positionen, zuletzt, verlauf)
         if zustand:
             yield GaugeMetricFamily("finanzomat_depot_freigabe_noetig",
                                     "1, wenn der Depotabruf auf eine Freigabe in der ING-App wartet",

@@ -463,13 +463,16 @@ export interface SevdeskStatus {
 // Reiter „Konten“: Übersicht der über Enable Banking verbundenen Konten (ustva/konten_web.py)
 export interface BankKonto {
   schluessel: string;
-  name: string;
+  name: string; // eigener Name, sonst Bezeichnung der Bank, sonst die Bank
+  eigener_name: string;
   bank: string;
   bezeichnung: string;
   iban: string;
   waehrung: string;
   saldo: string | null;
   saldo_stand: string; // Stichtag (JJJJ-MM-TT) oder Zeitpunkt des Abrufs
+  vorgemerkt: string | null; // Summe der vorgemerkten Umsätze (im gebuchten Saldo noch nicht enthalten)
+  vorgemerkt_anzahl: number;
   abgerufen: string;
   freigabe_bis: string;
   freigabe_tage: number | null;
@@ -506,6 +509,7 @@ export interface KontenUebersicht {
   depots: Depot[];
   ing: IngZugang;
   summen: Record<string, string>;
+  summen_vorgemerkt: Record<string, string>;
   konten: BankKonto[];
 }
 
@@ -524,7 +528,9 @@ export interface KontoauszugEingelesen {
 export interface Depot {
   schluessel: string;
   bank: string;
-  name: string;
+  name: string; // eigener Name, sonst der Name der Bank
+  eigener_name: string;
+  bezeichnung: string; // Name der Bank
   waehrung: string;
   wert: string | null;
   einstandswert: string | null; // leer, wenn bei einer Position der Einstand fehlt
@@ -554,7 +560,7 @@ export interface DepotPosition {
 
 export interface DepotBestand {
   positionen: DepotPosition[];
-  verlauf: { tag: string; wert: string }[];
+  verlauf: VerlaufPunkt[];
 }
 
 export interface DepotAbruf {
@@ -575,6 +581,17 @@ export interface KontoBuchung {
   original_betrag: string | null;
   original_waehrung: string;
   vorgemerkt: boolean; // noch nicht gebucht (Kartenzahlung, angekündigte Lastschrift), ändert sich beim nächsten Abruf
+}
+
+// Kontostand bzw. Depotwert je Tag
+export interface VerlaufPunkt {
+  tag: string;
+  wert: string;
+}
+
+export interface KontoVerlauf {
+  waehrung: string;
+  punkte: VerlaufPunkt[];
 }
 
 export interface KontenAbruf {
@@ -622,6 +639,13 @@ export const api = {
   depotBestand: (schluessel: string) =>
     anfrage<DepotBestand>(`/api/konten/depot?schluessel=${encodeURIComponent(schluessel)}`),
   depotAbrufen: () => post<DepotAbruf>("/api/konten/depot/abrufen"),
+  kontoUmbenennen: (schluessel: string, name: string) =>
+    anfrage<{ schluessel: string; name: string }>("/api/konten/name", {
+      method: "PUT",
+      body: JSON.stringify({ schluessel, name }),
+    }),
+  kontoVerlauf: (konto?: string) =>
+    anfrage<KontoVerlauf>(`/api/konten/verlauf${konto ? `?konto=${encodeURIComponent(konto)}` : ""}`),
   ingAbrufen: (automatisch = false) =>
     post<IngAbruf>(`/api/konten/ing/abrufen${automatisch ? "?automatisch=true" : ""}`),
   anmeldung: () => anfrage<Anmeldung>("/api/anmeldung"),

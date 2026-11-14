@@ -6,9 +6,10 @@ import json
 import sqlite3
 import threading
 from dataclasses import fields
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .models import BankKonto, Beleg, Kontakt, Taetigkeit, Umsatz
 from .steuerfaelle import Art, Steuerfall
@@ -141,6 +142,16 @@ CREATE TABLE IF NOT EXISTS depot_werte (  -- Wert je Depot und Tag (letzter Abru
     tag TEXT NOT NULL,
     wert TEXT NOT NULL,
     PRIMARY KEY (depot, tag)
+);
+CREATE TABLE IF NOT EXISTS konto_salden (  -- Kontostand je Konto und Tag (letzter Abruf des Tages), für den Verlauf
+    konto TEXT NOT NULL,  -- bank_konten.schluessel
+    tag TEXT NOT NULL,
+    saldo TEXT NOT NULL,
+    PRIMARY KEY (konto, tag)
+);
+CREATE TABLE IF NOT EXISTS konto_namen (  -- eigene Namen für Konten und Depots, bleiben bei jedem Abruf erhalten
+    schluessel TEXT PRIMARY KEY,  -- bank_konten.schluessel oder depots.schluessel
+    name TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS einstellungen (
     schluessel TEXT PRIMARY KEY,
@@ -346,6 +357,17 @@ def _zeile_zu_taetigkeit(z: sqlite3.Row) -> Taetigkeit:
         ort=z["ort"],
         leistungsart=z["leistungsart"],
     )
+
+
+def stichtag(stand: str) -> str:
+    """Tag eines Stichtags oder eines Zeitpunkts mit Zeitzone, in deutscher Zeit (ein Abruf um 0:30 zählt zum Tag)."""
+    if len(stand) <= 10:
+        return stand
+    try:
+        zeit = datetime.fromisoformat(stand.replace("Z", "+00:00"))
+    except ValueError:
+        return stand[:10]
+    return (zeit.astimezone(ZoneInfo("Europe/Berlin")) if zeit.tzinfo else zeit).date().isoformat()
 
 
 class Datenbank:
@@ -557,13 +579,20 @@ class Datenbank:
             self._con.execute(
                 f"INSERT INTO bank_konten ({', '.join(felder)}) VALUES ({', '.join('?' for _ in felder)}) "
                 f"ON CONFLICT(schluessel) DO UPDATE SET {aendern}", werte)
+            if k.saldo and k.saldo_stand:
+                self._saldo_merken(k.schluessel, k.saldo_stand, k.saldo)
+
+    def _saldo_merken(self, konto: str, stand: str, saldo: str) -> None:
+        """Kontostand für den Verlauf; ``stand`` ist der Stichtag der Bank oder der Zeitpunkt des Abrufs."""
+        self._con.execute("INSERT OR REPLACE INTO konto_salden VALUES (?, ?, ?)", (konto, stichtag(stand), saldo))
 
     def bank_konto_loeschen(self, schluessel: str) -> None:
         """Ein Konto samt seinen Zeilen in der Kontenübersicht (nicht in der Buchhaltung)."""
         with self._lock, self._con:
-            for tabelle in ("konto_buchungen", "konto_vorgemerkt"):
+            for tabelle in ("konto_buchungen", "konto_vorgemerkt", "konto_salden"):
                 self._con.execute(f"DELETE FROM {tabelle} WHERE konto = ?", (schluessel,))
             self._con.execute("DELETE FROM bank_konten WHERE schluessel = ?", (schluessel,))
+            self._con.execute("DELETE FROM konto_namen WHERE schluessel = ?", (schluessel,))
 
     def bank_konto_fints(self, schluessel: str, zeit: str, saldo: str | None = None, waehrung: str = "",
                          saldo_stand: str = "") -> None:
@@ -573,6 +602,28 @@ class Datenbank:
             if saldo is not None:
                 self._con.execute("UPDATE bank_konten SET saldo = ?, waehrung = ?, saldo_stand = ? "
                                   "WHERE schluessel = ?", (saldo, waehrung, saldo_stand, schluessel))
+                if saldo_stand:
+                    self._saldo_merken(schluessel, saldo_stand, saldo)
+
+    def konto_salden(self, konto: str) -> dict[str, str]:
+        """Gemerkte Kontostände je Tag (JJJJ-MM-TT), älteste zuerst."""
+        with self._lock:
+            zeilen = self._con.execute("SELECT tag, saldo FROM konto_salden WHERE konto = ? ORDER BY tag",
+                                       (konto,)).fetchall()
+        return {z["tag"]: z["saldo"] for z in zeilen}
+
+    # Eigene Namen für Konten und Depots (Reiter „Konten“)
+    def konto_namen(self) -> dict[str, str]:
+        with self._lock:
+            return {z["schluessel"]: z["name"] for z in self._con.execute("SELECT * FROM konto_namen")}
+
+    def konto_name_setzen(self, schluessel: str, name: str) -> None:
+        """Leerer Name: wieder der Name der Bank."""
+        with self._lock, self._con:
+            if name:
+                self._con.execute("INSERT OR REPLACE INTO konto_namen VALUES (?, ?)", (schluessel, name))
+            else:
+                self._con.execute("DELETE FROM konto_namen WHERE schluessel = ?", (schluessel,))
 
     # Kontenübersicht (getrennt von den Umsätzen der Buchhaltung)
     def konto_buchungen_speichern(self, konto: str, umsaetze: list[Umsatz]) -> int:

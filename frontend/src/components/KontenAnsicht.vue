@@ -4,16 +4,21 @@
 import Button from "primevue/button";
 import Column from "primevue/column";
 import DataTable from "primevue/datatable";
+import DatePicker from "primevue/datepicker";
+import Dialog from "primevue/dialog";
+import InputText from "primevue/inputtext";
 import Message from "primevue/message";
+import SelectButton from "primevue/selectbutton";
 import Tag from "primevue/tag";
 import { useToast } from "primevue/usetoast";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
-import { api, type BankKonto, type KontenUebersicht, type KontoBuchung } from "@/api";
-import { betrag, datum, passtZurSuche, suchtext } from "@/format";
+import { api, type BankKonto, type KontenUebersicht, type KontoBuchung, type KontoVerlauf } from "@/api";
+import { alsIso, betrag, datum, passtZurSuche, suchtext } from "@/format";
 
 import DepotAnsicht from "./DepotAnsicht.vue";
 import SuchFeld from "./SuchFeld.vue";
+import VerlaufChart from "./VerlaufChart.vue";
 
 const toast = useToast();
 const daten = ref<KontenUebersicht | null>(null);
@@ -40,7 +45,10 @@ async function laden(anzeigen = true) {
     if (!auswahl.value && !daten.value.konten.length && daten.value.depots.length) {
       auswahl.value = daten.value.depots[0].schluessel;
     }
-    if (!gewaehltesDepot.value) buchungen.value = await api.kontoBuchungen(auswahl.value || undefined);
+    if (!gewaehltesDepot.value) {
+      buchungen.value = await api.kontoBuchungen(auswahl.value || undefined);
+      void verlaufLaden();
+    }
   } catch (e) {
     fehler.value = (e as Error).message;
   } finally {
@@ -51,12 +59,75 @@ async function laden(anzeigen = true) {
 watch(auswahl, async () => {
   suche.value = "";
   if (gewaehltesDepot.value) return;
+  verlauf.value = null;
   try {
     buchungen.value = await api.kontoBuchungen(auswahl.value || undefined);
+    void verlaufLaden();
   } catch (e) {
     fehler.value = (e as Error).message;
   }
 });
+
+// Verlauf des Kontostands (bzw. der Summe aller Euro-Konten), ein- und ausblendbar
+const verlauf = ref<KontoVerlauf | null>(null);
+const VERLAUF_SPEICHER = "konten.verlauf";
+const verlaufZeigen = ref(lesen(VERLAUF_SPEICHER) !== "aus");
+watch(verlaufZeigen, (an) => schreiben(VERLAUF_SPEICHER, an ? "an" : "aus"));
+
+function lesen(schluessel: string): string | null {
+  try {
+    return localStorage.getItem(schluessel);
+  } catch {
+    return null;
+  }
+}
+
+function schreiben(schluessel: string, wert: string) {
+  try {
+    localStorage.setItem(schluessel, wert);
+  } catch {
+    /* ohne Speicher eben nur bis zum Neuladen */
+  }
+}
+
+async function verlaufLaden() {
+  const konto = auswahl.value;
+  try {
+    const v = await api.kontoVerlauf(konto || undefined);
+    if (auswahl.value === konto) verlauf.value = v;
+  } catch {
+    if (auswahl.value === konto) verlauf.value = null;
+  }
+}
+
+// Zeitraum links über den Umsätzen; gilt für Tabelle und Verlauf
+const zeitraum = ref<(Date | null)[] | null>(null);
+const vonIso = computed(() => alsIso(zeitraum.value?.[0]) ?? "");
+const bisIso = computed(() => alsIso(zeitraum.value?.[1]) ?? "");
+
+function laufend(art: "monat" | "quartal"): [Date, Date] {
+  const heute = new Date();
+  const erster = art === "monat" ? heute.getMonth() : heute.getMonth() - (heute.getMonth() % 3);
+  const monate = art === "monat" ? 1 : 3;
+  return [new Date(heute.getFullYear(), erster, 1), new Date(heute.getFullYear(), erster + monate, 0)];
+}
+
+const schnellOptionen = [
+  { label: "Laufender Monat", value: "monat" },
+  { label: "Laufendes Quartal", value: "quartal" },
+] as const;
+// Die Schnellauswahl ist gewählt, solange der Zeitraum genau passt; ein anderer Zeitraum hebt sie auf
+const schnell = computed({
+  get: () =>
+    schnellOptionen.find((o) => {
+      const [von, bis] = laufend(o.value);
+      return vonIso.value === alsIso(von) && bisIso.value === alsIso(bis);
+    })?.value ?? null,
+  set: (art: "monat" | "quartal" | null) => (zeitraum.value = art ? laufend(art) : null),
+});
+
+const imZeitraum = (tag: string) => (!vonIso.value || tag >= vonIso.value) && (!bisIso.value || tag <= bisIso.value);
+const verlaufPunkte = computed(() => (verlauf.value?.punkte ?? []).filter((p) => imZeitraum(p.tag)));
 
 // „Jetzt abrufen“: Enable Banking, danach die ING-Konten über FinTS. In dieser Reihenfolge, damit FinTS erkennt,
 // was Enable Banking eben geliefert hat. Der Server schickt die Angaben des Browsers mit, dann gilt das Limit von 4
@@ -180,6 +251,32 @@ async function depotAbrufen() {
   }
 }
 
+// Eigener Name für ein Konto oder Depot; leer = wieder der Name der Bank
+const umbenennen = ref<{ schluessel: string; name: string; bank: string } | null>(null);
+const speichertName = ref(false);
+
+function umbenennenOeffnen(schluessel: string) {
+  const k = konten.value.find((k) => k.schluessel === schluessel);
+  const d = depots.value.find((d) => d.schluessel === schluessel);
+  if (k) umbenennen.value = { schluessel, name: k.eigener_name, bank: k.bezeichnung || k.bank };
+  else if (d) umbenennen.value = { schluessel, name: d.eigener_name, bank: d.bezeichnung };
+}
+
+async function nameSpeichern() {
+  const u = umbenennen.value;
+  if (!u) return;
+  speichertName.value = true;
+  try {
+    await api.kontoUmbenennen(u.schluessel, u.name);
+    umbenennen.value = null;
+    await laden(false);
+  } catch (e) {
+    toast.add({ severity: "error", summary: "Umbenennen fehlgeschlagen", detail: (e as Error).message, life: 6000 });
+  } finally {
+    speichertName.value = false;
+  }
+}
+
 // Alte Kontoauszüge (CAMT.053, z. B. aus MoneyMoney) in die Übersicht
 const dateiFeld = ref<HTMLInputElement | null>(null);
 const liestEin = ref(false);
@@ -247,6 +344,18 @@ const ibanKurz = (iban: string) => (iban ? `${iban.slice(0, 4)} … ${iban.slice
 const ibanLang = (iban: string) => iban.replace(/(.{4})/g, "$1 ").trim();
 
 const summe = computed(() => Object.entries(daten.value?.summen ?? {}));
+const waehrung = (w: string) => (w === "EUR" ? "€" : w);
+// Kontostand im Kopf: das gewählte Konto oder die Summe je Währung, dazu Vorgemerktes und der Stand danach
+const staende = computed(() => {
+  if (gewaehlt.value) {
+    const k = gewaehlt.value;
+    return [{ waehrung: k.waehrung, saldo: k.saldo, vorgemerkt: k.vorgemerkt, anzahl: k.vorgemerkt_anzahl }];
+  }
+  const vorgemerkt = daten.value?.summen_vorgemerkt ?? {};
+  const anzahl = konten.value.reduce((n, k) => n + k.vorgemerkt_anzahl, 0);
+  return summe.value.map(([w, s]) => ({ waehrung: w, saldo: s, vorgemerkt: vorgemerkt[w] ?? null, anzahl }));
+});
+const danach = (saldo: string | null, vorgemerkt: string | null) => Number(saldo ?? 0) + Number(vorgemerkt ?? 0);
 const depotSumme = computed(() => depots.value.reduce((s, d) => s + Number(d.wert ?? 0), 0));
 // Enable Banking und FinTS schreiben UTC-Zeitpunkte, die sich als Text sortieren lassen
 const zuletzt = (k: BankKonto) => [k.abgerufen, k.fints].filter(Boolean).sort().at(-1) ?? "";
@@ -264,15 +373,18 @@ function warnung(k: BankKonto): string {
   return "";
 }
 
+const imZeitraumGefiltert = computed(() =>
+  vonIso.value || bisIso.value ? buchungen.value.filter((b) => imZeitraum(b.buchungsdatum)) : buchungen.value,
+);
 const gefiltert = computed(() =>
   suche.value.trim()
-    ? buchungen.value.filter((b) =>
+    ? imZeitraumGefiltert.value.filter((b) =>
         passtZurSuche(
           suchtext(b.buchungsdatum, b.partner, b.verwendungszweck, b.iban, b.betrag, b.typ),
           suche.value.trim(),
         ),
       )
-    : buchungen.value,
+    : imZeitraumGefiltert.value,
 );
 </script>
 
@@ -388,7 +500,9 @@ const gefiltert = computed(() =>
       :ruft-ab="ruftDepotAb"
       :abrufzeiten="abrufzeiten"
       :zeit="zeit"
+      v-model:verlauf="verlaufZeigen"
       @abrufen="depotAbrufen"
+      @umbenennen="umbenennenOeffnen(gewaehltesDepot.schluessel)"
     />
 
     <!-- Umsätze des gewählten Kontos -->
@@ -400,6 +514,18 @@ const gefiltert = computed(() =>
         <div class="min-w-0">
           <h2 class="text-lg font-semibold">
             {{ gewaehlt ? gewaehlt.name : "Alle Konten" }}
+            <Button
+              v-if="gewaehlt"
+              v-tooltip.top="'Umbenennen'"
+              icon="pi pi-pencil"
+              size="small"
+              severity="secondary"
+              text
+              rounded
+              aria-label="Umbenennen"
+              class="align-middle"
+              @click="umbenennenOeffnen(gewaehlt.schluessel)"
+            />
             <Tag
               v-if="gewaehlt?.buchhaltung"
               v-tooltip.top="'Die Umsätze dieses Kontos gehen auch in die Buchhaltung (Kontoumsätze)'"
@@ -409,7 +535,8 @@ const gefiltert = computed(() =>
             />
           </h2>
           <div v-if="gewaehlt" class="text-sm text-muted-color">
-            {{ gewaehlt.bank }}<template v-if="gewaehlt.iban"> · <span class="font-mono">{{ ibanLang(gewaehlt.iban) }}</span></template>
+            {{ gewaehlt.bank }}<template v-if="gewaehlt.eigener_name && gewaehlt.bezeichnung"> · {{ gewaehlt.bezeichnung }}</template
+            ><template v-if="gewaehlt.iban"> · <span class="font-mono">{{ ibanLang(gewaehlt.iban) }}</span></template>
           </div>
           <div class="text-sm text-muted-color">
             <template v-if="gewaehlt">
@@ -424,10 +551,21 @@ const gefiltert = computed(() =>
           </div>
         </div>
         <div class="flex items-center gap-3">
-          <div v-if="gewaehlt" class="text-right">
-            <div class="text-2xl font-semibold tabular-nums" :class="{ 'text-red-600 dark:text-red-400': Number(gewaehlt.saldo) < 0 }">
-              {{ gewaehlt.saldo === null ? "–" : `${betrag(gewaehlt.saldo)} ${gewaehlt.waehrung === "EUR" ? "€" : gewaehlt.waehrung}` }}
+          <div v-for="s in staende" :key="s.waehrung" class="text-right">
+            <div class="text-2xl font-semibold tabular-nums" :class="{ 'text-red-600 dark:text-red-400': Number(s.saldo) < 0 }">
+              {{ s.saldo === null ? "–" : `${betrag(s.saldo)} ${waehrung(s.waehrung)}` }}
             </div>
+            <template v-if="s.vorgemerkt !== null && s.saldo !== null">
+              <div
+                v-tooltip.left="'Noch nicht gebucht; im Kontostand der Bank noch nicht enthalten'"
+                class="text-sm text-muted-color tabular-nums"
+              >
+                {{ s.anzahl }} vorgemerkt: {{ betrag(s.vorgemerkt) }} {{ waehrung(s.waehrung) }}
+              </div>
+              <div class="text-sm font-medium tabular-nums" :class="{ 'text-red-600 dark:text-red-400': danach(s.saldo, s.vorgemerkt) < 0 }">
+                abzüglich vorgemerkt: {{ betrag(danach(s.saldo, s.vorgemerkt)) }} {{ waehrung(s.waehrung) }}
+              </div>
+            </template>
           </div>
           <input ref="dateiFeld" type="file" accept=".xml,application/xml,text/xml" multiple hidden @change="einlesen" />
           <Button
@@ -470,8 +608,55 @@ const gefiltert = computed(() =>
         >
       </Message>
 
-      <div class="mb-2 flex justify-end">
-        <SuchFeld v-model="suche" :treffer="gefiltert.length" :gesamt="buchungen.length" />
+      <div v-if="verlaufZeigen" class="mb-3">
+        <VerlaufChart
+          :punkte="verlaufPunkte"
+          :waehrung="verlauf?.waehrung"
+          :titel="gewaehlt ? `Kontostand ${gewaehlt.name}` : 'Kontostand aller Konten'"
+        >
+          <template #leer>
+            {{ verlauf === null ? "Verlauf wird geladen …" : "Für diesen Zeitraum gibt es noch keinen Verlauf." }}
+          </template>
+        </VerlaufChart>
+      </div>
+
+      <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <DatePicker
+            v-model="zeitraum"
+            selection-mode="range"
+            :manual-input="false"
+            date-format="dd.mm.yy"
+            placeholder="Zeitraum"
+            show-icon
+            icon-display="input"
+            show-button-bar
+            size="small"
+            class="w-60"
+            aria-label="Zeitraum"
+          />
+          <SelectButton
+            v-model="schnell"
+            :options="[...schnellOptionen]"
+            option-label="label"
+            option-value="value"
+            size="small"
+            aria-label="Schnellauswahl Zeitraum"
+          />
+        </div>
+        <div class="flex items-center gap-2">
+          <Button
+            v-tooltip.top="verlaufZeigen ? 'Verlauf ausblenden' : 'Verlauf einblenden'"
+            icon="pi pi-chart-line"
+            size="small"
+            :severity="verlaufZeigen ? undefined : 'secondary'"
+            :text="!verlaufZeigen"
+            :outlined="verlaufZeigen"
+            aria-label="Verlauf"
+            @click="verlaufZeigen = !verlaufZeigen"
+          />
+          <SuchFeld v-model="suche" :treffer="gefiltert.length" :gesamt="imZeitraumGefiltert.length" />
+        </div>
       </div>
       <DataTable
         :value="gefiltert"
@@ -485,7 +670,9 @@ const gefiltert = computed(() =>
         paginator
         :rows="100"
       >
-        <template #empty><span class="text-muted-color">Keine Umsätze.</span></template>
+        <template #empty>
+          <span class="text-muted-color">{{ vonIso || bisIso ? "Keine Umsätze in diesem Zeitraum." : "Keine Umsätze." }}</span>
+        </template>
         <Column header="Datum" class="w-28 whitespace-nowrap">
           <template #body="{ data }">
             {{ datum(data.buchungsdatum) }}
@@ -523,6 +710,28 @@ const gefiltert = computed(() =>
       </DataTable>
     </section>
   </div>
+
+  <Dialog
+    :visible="!!umbenennen"
+    modal
+    header="Umbenennen"
+    class="w-[min(420px,calc(100vw-2rem))]"
+    @update:visible="(v: boolean) => !v && (umbenennen = null)"
+  >
+    <form v-if="umbenennen" class="flex flex-col gap-3" @submit.prevent="nameSpeichern">
+      <label class="flex flex-col gap-1 text-sm">
+        Eigener Name
+        <InputText v-model="umbenennen.name" fluid autofocus maxlength="60" :placeholder="umbenennen.bank" />
+      </label>
+      <small class="text-muted-color">
+        Bleibt bei jedem Abruf erhalten. Leer lassen für den Namen der Bank („{{ umbenennen.bank }}“).
+      </small>
+      <div class="flex justify-end gap-2">
+        <Button label="Abbrechen" severity="secondary" text @click="umbenennen = null" />
+        <Button type="submit" label="Speichern" icon="pi pi-check" :loading="speichertName" />
+      </div>
+    </form>
+  </Dialog>
 </template>
 
 <style scoped>
