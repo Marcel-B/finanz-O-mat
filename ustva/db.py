@@ -149,9 +149,11 @@ CREATE TABLE IF NOT EXISTS konto_salden (  -- Kontostand je Konto und Tag (letzt
     saldo TEXT NOT NULL,
     PRIMARY KEY (konto, tag)
 );
-CREATE TABLE IF NOT EXISTS konto_namen (  -- eigene Namen für Konten und Depots, bleiben bei jedem Abruf erhalten
+CREATE TABLE IF NOT EXISTS konto_namen (  -- eigene Anzeige für Konten und Depots, bleibt bei jedem Abruf erhalten
     schluessel TEXT PRIMARY KEY,  -- bank_konten.schluessel oder depots.schluessel
-    name TEXT NOT NULL
+    name TEXT NOT NULL,  -- leer: Name der Bank
+    farbe TEXT NOT NULL DEFAULT '',  -- #rrggbb, leer: keine
+    reihenfolge INTEGER  -- Platz in der Kontenliste, NULL: nach den sortierten, nach Bank und Name
 );
 CREATE TABLE IF NOT EXISTS einstellungen (
     schluessel TEXT PRIMARY KEY,
@@ -394,6 +396,10 @@ class Datenbank:
             for spalte in ("saldo", "saldo_stand", "abrufe", "fehler", "fints"):  # von vor Übersicht bzw. FinTS
                 if spalte not in spalten:
                     self._con.execute(f"ALTER TABLE bank_konten ADD COLUMN {spalte} TEXT NOT NULL DEFAULT ''")
+            spalten = {z["name"] for z in self._con.execute("PRAGMA table_info(konto_namen)")}
+            if "farbe" not in spalten:  # von vor Farbe und Reihenfolge
+                self._con.execute("ALTER TABLE konto_namen ADD COLUMN farbe TEXT NOT NULL DEFAULT ''")
+                self._con.execute("ALTER TABLE konto_namen ADD COLUMN reihenfolge INTEGER")
             spalten = {z["name"] for z in self._con.execute("PRAGMA table_info(fints_zustand)")}
             if "konten" not in spalten:
                 self._con.execute("ALTER TABLE fints_zustand ADD COLUMN konten TEXT NOT NULL DEFAULT ''")
@@ -614,16 +620,34 @@ class Datenbank:
 
     # Eigene Namen für Konten und Depots (Reiter „Konten“)
     def konto_namen(self) -> dict[str, str]:
+        """Nur gesetzte eigene Namen."""
+        return {s: a["name"] for s, a in self.konto_anzeige().items() if a["name"]}
+
+    def konto_anzeige(self) -> dict[str, dict]:
+        """Eigener Name, Farbe und Platz je Konto oder Depot."""
         with self._lock:
-            return {z["schluessel"]: z["name"] for z in self._con.execute("SELECT * FROM konto_namen")}
+            return {z["schluessel"]: dict(z) for z in self._con.execute("SELECT * FROM konto_namen")}
 
     def konto_name_setzen(self, schluessel: str, name: str) -> None:
         """Leerer Name: wieder der Name der Bank."""
+        self._anzeige_setzen(schluessel, "name", name)
+
+    def konto_farbe_setzen(self, schluessel: str, farbe: str) -> None:
+        self._anzeige_setzen(schluessel, "farbe", farbe)
+
+    def konto_reihenfolge_setzen(self, schluessel: list[str]) -> None:
+        """Die Konten bzw. Depots in dieser Reihenfolge; die übrigen behalten ihren Platz."""
         with self._lock, self._con:
-            if name:
-                self._con.execute("INSERT OR REPLACE INTO konto_namen VALUES (?, ?)", (schluessel, name))
-            else:
-                self._con.execute("DELETE FROM konto_namen WHERE schluessel = ?", (schluessel,))
+            for platz, s in enumerate(schluessel):
+                self._con.execute("INSERT OR IGNORE INTO konto_namen (schluessel, name) VALUES (?, '')", (s,))
+                self._con.execute("UPDATE konto_namen SET reihenfolge = ? WHERE schluessel = ?", (platz, s))
+
+    def _anzeige_setzen(self, schluessel: str, spalte: str, wert: str) -> None:
+        with self._lock, self._con:
+            self._con.execute("INSERT OR IGNORE INTO konto_namen (schluessel, name) VALUES (?, '')", (schluessel,))
+            self._con.execute(f"UPDATE konto_namen SET {spalte} = ? WHERE schluessel = ?", (wert, schluessel))
+            self._con.execute("DELETE FROM konto_namen WHERE schluessel = ? AND name = '' AND farbe = '' "
+                              "AND reihenfolge IS NULL", (schluessel,))
 
     # Kontenübersicht (getrennt von den Umsätzen der Buchhaltung)
     def konto_buchungen_speichern(self, konto: str, umsaetze: list[Umsatz]) -> int:

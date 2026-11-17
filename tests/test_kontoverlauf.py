@@ -1,4 +1,5 @@
-"""Reiter „Konten“: eigene Namen, Summe der vorgemerkten Umsätze, Verlauf von Kontostand und Depotwert."""
+"""Reiter „Konten“: eigene Namen, Farben und Reihenfolge, Summe der vorgemerkten Umsätze, Verlauf von Kontostand und
+Depotwert."""
 
 from datetime import UTC, date, datetime
 from decimal import Decimal as D
@@ -11,6 +12,8 @@ from ustva import depot, konten_web, kontoverlauf, monitoring
 from ustva.config import Config
 from ustva.db import stichtag
 from ustva.models import BankKonto, Umsatz
+
+from . import metriken
 
 # Fiktive Konten
 GIRO = "DE89370400440532013000"
@@ -98,7 +101,7 @@ def test_eigene_namen(db, client):
     assert [k["name"] for k in client.get("/api/konten").json()["konten"]] == ["Extra-Konto", "Extra-Konto"]
 
     assert client.put("/api/konten/name", json={"schluessel": GIRO, "name": "  Urlaub   2027 "}).json() == {
-        "schluessel": GIRO, "name": "Urlaub 2027"}
+        "schluessel": GIRO, "name": "Urlaub 2027", "farbe": ""}
     schluessel = db.depots()[0]["schluessel"]
     client.put("/api/konten/name", json={"schluessel": schluessel, "name": "Altersvorsorge"})
     daten = client.get("/api/konten").json()
@@ -158,5 +161,64 @@ def test_metriken_vorgemerkt_und_verlauf(db):
     assert 'finanzomat_bankkonto_vorgemerkt{bank="ING",konto="ING"} 1.0' in text
     assert 'finanzomat_bankkonto_verlauf_tage{bank="ING",konto="ING"} 1.0' in text
     assert 'finanzomat_depot_verlauf_tage{bank="ING",depot="Direkt-Depot"} 2.0' in text
+    offen = metriken.offen(db)
     for geheim in ("Geheimer Name", "459.82", "12.99"):
-        assert geheim not in text
+        assert geheim not in offen
+
+
+def test_farbe(db, client):
+    db.bank_konto_speichern(konto())
+    db.bank_konto_speichern(konto(EXTRA))
+    assert client.put("/api/konten/anzeige", json={"schluessel": GIRO, "farbe": "#14B8A6"}).json() == {
+        "schluessel": GIRO, "name": "", "farbe": "#14b8a6"}
+    # Name und Farbe ändern sich unabhängig voneinander
+    client.put("/api/konten/anzeige", json={"schluessel": GIRO, "name": "Urlaub"})
+    k = {k["schluessel"]: k for k in client.get("/api/konten").json()["konten"]}
+    assert (k[GIRO]["name"], k[GIRO]["farbe"], k[EXTRA]["farbe"]) == ("Urlaub", "#14b8a6", "")
+    client.put("/api/konten/anzeige", json={"schluessel": GIRO, "farbe": ""})
+    assert db.konto_anzeige()[GIRO]["farbe"] == "" and db.konto_namen() == {GIRO: "Urlaub"}
+    client.put("/api/konten/anzeige", json={"schluessel": GIRO, "name": ""})
+    assert db.konto_anzeige() == {}  # nichts mehr eingestellt, Zeile weg
+    for falsch in ("rot", "#12345", "#gggggg"):
+        assert client.put("/api/konten/anzeige", json={"schluessel": GIRO, "farbe": falsch}).status_code == 400
+
+
+def test_reihenfolge(db, client):
+    drittes = "DE02120300000000202051"
+    for s, bank in ((GIRO, "ING"), (EXTRA, "ING"), (drittes, "N26")):
+        db.bank_konto_speichern(konto(s, bank=bank, bezeichnung=""))
+    for nummer in ("1111111111", "2222222222"):
+        db.depot_speichern(depot.Depot(nummer=nummer), "2026-11-14T09:00:00")
+    reihe = lambda: [k["schluessel"] for k in client.get("/api/konten").json()["konten"]]  # noqa: E731
+    assert reihe() == [EXTRA, GIRO, drittes]  # ohne Reihenfolge nach Bank und IBAN
+
+    client.put("/api/konten/reihenfolge", json={"schluessel": [drittes, GIRO]})
+    assert reihe() == [drittes, GIRO, EXTRA]  # nicht sortierte danach
+    client.put("/api/konten/anzeige", json={"schluessel": GIRO, "name": "Zuerst?"})  # Name ändert den Platz nicht
+    client.put("/api/konten/reihenfolge", json={"schluessel": [GIRO, drittes, EXTRA]})
+    assert reihe() == [GIRO, drittes, EXTRA]
+
+    erstes, zweites = (d["schluessel"] for d in client.get("/api/konten").json()["depots"])
+    client.put("/api/konten/reihenfolge", json={"schluessel": [zweites, erstes]})
+    assert [d["schluessel"] for d in client.get("/api/konten").json()["depots"]] == [zweites, erstes]
+    assert "_platz" not in client.get("/api/konten").json()["konten"][0]
+
+    assert client.put("/api/konten/reihenfolge", json={"schluessel": ["x"]}).status_code == 404
+    assert client.put("/api/konten/reihenfolge", json={"schluessel": [GIRO, GIRO]}).status_code == 400
+
+
+def test_alte_datenbank_bekommt_farbe_und_reihenfolge(tmp_path):
+    import sqlite3
+
+    from ustva.db import Datenbank
+
+    pfad = tmp_path / "alt.sqlite"
+    con = sqlite3.connect(pfad)
+    con.execute("CREATE TABLE konto_namen (schluessel TEXT PRIMARY KEY, name TEXT NOT NULL)")
+    con.execute("INSERT INTO konto_namen VALUES (?, 'Urlaub')", (GIRO,))
+    con.commit()
+    con.close()
+    db = Datenbank(pfad)
+    assert db.konto_anzeige()[GIRO] == {"schluessel": GIRO, "name": "Urlaub", "farbe": "", "reihenfolge": None}
+    db.konto_farbe_setzen(GIRO, "#ef4444")
+    assert db.konto_anzeige()[GIRO]["farbe"] == "#ef4444"

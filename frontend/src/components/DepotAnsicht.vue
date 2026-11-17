@@ -80,15 +80,16 @@ const gefiltert = computed(() =>
     <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
       <div class="min-w-0">
         <h2 class="text-lg font-semibold">
+          <span v-if="depot.farbe" class="mr-1.5 inline-block h-3 w-3 rounded-full align-middle" :style="{ background: depot.farbe }" />
           {{ depot.name }}
           <Button
-            v-tooltip.top="'Umbenennen'"
+            v-tooltip.top="'Name und Farbe'"
             icon="pi pi-pencil"
             size="small"
             severity="secondary"
             text
             rounded
-            aria-label="Umbenennen"
+            aria-label="Name und Farbe"
             class="align-middle"
             @click="emit('umbenennen')"
           />
@@ -132,7 +133,7 @@ const gefiltert = computed(() =>
     <Message v-if="fehler" severity="error" class="mb-3">{{ fehler }}</Message>
 
     <div v-if="verlaufZeigen" class="mb-3">
-      <VerlaufChart :punkte="verlauf ?? []" :waehrung="depot.waehrung" :titel="`Depotwert ${depot.name}`">
+      <VerlaufChart :punkte="verlauf ?? []" :waehrung="depot.waehrung" :farbe="depot.farbe" :titel="`Depotwert ${depot.name}`">
         <template #leer>
           <template v-if="verlauf === null">Verlauf wird geladen …</template>
           <template v-else>

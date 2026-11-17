@@ -465,6 +465,7 @@ export interface BankKonto {
   schluessel: string;
   name: string; // eigener Name, sonst Bezeichnung der Bank, sonst die Bank
   eigener_name: string;
+  farbe: string; // #rrggbb oder leer
   bank: string;
   bezeichnung: string;
   iban: string;
@@ -530,6 +531,7 @@ export interface Depot {
   bank: string;
   name: string; // eigener Name, sonst der Name der Bank
   eigener_name: string;
+  farbe: string; // #rrggbb oder leer
   bezeichnung: string; // Name der Bank
   waehrung: string;
   wert: string | null;
@@ -639,11 +641,15 @@ export const api = {
   depotBestand: (schluessel: string) =>
     anfrage<DepotBestand>(`/api/konten/depot?schluessel=${encodeURIComponent(schluessel)}`),
   depotAbrufen: () => post<DepotAbruf>("/api/konten/depot/abrufen"),
-  kontoUmbenennen: (schluessel: string, name: string) =>
-    anfrage<{ schluessel: string; name: string }>("/api/konten/name", {
+  // Eigener Name (leer = Name der Bank) und Farbe (leer = keine); nur die übergebenen Felder ändern sich
+  kontoAnzeige: (schluessel: string, aenderung: { name?: string; farbe?: string }) =>
+    anfrage<{ schluessel: string; name: string; farbe: string }>("/api/konten/anzeige", {
       method: "PUT",
-      body: JSON.stringify({ schluessel, name }),
+      body: JSON.stringify({ schluessel, ...aenderung }),
     }),
+  // Reihenfolge der Konten bzw. Depots in der Kontenliste, von oben nach unten
+  kontoReihenfolge: (schluessel: string[]) =>
+    anfrage<{ schluessel: string[] }>("/api/konten/reihenfolge", { method: "PUT", body: JSON.stringify({ schluessel }) }),
   kontoVerlauf: (konto?: string) =>
     anfrage<KontoVerlauf>(`/api/konten/verlauf${konto ? `?konto=${encodeURIComponent(konto)}` : ""}`),
   ingAbrufen: (automatisch = false) =>

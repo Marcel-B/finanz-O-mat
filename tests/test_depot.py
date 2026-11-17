@@ -13,6 +13,8 @@ from ustva import depot
 from ustva import kontoabruf as ka
 from ustva.config import Config
 
+from . import metriken
+
 JETZT = datetime(2026, 11, 10, 15, 0, tzinfo=UTC)
 CFG = Config(fints_produkt_id="TESTPRODUKT", ing_fints_zugang="1234567890", ing_fints_pin="0000")
 DEPOTNR = "5409876543"
@@ -244,7 +246,8 @@ def test_metriken_ohne_werte(db):
     text = text.decode()
     assert 'finanzomat_depot_positionen{bank="ING",depot="Direkt-Depot"} 2.0' in text
     assert "finanzomat_depot_freigabe_noetig 0.0" in text
-    assert "3318" not in text and DEPOTNR not in text  # /metrics ist ohne Anmeldung erreichbar
+    offen = metriken.offen(db)
+    assert "3318" not in offen and DEPOTNR not in offen  # /metrics ist ohne Anmeldung erreichbar
 
 
 def test_befehl(db, capsys):
