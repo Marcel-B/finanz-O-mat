@@ -15,6 +15,8 @@ from ustva.__main__ import bank_befehl
 from ustva.config import Config
 from ustva.models import BankKonto
 
+from . import metriken
+
 # Fiktive Konten und Partner
 IBAN = "DE89370400440532013000"
 JETZT = datetime(2026, 11, 10, 8, 0, tzinfo=UTC)
@@ -588,8 +590,9 @@ def test_metriken(db, eb):
     assert 'finanzomat_bankkonto_fehler{bank="N26",konto="N26"} 0.0' in text
     assert "finanzomat_bankkonto_freigabe_tage" in text and "finanzomat_bankkonto_abrufe_frei" in text
     # Weder IBAN noch Saldo noch Partner auf der offenen Seite
+    offen = metriken.offen(db)
     for geheim in (IBAN, PRIVAT_IBAN, "194.98", "Supermarkt", "u-1"):
-        assert geheim not in text
+        assert geheim not in offen
 
 
 def test_konto_namen_und_endpunkt():

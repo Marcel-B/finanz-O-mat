@@ -251,15 +251,31 @@ async function depotAbrufen() {
   }
 }
 
-// Eigener Name für ein Konto oder Depot; leer = wieder der Name der Bank
-const umbenennen = ref<{ schluessel: string; name: string; bank: string } | null>(null);
+// Eigener Name (leer = wieder der Name der Bank) und Farbe für ein Konto oder Depot
+const umbenennen = ref<{ schluessel: string; name: string; bank: string; farbe: string; depot: boolean } | null>(null);
 const speichertName = ref(false);
+// Gut unterscheidbar, in Hell und Dunkel lesbar
+const FARBEN = [
+  { wert: "#3b82f6", name: "Blau" },
+  { wert: "#06b6d4", name: "Türkis" },
+  { wert: "#14b8a6", name: "Petrol" },
+  { wert: "#22c55e", name: "Grün" },
+  { wert: "#84cc16", name: "Hellgrün" },
+  { wert: "#eab308", name: "Gelb" },
+  { wert: "#f97316", name: "Orange" },
+  { wert: "#ef4444", name: "Rot" },
+  { wert: "#ec4899", name: "Pink" },
+  { wert: "#8b5cf6", name: "Violett" },
+  { wert: "#a16207", name: "Braun" },
+  { wert: "#64748b", name: "Grau" },
+];
+const eigeneFarbe = computed(() => !!umbenennen.value?.farbe && !FARBEN.some((f) => f.wert === umbenennen.value?.farbe));
 
 function umbenennenOeffnen(schluessel: string) {
   const k = konten.value.find((k) => k.schluessel === schluessel);
   const d = depots.value.find((d) => d.schluessel === schluessel);
-  if (k) umbenennen.value = { schluessel, name: k.eigener_name, bank: k.bezeichnung || k.bank };
-  else if (d) umbenennen.value = { schluessel, name: d.eigener_name, bank: d.bezeichnung };
+  if (k) umbenennen.value = { schluessel, name: k.eigener_name, bank: k.bezeichnung || k.bank, farbe: k.farbe, depot: false };
+  else if (d) umbenennen.value = { schluessel, name: d.eigener_name, bank: d.bezeichnung, farbe: d.farbe, depot: true };
 }
 
 async function nameSpeichern() {
@@ -267,14 +283,64 @@ async function nameSpeichern() {
   if (!u) return;
   speichertName.value = true;
   try {
-    await api.kontoUmbenennen(u.schluessel, u.name);
+    await api.kontoAnzeige(u.schluessel, { name: u.name, farbe: u.farbe });
     umbenennen.value = null;
     await laden(false);
   } catch (e) {
-    toast.add({ severity: "error", summary: "Umbenennen fehlgeschlagen", detail: (e as Error).message, life: 6000 });
+    toast.add({ severity: "error", summary: "Speichern fehlgeschlagen", detail: (e as Error).message, life: 6000 });
   } finally {
     speichertName.value = false;
   }
+}
+
+// Reihenfolge der Kontenliste: im Sortiermodus ziehen oder mit den Pfeilen verschieben, gespeichert nach jedem Schritt
+type Gruppe = "konten" | "depots";
+const sortieren = ref(false);
+const gezogen = ref<{ gruppe: Gruppe; schluessel: string } | null>(null);
+const liste = (gruppe: Gruppe): { schluessel: string }[] =>
+  (gruppe === "konten" ? daten.value?.konten : daten.value?.depots) ?? [];
+
+function verschieben(gruppe: Gruppe, schluessel: string, nach: number) {
+  const l = liste(gruppe);
+  const von = l.findIndex((e) => e.schluessel === schluessel);
+  if (von < 0 || nach < 0 || nach >= l.length || von === nach) return false;
+  l.splice(nach, 0, ...l.splice(von, 1));
+  return true;
+}
+
+async function reihenfolgeSpeichern(gruppe: Gruppe) {
+  try {
+    await api.kontoReihenfolge(liste(gruppe).map((e) => e.schluessel));
+  } catch (e) {
+    toast.add({ severity: "error", summary: "Reihenfolge nicht gespeichert", detail: (e as Error).message, life: 6000 });
+    await laden(false);
+  }
+}
+
+function pfeil(gruppe: Gruppe, schluessel: string, schritt: number) {
+  const i = liste(gruppe).findIndex((e) => e.schluessel === schluessel);
+  if (verschieben(gruppe, schluessel, i + schritt)) void reihenfolgeSpeichern(gruppe);
+}
+
+function ziehen(gruppe: Gruppe, schluessel: string, e: DragEvent) {
+  gezogen.value = { gruppe, schluessel };
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", schluessel);
+  }
+}
+
+// Beim Darüberziehen gleich umsortieren, so sieht man, wo das Konto landet
+function darueber(gruppe: Gruppe, schluessel: string) {
+  const g = gezogen.value;
+  if (!g || g.gruppe !== gruppe || g.schluessel === schluessel) return;
+  verschieben(gruppe, g.schluessel, liste(gruppe).findIndex((e) => e.schluessel === schluessel));
+}
+
+function abgelegt() {
+  const g = gezogen.value;
+  gezogen.value = null;
+  if (g) void reihenfolgeSpeichern(g.gruppe);
 }
 
 // Alte Kontoauszüge (CAMT.053, z. B. aus MoneyMoney) in die Übersicht
@@ -339,6 +405,10 @@ const knoten = (gewaehlt: boolean) => [
   "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left",
   gewaehlt ? "bg-highlight" : "hover:bg-emphasis",
 ];
+
+// Farbpunkt; ohne eigene Farbe ein Ring in der Textfarbe
+const punkt = (farbe: string) =>
+  farbe ? { background: farbe } : { boxShadow: "inset 0 0 0 1.5px var(--p-text-muted-color)" };
 
 const ibanKurz = (iban: string) => (iban ? `${iban.slice(0, 4)} … ${iban.slice(-4)}` : "");
 const ibanLang = (iban: string) => iban.replace(/(.{4})/g, "$1 ").trim();
@@ -413,8 +483,23 @@ const gefiltert = computed(() =>
       aria-label="Konten"
     >
       <template v-if="konten.length">
-        <div class="px-2 pt-1 pb-2 text-sm font-semibold text-muted-color">Konten</div>
-        <button type="button" :class="knoten(auswahl === '')" @click="auswahl = ''">
+        <div class="flex items-center justify-between gap-2 px-2 pt-1 pb-2 text-sm font-semibold text-muted-color">
+          <span>Konten</span>
+          <Button
+            v-if="konten.length > 1 || depots.length > 1"
+            v-tooltip.top="sortieren ? 'Reihenfolge fertig' : 'Reihenfolge ändern'"
+            :icon="sortieren ? 'pi pi-check' : 'pi pi-sort-alt'"
+            :label="sortieren ? 'Fertig' : undefined"
+            size="small"
+            :severity="sortieren ? undefined : 'secondary'"
+            text
+            :aria-label="sortieren ? 'Reihenfolge fertig' : 'Reihenfolge ändern'"
+            class="!py-0.5"
+            @click="sortieren = !sortieren"
+          />
+        </div>
+        <p v-if="sortieren" class="px-2 pb-2 text-xs text-muted-color">Ziehen oder mit den Pfeilen verschieben.</p>
+        <button v-if="!sortieren" type="button" :class="knoten(auswahl === '')" @click="auswahl = ''">
           <i class="pi pi-building-columns text-primary" />
           <span class="min-w-0 flex-1 truncate font-medium">Alle Konten</span>
           <span class="text-right font-semibold tabular-nums">
@@ -422,14 +507,33 @@ const gefiltert = computed(() =>
           </span>
         </button>
       </template>
+      <template v-if="sortieren">
+        <div
+          v-for="(k, i) in konten"
+          :key="k.schluessel"
+          draggable="true"
+          class="flex cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 select-none hover:bg-emphasis"
+          :class="{ 'opacity-50': gezogen?.schluessel === k.schluessel }"
+          @dragstart="ziehen('konten', k.schluessel, $event)"
+          @dragover.prevent="darueber('konten', k.schluessel)"
+          @drop.prevent
+          @dragend="abgelegt"
+        >
+          <i class="pi pi-bars text-muted-color" />
+          <span class="h-2.5 w-2.5 shrink-0 rounded-full" :style="punkt(k.farbe)" />
+          <span class="min-w-0 flex-1 truncate">{{ k.name }}</span>
+          <Button icon="pi pi-angle-up" size="small" severity="secondary" text rounded :disabled="i === 0" aria-label="Nach oben" class="!h-7 !w-7" @click="pfeil('konten', k.schluessel, -1)" />
+          <Button icon="pi pi-angle-down" size="small" severity="secondary" text rounded :disabled="i === konten.length - 1" aria-label="Nach unten" class="!h-7 !w-7" @click="pfeil('konten', k.schluessel, 1)" />
+        </div>
+      </template>
       <button
-        v-for="k in konten"
+        v-for="k in sortieren ? [] : konten"
         :key="k.schluessel"
         type="button"
         :class="[knoten(auswahl === k.schluessel), 'pl-5']"
         @click="auswahl = k.schluessel"
       >
-        <i class="pi pi-building-columns text-muted-color" />
+        <i class="pi pi-building-columns" :class="{ 'text-muted-color': !k.farbe }" :style="k.farbe ? { color: k.farbe } : undefined" />
         <span class="min-w-0 flex-1">
           <span class="flex items-center gap-1 truncate">
             {{ k.name }}
@@ -453,6 +557,17 @@ const gefiltert = computed(() =>
           :class="{ 'mt-3': konten.length }"
         >
           <span>Depots</span>
+          <Button
+            v-if="!konten.length && depots.length > 1"
+            v-tooltip.top="sortieren ? 'Reihenfolge fertig' : 'Reihenfolge ändern'"
+            :icon="sortieren ? 'pi pi-check' : 'pi pi-sort-alt'"
+            size="small"
+            severity="secondary"
+            text
+            :aria-label="sortieren ? 'Reihenfolge fertig' : 'Reihenfolge ändern'"
+            class="!py-0.5"
+            @click="sortieren = !sortieren"
+          />
           <span v-if="depots.length > 1" class="tabular-nums">{{ betrag(depotSumme) }} €</span>
           <Button
             v-if="!depots.length"
@@ -469,14 +584,33 @@ const gefiltert = computed(() =>
         <small v-if="!depots.length && daten?.depot.fehler" class="block px-2 pb-2 text-orange-600 dark:text-orange-400">
           {{ daten.depot.fehler }}
         </small>
+        <template v-if="sortieren">
+          <div
+            v-for="(d, i) in depots"
+            :key="d.schluessel"
+            draggable="true"
+            class="flex cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 select-none hover:bg-emphasis"
+            :class="{ 'opacity-50': gezogen?.schluessel === d.schluessel }"
+            @dragstart="ziehen('depots', d.schluessel, $event)"
+            @dragover.prevent="darueber('depots', d.schluessel)"
+            @drop.prevent
+            @dragend="abgelegt"
+          >
+            <i class="pi pi-bars text-muted-color" />
+            <span class="h-2.5 w-2.5 shrink-0 rounded-full" :style="punkt(d.farbe)" />
+            <span class="min-w-0 flex-1 truncate">{{ d.name }}</span>
+            <Button icon="pi pi-angle-up" size="small" severity="secondary" text rounded :disabled="i === 0" aria-label="Nach oben" class="!h-7 !w-7" @click="pfeil('depots', d.schluessel, -1)" />
+            <Button icon="pi pi-angle-down" size="small" severity="secondary" text rounded :disabled="i === depots.length - 1" aria-label="Nach unten" class="!h-7 !w-7" @click="pfeil('depots', d.schluessel, 1)" />
+          </div>
+        </template>
         <button
-          v-for="d in depots"
+          v-for="d in sortieren ? [] : depots"
           :key="d.schluessel"
           type="button"
           :class="[knoten(auswahl === d.schluessel), 'pl-5']"
           @click="auswahl = d.schluessel"
         >
-          <i class="pi pi-chart-line text-muted-color" />
+          <i class="pi pi-chart-line" :class="{ 'text-muted-color': !d.farbe }" :style="d.farbe ? { color: d.farbe } : undefined" />
           <span class="min-w-0 flex-1">
             <span class="flex items-center gap-1 truncate">
               {{ d.name }}
@@ -513,16 +647,17 @@ const gefiltert = computed(() =>
       <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div class="min-w-0">
           <h2 class="text-lg font-semibold">
+            <span v-if="gewaehlt?.farbe" class="mr-1.5 inline-block h-3 w-3 rounded-full align-middle" :style="punkt(gewaehlt.farbe)" />
             {{ gewaehlt ? gewaehlt.name : "Alle Konten" }}
             <Button
               v-if="gewaehlt"
-              v-tooltip.top="'Umbenennen'"
+              v-tooltip.top="'Name und Farbe'"
               icon="pi pi-pencil"
               size="small"
               severity="secondary"
               text
               rounded
-              aria-label="Umbenennen"
+              aria-label="Name und Farbe"
               class="align-middle"
               @click="umbenennenOeffnen(gewaehlt.schluessel)"
             />
@@ -611,6 +746,7 @@ const gefiltert = computed(() =>
       <div v-if="verlaufZeigen" class="mb-3">
         <VerlaufChart
           :punkte="verlaufPunkte"
+          :farbe="gewaehlt?.farbe"
           :waehrung="verlauf?.waehrung"
           :titel="gewaehlt ? `Kontostand ${gewaehlt.name}` : 'Kontostand aller Konten'"
         >
@@ -686,7 +822,14 @@ const gefiltert = computed(() =>
         </Column>
         <Column v-if="!gewaehlt" header="Konto" class="w-36">
           <template #body="{ data }">
-            <span class="text-sm">{{ nachSchluessel[data.konto]?.name ?? data.konto }}</span>
+            <span class="flex items-center gap-1.5 text-sm">
+              <span
+                v-if="nachSchluessel[data.konto]?.farbe"
+                class="h-2 w-2 shrink-0 rounded-full"
+                :style="punkt(nachSchluessel[data.konto].farbe)"
+              />
+              {{ nachSchluessel[data.konto]?.name ?? data.konto }}
+            </span>
           </template>
         </Column>
         <Column header="Empfänger / Verwendungszweck">
@@ -714,7 +857,7 @@ const gefiltert = computed(() =>
   <Dialog
     :visible="!!umbenennen"
     modal
-    header="Umbenennen"
+    :header="umbenennen?.depot ? 'Depot anpassen' : 'Konto anpassen'"
     class="w-[min(420px,calc(100vw-2rem))]"
     @update:visible="(v: boolean) => !v && (umbenennen = null)"
   >
@@ -726,6 +869,51 @@ const gefiltert = computed(() =>
       <small class="text-muted-color">
         Bleibt bei jedem Abruf erhalten. Leer lassen für den Namen der Bank („{{ umbenennen.bank }}“).
       </small>
+      <div class="flex flex-col gap-2 text-sm">
+        Farbe
+        <div class="flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Farbe">
+          <button
+            type="button"
+            role="radio"
+            :aria-checked="!umbenennen.farbe"
+            v-tooltip.top="'Keine'"
+            aria-label="Keine Farbe"
+            class="flex h-7 w-7 items-center justify-center rounded-full border border-surface-300 dark:border-surface-600"
+            :class="{ 'ring-2 ring-primary ring-offset-2 ring-offset-surface-0 dark:ring-offset-surface-900': !umbenennen.farbe }"
+            @click="umbenennen.farbe = ''"
+          >
+            <i class="pi pi-ban text-xs text-muted-color" />
+          </button>
+          <button
+            v-for="f in FARBEN"
+            :key="f.wert"
+            type="button"
+            role="radio"
+            :aria-checked="umbenennen.farbe === f.wert"
+            v-tooltip.top="f.name"
+            :aria-label="f.name"
+            class="h-7 w-7 rounded-full"
+            :class="{ 'ring-2 ring-primary ring-offset-2 ring-offset-surface-0 dark:ring-offset-surface-900': umbenennen.farbe === f.wert }"
+            :style="{ background: f.wert }"
+            @click="umbenennen.farbe = f.wert"
+          />
+          <label
+            v-tooltip.top="'Eigene Farbe'"
+            class="relative flex h-7 w-7 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-surface-300 dark:border-surface-600"
+            :class="{ 'ring-2 ring-primary ring-offset-2 ring-offset-surface-0 dark:ring-offset-surface-900': eigeneFarbe }"
+            :style="eigeneFarbe ? { background: umbenennen.farbe } : undefined"
+          >
+            <i v-if="!eigeneFarbe" class="pi pi-palette text-xs text-muted-color" />
+            <input
+              type="color"
+              aria-label="Eigene Farbe"
+              class="absolute inset-0 cursor-pointer opacity-0"
+              :value="umbenennen.farbe || '#3b82f6'"
+              @input="umbenennen.farbe = ($event.target as HTMLInputElement).value"
+            />
+          </label>
+        </div>
+      </div>
       <div class="flex justify-end gap-2">
         <Button label="Abbrechen" severity="secondary" text @click="umbenennen = null" />
         <Button type="submit" label="Speichern" icon="pi pi-check" :loading="speichertName" />

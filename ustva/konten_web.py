@@ -8,6 +8,7 @@ kommen nur die Konten, die mit ``bank konto … --an`` eingeschaltet sind (siehe
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -26,21 +27,44 @@ from .models import BankKonto
 log = logging.getLogger(__name__)
 
 
-class NameAenderung(BaseModel):
+class AnzeigeAenderung(BaseModel):
+    """Nur die übergebenen Felder ändern sich."""
+
     schluessel: str
-    name: str = ""
+    name: str | None = None  # leer: wieder der Name der Bank
+    farbe: str | None = None  # #rrggbb, leer: keine
+
+
+class Reihenfolge(BaseModel):
+    schluessel: list[str]
 
 
 NAME_LAENGE = 60
+FARBE = re.compile(r"#[0-9a-f]{6}")
 
 
-def _konto(k: BankKonto, jetzt: datetime, namen: dict[str, str], vorgemerkt: dict[str, list[Decimal]]) -> dict:
+def _anzeige(anzeige: dict[str, dict], schluessel: str) -> tuple[str, str, int | None]:
+    a = anzeige.get(schluessel) or {}
+    return a.get("name") or "", a.get("farbe") or "", a.get("reihenfolge")
+
+
+def _reihenfolge(eintrag: dict) -> tuple:
+    """Erst die von Hand sortierten nach ihrem Platz, dann die übrigen nach Bank und Name."""
+    platz = eintrag.pop("_platz")
+    return (platz is None, platz or 0, eintrag["bank"].lower(), eintrag["name"].lower(),
+            eintrag.get("iban") or eintrag["schluessel"])
+
+
+def _konto(k: BankKonto, jetzt: datetime, anzeige: dict[str, dict], vorgemerkt: dict[str, list[Decimal]]) -> dict:
     frei = ka.naechster_freier_abruf(k, jetzt)
     offen = vorgemerkt.get(k.schluessel, [])
+    name, farbe, platz = _anzeige(anzeige, k.schluessel)
     return {
         "schluessel": k.schluessel,
-        "name": namen.get(k.schluessel) or k.bezeichnung or k.bank,
-        "eigener_name": namen.get(k.schluessel, ""),
+        "name": name or k.bezeichnung or k.bank,
+        "eigener_name": name,
+        "farbe": farbe,
+        "_platz": platz,
         "bank": k.bank,
         "bezeichnung": k.bezeichnung,
         "iban": k.iban,
@@ -63,11 +87,16 @@ def _konto(k: BankKonto, jetzt: datetime, namen: dict[str, str], vorgemerkt: dic
     }
 
 
-def _depots(db: Datenbank, namen: dict[str, str]) -> list[dict]:
-    return [{"schluessel": d["schluessel"], "bank": d["bank"], "name": namen.get(d["schluessel"]) or d["name"],
-             "eigener_name": namen.get(d["schluessel"], ""), "bezeichnung": d["name"], "waehrung": d["waehrung"],
-             "wert": d["wert"] or None, "einstandswert": d["einstandswert"] or None, "stand": d["stand"],
-             "abgerufen": d["abgerufen"], "positionen": d["positionen"]} for d in db.depots()]
+def _depots(db: Datenbank, anzeige: dict[str, dict]) -> list[dict]:
+    liste = []
+    for d in db.depots():
+        name, farbe, platz = _anzeige(anzeige, d["schluessel"])
+        liste.append({"schluessel": d["schluessel"], "bank": d["bank"], "name": name or d["name"],
+                      "eigener_name": name, "farbe": farbe, "_platz": platz, "bezeichnung": d["name"],
+                      "waehrung": d["waehrung"], "wert": d["wert"] or None,
+                      "einstandswert": d["einstandswert"] or None, "stand": d["stand"], "abgerufen": d["abgerufen"],
+                      "positionen": d["positionen"]})
+    return sorted(liste, key=_reihenfolge)
 
 
 def router(db: Datenbank, aktuell: Callable[[], Config],
@@ -83,12 +112,12 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
     def konten():
         cfg = aktuell()
         zeit = _jetzt()
-        namen = db.konto_namen()
+        anzeige = db.konto_anzeige()
         alle = db.bank_konten()
         vorgemerkt: dict[str, list[Decimal]] = {}
         for z in db.konto_vorgemerkt():
             vorgemerkt.setdefault(z["konto"], []).append(Decimal(z["betrag"]))
-        liste = [_konto(k, zeit, namen, vorgemerkt) for k in alle]
+        liste = sorted((_konto(k, zeit, anzeige, vorgemerkt) for k in alle), key=_reihenfolge)
         summen: dict[str, Decimal] = {}
         summen_vorgemerkt: dict[str, Decimal] = {}
         for k in alle:
@@ -104,7 +133,7 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
             "depot": {"eingerichtet": depot.eingerichtet(cfg), "fehler": zustand.get("fehler", ""),
                       "freigabe": bool(zustand.get("freigabe")), "versucht": zustand.get("versucht", ""),
                       "abgelehnt": bool(zustand.get("abgelehnt"))},
-            "depots": _depots(db, namen),
+            "depots": _depots(db, anzeige),
             # ING-Konten über FinTS: beim Öffnen, mit „Jetzt abrufen“ und stündlich (ustva/ing_konten.py)
             "ing": {"eingerichtet": depot.eingerichtet(cfg),
                     "versucht": zustand.get("konten", ""),
@@ -113,7 +142,7 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
             "abrufe_je_tag": ka.ABRUFE_JE_TAG,
             "summen": {w: str(b) for w, b in summen.items()},
             "summen_vorgemerkt": {w: str(b) for w, b in summen_vorgemerkt.items()},
-            "konten": sorted(liste, key=lambda k: (k["bank"].lower(), k["name"].lower(), k["iban"])),
+            "konten": liste,
         }
 
     @r.get("/api/konten/buchungen")
@@ -123,17 +152,37 @@ def router(db: Datenbank, aktuell: Callable[[], Config],
                       for z in db.konto_vorgemerkt(konto or None)]
         return vorgemerkt + [z | {"vorgemerkt": False} for z in db.konto_buchungen(konto or None)]
 
-    @r.put("/api/konten/name")
-    def name_setzen(daten: NameAenderung):
-        """Eigener Name für ein Konto oder Depot; leer = wieder der Name der Bank."""
-        bekannt = {k.schluessel for k in db.bank_konten()} | {d["schluessel"] for d in db.depots()}
-        if daten.schluessel not in bekannt:
+    def _bekannt() -> set[str]:
+        return {k.schluessel for k in db.bank_konten()} | {d["schluessel"] for d in db.depots()}
+
+    @r.put("/api/konten/anzeige")
+    @r.put("/api/konten/name")  # alter Name des Endpunkts
+    def anzeige_setzen(daten: AnzeigeAenderung):
+        """Eigener Name (leer = wieder der Name der Bank) und Farbe (leer = keine) für ein Konto oder Depot."""
+        if daten.schluessel not in _bekannt():
             raise HTTPException(404, "Konto nicht gefunden")
-        name = " ".join(daten.name.split())
-        if len(name) > NAME_LAENGE:
+        name = None if daten.name is None else " ".join(daten.name.split())
+        farbe = None if daten.farbe is None else daten.farbe.strip().lower()
+        if name is not None and len(name) > NAME_LAENGE:
             raise HTTPException(400, f"Name zu lang (höchstens {NAME_LAENGE} Zeichen)")
-        db.konto_name_setzen(daten.schluessel, name)
-        return {"schluessel": daten.schluessel, "name": name}
+        if farbe and not FARBE.fullmatch(farbe):
+            raise HTTPException(400, "Farbe als #rrggbb angeben")
+        if name is not None:
+            db.konto_name_setzen(daten.schluessel, name)
+        if farbe is not None:
+            db.konto_farbe_setzen(daten.schluessel, farbe)
+        name_neu, farbe_neu, _ = _anzeige(db.konto_anzeige(), daten.schluessel)
+        return {"schluessel": daten.schluessel, "name": name_neu, "farbe": farbe_neu}
+
+    @r.put("/api/konten/reihenfolge")
+    def reihenfolge_setzen(daten: Reihenfolge):
+        """Reihenfolge in der Kontenliste: die Schlüssel der Konten (oder der Depots) von oben nach unten."""
+        if unbekannt := set(daten.schluessel) - _bekannt():
+            raise HTTPException(404, f"Konto nicht gefunden: {', '.join(sorted(unbekannt))}")
+        if len(set(daten.schluessel)) != len(daten.schluessel):
+            raise HTTPException(400, "Konto doppelt in der Reihenfolge")
+        db.konto_reihenfolge_setzen(daten.schluessel)
+        return {"schluessel": daten.schluessel}
 
     @r.get("/api/konten/verlauf")
     def verlauf(konto: str | None = None):

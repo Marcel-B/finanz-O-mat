@@ -243,8 +243,12 @@ finanz-o-mat bank konten                     # Konten, Saldo, Freigabe, letzter 
 
 Im Reiter „Konten“:
 
-- **Eigene Namen:** Über den Stift neben dem Namen lässt sich jedes Konto und Depot umbenennen (etwa zwei
-  „Extra-Konto“ auseinanderhalten). Der Name bleibt bei jedem Abruf und neuer Freigabe; leer = wieder der Name der Bank.
+- **Eigene Namen und Farben:** Über den Stift neben dem Namen lässt sich jedes Konto und Depot umbenennen (etwa zwei
+  „Extra-Konto“ auseinanderhalten) und einfärben (eine der Vorgaben oder eine eigene Farbe). Die Farbe zeigt sich in
+  der Kontenliste, neben dem Namen, in der Spalte „Konto“ bei „Alle Konten“ und im Verlauf. Beides bleibt bei jedem
+  Abruf und neuer Freigabe; leerer Name = wieder der Name der Bank.
+- **Reihenfolge:** Mit dem Pfeil-Knopf über der Kontenliste die Konten (und Depots) ziehen oder mit den Pfeilen
+  verschieben. Die Reihenfolge wird nach jedem Schritt gespeichert; neue Konten kommen unten dazu.
 - **Vorgemerkt:** Gibt es vorgemerkte Umsätze, stehen unter dem Kontostand ihre Summe und der Stand danach. Der
   Kontostand der Bank ist der gebuchte, die vorgemerkten Umsätze sind darin noch nicht enthalten.
 - **Zeitraum:** Links über den Umsätzen ein Zeitraum (von–bis) mit „Laufender Monat“ und „Laufendes Quartal“, rechts

@@ -17,6 +17,7 @@ from ustva import kontoabruf as ka
 from ustva.config import Config
 from ustva.models import BankKonto, Umsatz
 
+from . import metriken
 from .test_depot import CFG, FakeFints, zugang
 
 JETZT = datetime(2026, 11, 10, 15, 0, tzinfo=UTC)
@@ -305,7 +306,8 @@ def test_metriken(db):
     text = monitoring.metriken(monitoring.Bestand(db, None, None))[0].decode()
     assert 'finanzomat_bankkonto_fints_abruf_timestamp_seconds{bank="ING",konto="ING 1"}' in text
     assert 'finanzomat_ing_fints_abruf_total{ausloeser="knopf",ergebnis="ok"}' in text
-    assert "2447" not in text and "12000" not in text and ING_IBAN not in text
+    offen = metriken.offen(db)
+    assert "2447" not in offen and "12000" not in offen and ING_IBAN not in offen
 
 
 def test_befehl(db, capsys):

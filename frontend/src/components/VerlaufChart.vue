@@ -6,11 +6,16 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import type { VerlaufPunkt } from "@/api";
 import { betrag, datum } from "@/format";
 
-const props = withDefaults(defineProps<{ punkte: VerlaufPunkt[]; waehrung?: string; hoehe?: number; titel?: string }>(), {
+const props = withDefaults(
+  defineProps<{ punkte: VerlaufPunkt[]; waehrung?: string; hoehe?: number; titel?: string; farbe?: string }>(),
+  {
   waehrung: "EUR",
   hoehe: 150,
   titel: "Verlauf",
-});
+  },
+);
+// Farbe des Kontos, sonst die Diagrammfarbe der App
+const linienfarbe = computed(() => props.farbe || "var(--chart-einnahmen)");
 
 const kasten = ref<HTMLDivElement | null>(null);
 const breite = ref(600);
@@ -144,8 +149,8 @@ const tooltipStil = computed(() => {
     >
       <defs>
         <linearGradient id="verlauf-flaeche" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stop-color="var(--chart-einnahmen)" stop-opacity="0.22" />
-          <stop offset="100%" stop-color="var(--chart-einnahmen)" stop-opacity="0.02" />
+          <stop offset="0%" :stop-color="linienfarbe" stop-opacity="0.22" />
+          <stop offset="100%" :stop-color="linienfarbe" stop-opacity="0.02" />
         </linearGradient>
       </defs>
       <g class="text-surface-200 dark:text-surface-700">
@@ -176,14 +181,14 @@ const tooltipStil = computed(() => {
         <text v-for="m in zeitachse" :key="m.t" :x="x(m.t)" :y="hoehe - 6" text-anchor="middle">{{ m.text }}</text>
       </g>
       <path :d="flaeche" fill="url(#verlauf-flaeche)" />
-      <path :d="linie" fill="none" stroke="var(--chart-einnahmen)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+      <path :d="linie" fill="none" :stroke="linienfarbe" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
       <g v-if="punkt">
         <line :x1="x(punkt.t)" :x2="x(punkt.t)" :y1="rand.oben" :y2="basis" class="stroke-surface-400 dark:stroke-surface-500" stroke-width="1" />
         <circle
           :cx="x(punkt.t)"
           :cy="y(punkt.wert)"
           r="4"
-          fill="var(--chart-einnahmen)"
+          :fill="linienfarbe"
           class="stroke-surface-0 dark:stroke-surface-900"
           stroke-width="2"
         />
