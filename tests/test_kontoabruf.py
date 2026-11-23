@@ -39,7 +39,7 @@ BUCHUNGEN = [
     buchung("59.50", "DBIT", "2026-09-12", entry_reference="E1", creditor={"name": "Hosting GmbH"},
             creditor_account={"iban": "DE02120300000000202051"}, remittance_information=["SVWZ+R-2026-0912"]),
     buchung("4522.00", "CRDT", "2026-09-28", entry_reference="E2", debtor={"name": "Beispiel AG"},
-            debtor_account={"iban": "DE02500105170137075030"}, remittance_information=["Rechnung 2026-030"]),
+            debtor_account={"iban": "DE00500105170000000001"}, remittance_information=["Rechnung 2026-030"]),
     buchung("17.32", "DBIT", "2026-09-03", transaction_id="T3", creditor={"name": "OpenAI"},
             exchange_rate={"instructed_amount": {"amount": "20.00", "currency": "USD"}}),
     buchung("812.40", "DBIT", "2026-09-29", entry_reference="E4", creditor={"name": "Finanzamt Musterstadt"}),
@@ -234,6 +234,32 @@ def test_verbinden_und_konto_einschalten(db, eb, capsys, monkeypatch):
     k = db.bank_konto(IBAN)
     assert (k.konto, k.aktiv, k.uid, k.sitzung, k.gueltig_bis, k.bezeichnung) == (
         "Geschäft", True, "u-9", "s-2", "2027-05-01", "Hauptkonto")
+
+
+def test_sitzung_merkt_bic(db):
+    sitzung = {"session_id": "s-1", "accounts": [
+        {"uid": "u-1", "account_id": {"iban": IBAN}, "account_servicer": {"bic_fi": "cobadeffxxx"}}]}
+    ka.sitzung_uebernehmen(db, sitzung, "Musterbank", "DE")
+    assert db.bank_konto(IBAN).bic == "COBADEFFXXX"
+    # Schickt die Bank bei der nächsten Freigabe keine BIC, bleibt die alte
+    ka.sitzung_uebernehmen(db, {"session_id": "s-2", "accounts": [{"uid": "u-2", "account_id": {"iban": IBAN}}]},
+                           "Musterbank", "DE")
+    assert db.bank_konto(IBAN).bic == "COBADEFFXXX"
+
+
+@pytest.mark.parametrize(("iban", "gespeichert", "erwartet"), [
+    ("DE00500105170000000001", "", "INGDDEFFXXX"),  # ING
+    ("DE00100110010000000002", "", "NTSBDEB1XXX"),  # N26
+    ("NL00BUNQ0000000003", "", "BUNQNL2AXXX"),  # bunq
+    (IBAN, "", ""),  # unbekannte Bank
+    ("DE00100110010000000002", "MUSTDEFFXXX", "MUSTDEFFXXX"),  # gespeicherte BIC geht vor
+])
+def test_bic(iban, gespeichert, erwartet):
+    from ustva import konten_web
+
+    k = BankKonto(schluessel=iban, uid="u", sitzung="s", bank="Bank", land=iban[:2], konto="Bank", iban=iban,
+                  bic=gespeichert)
+    assert konten_web.bic(k) == erwartet
 
 
 PRIVAT_IBAN = "DE75512108001245126199"
@@ -547,6 +573,7 @@ def test_api_konten(db, eb):
     assert (ing["bank"], ing["saldo"], ing["buchhaltung"], ing["abrufe_frei"], ing["freigabe_tage"]) == (
         "ING", "194.98", False, 4, 171)
     assert (n26["bank"], n26["buchhaltung"]) == ("N26", True)
+    assert (ing["iban"], ing["bic"]) == (PRIVAT_IBAN, "")  # BIC nur, wenn bekannt
     alle = client.get("/api/konten/buchungen").json()
     nur_ing = client.get("/api/konten/buchungen", params={"konto": PRIVAT_IBAN}).json()
     assert [b["vorgemerkt"] for b in alle].count(False) == 8 and alle[0]["vorgemerkt"]  # Vorgemerktes oben

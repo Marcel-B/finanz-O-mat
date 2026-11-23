@@ -276,12 +276,14 @@ def sitzung_uebernehmen(db: Datenbank, sitzung: dict, bank: str, land: str) -> t
         iban = ((a.get("account_id") or {}).get("iban") or "").replace(" ", "").upper()
         schluessel = iban or a.get("identification_hash") or a["uid"]
         vorher = db.bank_konto(schluessel)
+        bic = ((a.get("account_servicer") or {}).get("bic_fi") or "").replace(" ", "").upper()
         k = BankKonto(
             schluessel=schluessel, uid=a["uid"], sitzung=sitzung["session_id"], bank=bank, land=land.upper(),
             konto=vorher.konto if vorher else kontoname(bank), iban=iban,
             bezeichnung=a.get("name") or a.get("product") or (vorher.bezeichnung if vorher else ""),
             waehrung=(a.get("currency") or "EUR").upper(), aktiv=vorher.aktiv if vorher else False,
             gueltig_bis=gueltig, abgerufen=vorher.abgerufen if vorher else "", bis=vorher.bis if vorher else "",
+            bic=bic or (vorher.bic if vorher else ""),
         )
         db.bank_konto_speichern(k)
         (erneuert if vorher else neu).append(k)

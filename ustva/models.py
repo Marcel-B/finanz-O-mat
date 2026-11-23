@@ -128,6 +128,7 @@ class BankKonto:
     abrufe: str = ""  # ISO-Zeitpunkte, mit Leerzeichen getrennt
     fehler: str = ""
     fints: str = ""  # letzter Abruf über FinTS (nur ING, ustva/ing_konten.py), ohne das Limit von PSD2
+    bic: str = ""  # laut Bank (Enable Banking: account_servicer); leer, wenn die Bank keine mitschickt
 
 
 @dataclass

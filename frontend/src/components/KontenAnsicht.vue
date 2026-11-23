@@ -15,6 +15,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
 import { api, type BankKonto, type KontenUebersicht, type KontoBuchung, type KontoVerlauf } from "@/api";
 import { alsIso, betrag, datum, passtZurSuche, suchtext } from "@/format";
+import { inZwischenablage } from "@/zwischenablage";
 
 import DepotAnsicht from "./DepotAnsicht.vue";
 import SuchFeld from "./SuchFeld.vue";
@@ -413,6 +414,15 @@ const punkt = (farbe: string) =>
 const ibanKurz = (iban: string) => (iban ? `${iban.slice(0, 4)} … ${iban.slice(-4)}` : "");
 const ibanLang = (iban: string) => iban.replace(/(.{4})/g, "$1 ").trim();
 
+// IBAN und BIC ohne Leerzeichen, so nehmen Überweisungsformulare sie an
+async function kopieren(was: string, text: string) {
+  if (await inZwischenablage(text)) {
+    toast.add({ severity: "info", summary: `${was} kopiert`, detail: text, life: 1500 });
+  } else {
+    toast.add({ severity: "warn", summary: "Kopieren nicht möglich", detail: text, life: 4000 });
+  }
+}
+
 const summe = computed(() => Object.entries(daten.value?.summen ?? {}));
 const waehrung = (w: string) => (w === "EUR" ? "€" : w);
 // Kontostand im Kopf: das gewählte Konto oder die Summe je Währung, dazu Vorgemerktes und der Stand danach
@@ -671,7 +681,32 @@ const gefiltert = computed(() =>
           </h2>
           <div v-if="gewaehlt" class="text-sm text-muted-color">
             {{ gewaehlt.bank }}<template v-if="gewaehlt.eigener_name && gewaehlt.bezeichnung"> · {{ gewaehlt.bezeichnung }}</template
-            ><template v-if="gewaehlt.iban"> · <span class="font-mono">{{ ibanLang(gewaehlt.iban) }}</span></template>
+            ><template v-if="gewaehlt.iban">
+              · <span class="font-mono">{{ ibanLang(gewaehlt.iban) }}</span
+              ><Button
+                v-tooltip.bottom="'IBAN in die Zwischenablage kopieren'"
+                icon="pi pi-copy"
+                severity="secondary"
+                text
+                rounded
+                size="small"
+                class="kopieren align-middle"
+                aria-label="IBAN kopieren"
+                @click="kopieren('IBAN', gewaehlt.iban)"
+              /></template
+            ><template v-if="gewaehlt.bic">
+              · BIC <span class="font-mono">{{ gewaehlt.bic }}</span
+              ><Button
+                v-tooltip.bottom="'BIC in die Zwischenablage kopieren'"
+                icon="pi pi-copy"
+                severity="secondary"
+                text
+                rounded
+                size="small"
+                class="kopieren align-middle"
+                aria-label="BIC kopieren"
+                @click="kopieren('BIC', gewaehlt.bic)"
+              /></template>
           </div>
           <div class="text-sm text-muted-color">
             <template v-if="gewaehlt">
@@ -923,6 +958,12 @@ const gefiltert = computed(() =>
 </template>
 
 <style scoped>
+/* Kopierknöpfe neben IBAN und BIC: nicht höher als die Textzeile */
+.kopieren {
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-left: 0.125rem;
+}
 /* Vorgemerkte Umsätze schraffiert wie in MoneyMoney */
 :deep(tr.vorgemerkt) {
   background-image: repeating-linear-gradient(
