@@ -83,7 +83,8 @@ def test_stundensatz_bleibt_am_eintrag(client, db):
     e = eintrag(client, "2026-09-01")
     vorlage_setzen(client, stundensatz="100")
     assert e["satz"] == "90"
-    r = client.put(f"/api/taetigkeiten/{e['id']}", json={"datum": "2026-09-01", "stunden": "4", "taetigkeit": "x"})
+    r = client.put(f"/api/taetigkeiten/{e['id']}", json={"datum": "2026-09-01", "stunden": "4", "taetigkeit": "x",
+                                                         "auftrag": "Projekt A"})
     assert r.json()["satz"] == "90"
     assert client.get("/api/taetigkeiten?zeitraum=2026-09").json()["betrag"] == "360.00"
 
@@ -95,6 +96,86 @@ def test_eingabe_wird_geprueft(client):
     e = eintrag(client, "2026-10-01")
     assert client.delete(f"/api/taetigkeiten/{e['id']}").status_code == 204
     assert client.get("/api/taetigkeiten?zeitraum=2026-10").json()["eintraege"] == []
+
+
+def test_entwurf_braucht_nur_datum_stunden_und_taetigkeit(client):
+    vorlage_setzen(client)
+    leer = {"auftrag": "", "referenz": "", "rolle": "", "ort": "", "leistungsart": ""}
+    e = eintrag(client, "2026-10-01", "3", entwurf=True, **leer)
+    assert e["entwurf"] is True
+    assert e["auftrag"] == ""
+
+    # ohne Tätigkeit auch als Entwurf nicht
+    r = client.post("/api/taetigkeiten", json={"datum": "2026-10-02", "stunden": "2", "taetigkeit": " ",
+                                                "entwurf": True})
+    assert r.status_code == 400
+    assert "Tätigkeit" in r.json()["detail"]
+    # ein fertiger Eintrag braucht den Auftrag
+    r = client.post("/api/taetigkeiten", json={"datum": "2026-10-02", "stunden": "2", "taetigkeit": "Review"})
+    assert r.status_code == 400
+    assert "Auftrag" in r.json()["detail"] and "Entwurf" in r.json()["detail"]
+    r = client.put(f"/api/taetigkeiten/{e['id']}", json={"datum": "2026-10-01", "stunden": "3",
+                                                         "taetigkeit": "Feature gebaut"})
+    assert r.status_code == 400
+
+    # fertigstellen
+    r = client.put(f"/api/taetigkeiten/{e['id']}", json={"datum": "2026-10-01", "stunden": "3",
+                                                         "taetigkeit": "Feature gebaut", "auftrag": "Projekt A"})
+    assert r.status_code == 200
+    assert r.json()["entwurf"] is False
+
+
+def test_entwurf_sperrt_den_excel_nachweis(client):
+    vorlage_setzen(client)
+    eintrag(client, "2026-10-01")
+    e = eintrag(client, "2026-10-06", "4", entwurf=True, auftrag="")
+    eintrag(client, "2026-10-07", "4", entwurf=True)
+    eintrag(client, "2026-11-02", entwurf=True)  # anderer Monat
+
+    m = client.get("/api/taetigkeiten?zeitraum=2026-10").json()
+    assert [x["entwurf"] for x in m["eintraege"]] == [False, True, True]
+    assert m["stunden"] == "16"  # Entwürfe zählen in der Übersicht mit
+    assert m["entwurf_sperre"] == ("Im Oktober 2026 stehen noch 2 Entwürfe (06.10., 07.10.). "
+                                   "Bitte erst fertigstellen, dann lässt sich der Excel-Nachweis erstellen.")
+    r = client.get("/api/taetigkeiten/nachweis/2026-10")
+    assert r.status_code == 409
+    assert r.json()["detail"] == m["entwurf_sperre"]
+    assert client.get("/api/taetigkeiten/nachweis/2026-09").status_code == 200
+
+    client.delete(f"/api/taetigkeiten/{m['eintraege'][2]['id']}")
+    client.put(f"/api/taetigkeiten/{e['id']}", json={**e, "auftrag": "Betrieb", "entwurf": False})
+    m = client.get("/api/taetigkeiten?zeitraum=2026-10").json()
+    assert m["entwurf_sperre"] is None
+    assert client.get("/api/taetigkeiten/nachweis/2026-10").status_code == 200
+    assert "1 Entwurf (02.11.)" in client.get("/api/taetigkeiten?zeitraum=2026-11").json()["entwurf_sperre"]
+
+
+def test_vorschlag_uebernimmt_felder_vom_fertigen_eintrag(client):
+    vorlage_setzen(client)
+    eintrag(client, "2026-10-01", auftrag="Betrieb")
+    eintrag(client, "2026-10-02", taetigkeit="Noch offen", entwurf=True, auftrag="")
+    v = client.get("/api/taetigkeiten?zeitraum=2026-10").json()["vorschlag"]
+    assert v["datum"] == "2026-10-05"
+    assert v["auftrag"] == "Betrieb"
+    assert "entwurf" not in v
+
+
+def test_alte_datenbank_bekommt_spalte_entwurf(tmp_path):
+    import sqlite3
+
+    from ustva.db import Datenbank
+
+    pfad = tmp_path / "alt.db"
+    con = sqlite3.connect(pfad)
+    con.execute("CREATE TABLE taetigkeiten (id INTEGER PRIMARY KEY AUTOINCREMENT, datum TEXT NOT NULL, "
+                "auftrag TEXT NOT NULL DEFAULT '', referenz TEXT NOT NULL DEFAULT '', "
+                "taetigkeit TEXT NOT NULL DEFAULT '', stunden TEXT NOT NULL, satz TEXT, "
+                "rolle TEXT NOT NULL DEFAULT '', ort TEXT NOT NULL DEFAULT '', leistungsart TEXT NOT NULL DEFAULT '')")
+    con.execute("INSERT INTO taetigkeiten (datum, stunden, taetigkeit) VALUES ('2026-10-01', '8', 'Alt')")
+    con.commit()
+    con.close()
+    t = Datenbank(pfad).taetigkeiten()[0]
+    assert (t.taetigkeit, t.entwurf) == ("Alt", False)
 
 
 def test_excel_wie_vorlage(client):

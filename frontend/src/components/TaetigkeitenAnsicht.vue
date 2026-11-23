@@ -9,6 +9,7 @@ import InputNumber from "primevue/inputnumber";
 import InputText from "primevue/inputtext";
 import Message from "primevue/message";
 import Select from "primevue/select";
+import Tag from "primevue/tag";
 import ToggleSwitch from "primevue/toggleswitch";
 import { useConfirm } from "primevue/useconfirm";
 import { useToast } from "primevue/usetoast";
@@ -44,6 +45,7 @@ const form = reactive({
   rolle: "",
   ort: "",
   leistungsart: "",
+  entwurf: false,
 });
 
 const WOCHENTAGE = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
@@ -71,6 +73,16 @@ const orte = computed(() => liste(vorlage.value?.orte, "ort"));
 const leistungsarten = computed(() => liste(vorlage.value?.leistungsarten, "leistungsart"));
 const tage = computed(() => new Set(daten.value?.eintraege.map((e) => e.datum)).size);
 const ohneSatz = computed(() => vorlage.value && vorlage.value.stundensatz == null);
+const entwuerfe = computed(() => daten.value?.eintraege.filter((e) => e.entwurf) ?? []);
+const entwurfStunden = computed(() => entwuerfe.value.reduce((s, e) => s + Number(e.stunden), 0));
+
+// Ein Entwurf braucht nur Datum, Stunden und Tätigkeit; ein fertiger Eintrag auch den Auftrag
+const fehlt = computed(() => {
+  const liste: string[] = [];
+  if (!form.taetigkeit?.trim()) liste.push("Tätigkeit");
+  if (!form.entwurf && !form.auftrag?.trim()) liste.push("Auftrag");
+  return liste;
+});
 
 // Freie Werktage mit demselben Namen zu Abschnitten zusammenfassen, auch über ein Wochenende hinweg
 const freieAbschnitte = computed(() => {
@@ -97,6 +109,7 @@ function fuellen(t: TaetigkeitEingabe) {
   form.rolle = t.rolle;
   form.ort = t.ort;
   form.leistungsart = t.leistungsart;
+  form.entwurf = t.entwurf ?? false;
 }
 
 async function laden(vorbelegen = false) {
@@ -137,7 +150,7 @@ function textGewaehlt(event: { value: string }) {
 }
 
 async function speichern() {
-  if (!form.datum || !form.stunden) return;
+  if (!form.datum || !form.stunden || fehlt.value.length) return;
   const eingabe: TaetigkeitEingabe = {
     datum: alsIso(form.datum)!,
     stunden: String(form.stunden),
@@ -147,6 +160,7 @@ async function speichern() {
     rolle: form.rolle ?? "",
     ort: form.ort ?? "",
     leistungsart: form.leistungsart ?? "",
+    entwurf: form.entwurf,
   };
   speichert.value = true;
   try {
@@ -182,6 +196,24 @@ function uebernehmen(t: Taetigkeit) {
   bearbeitet.value = null;
   fuellen({ ...t, datum: daten.value?.vorschlag.datum ?? t.datum, stunden: daten.value?.vorschlag.stunden ?? t.stunden });
   zumFormular();
+}
+
+// Vollständiger Entwurf: direkt fertig; sonst ins Formular, um das Fehlende zu ergänzen
+async function fertigstellen(t: Taetigkeit) {
+  if (!t.auftrag.trim() || !t.taetigkeit.trim()) {
+    bearbeiten(t);
+    form.entwurf = false;
+    toast.add({ severity: "info", summary: "Noch den Auftrag ergänzen", detail: "Dann speichern.", life: 4000 });
+    return;
+  }
+  try {
+    const { id: _id, betrag: _betrag, ...felder } = t;
+    await api.taetigkeitAendern(t.id, { ...felder, entwurf: false });
+    if (bearbeitet.value === t.id) bearbeitet.value = null;
+    await laden(bearbeitet.value === null);
+  } catch (e) {
+    fehler(e);
+  }
 }
 
 function abbrechen() {
@@ -228,10 +260,30 @@ async function importiert() {
     </label>
     <span class="flex-1" />
     <Button label="Vorlage" icon="pi pi-sliders-h" severity="secondary" text @click="vorlageOffen = true" />
-    <a :href="`/api/taetigkeiten/nachweis/${zeitraum}`">
+    <span v-if="daten?.entwurf_sperre" v-tooltip.bottom="'Erst alle Entwürfe im Monat fertigstellen'">
+      <Button label="Excel erstellen" icon="pi pi-file-excel" disabled />
+    </span>
+    <a v-else :href="`/api/taetigkeiten/nachweis/${zeitraum}`">
       <Button label="Excel erstellen" icon="pi pi-file-excel" :disabled="!daten?.eintraege.length" />
     </a>
   </div>
+
+  <Message v-if="daten?.entwurf_sperre" severity="warn" class="mb-4">
+    <div>{{ daten.entwurf_sperre }}</div>
+    <div class="mt-1 flex flex-wrap items-center gap-1">
+      <Button
+        v-for="e in entwuerfe"
+        :key="e.id"
+        :label="`${tagKurz(e.datum)} bearbeiten`"
+        icon="pi pi-pencil"
+        size="small"
+        severity="warn"
+        text
+        class="!px-2 !py-0.5"
+        @click="bearbeiten(e)"
+      />
+    </div>
+  </Message>
 
   <Message v-if="ohneSatz" severity="warn" class="mb-4">
     <div class="flex flex-wrap items-center gap-2">
@@ -246,6 +298,9 @@ async function importiert() {
     <div class="rounded-xl border border-surface-200 bg-surface-0 p-4 dark:border-surface-700 dark:bg-surface-900">
       <div class="flex items-center gap-2 text-sm text-muted-color"><i class="pi pi-calendar" />Geleistete Stunden</div>
       <div class="zahl mt-1 text-2xl font-semibold">{{ stunden(daten.stunden) }} h</div>
+      <div v-if="entwuerfe.length" class="text-xs text-amber-700 dark:text-amber-400">
+        davon {{ stunden(entwurfStunden) }} h im Entwurf
+      </div>
     </div>
     <div class="rounded-xl border border-surface-200 bg-surface-0 p-4 dark:border-surface-700 dark:bg-surface-900">
       <div class="flex items-center gap-2 text-sm text-muted-color"><i class="pi pi-wallet" />Betrag netto</div>
@@ -320,15 +375,30 @@ async function importiert() {
           </label>
         </div>
         <div class="flex flex-wrap items-center gap-2">
+          <label
+            v-tooltip.top="'Unvollständig speichern: Pflicht sind nur Datum, Stunden und Tätigkeit'"
+            class="mr-2 flex items-center gap-2 text-sm"
+          >
+            <ToggleSwitch v-model="form.entwurf" />
+            Entwurf
+          </label>
           <Button
             type="submit"
-            :label="bearbeitet === null ? 'Eintragen' : 'Speichern'"
+            :label="(bearbeitet === null ? 'Eintragen' : 'Speichern') + (form.entwurf ? ' als Entwurf' : '')"
             :icon="bearbeitet === null ? 'pi pi-plus' : 'pi pi-save'"
+            :severity="form.entwurf ? 'warn' : undefined"
             :loading="speichert"
-            :disabled="!form.datum || !form.stunden"
+            :disabled="!form.datum || !form.stunden || fehlt.length > 0"
           />
           <Button v-if="bearbeitet !== null" label="Abbrechen" severity="secondary" text @click="abbrechen" />
-          <span v-else class="text-xs text-muted-color">
+          <span v-if="fehlt.length" class="text-xs text-amber-700 dark:text-amber-400">
+            Es fehlt noch: {{ fehlt.join(", ") }}.
+            <template v-if="!fehlt.includes('Tätigkeit')">Ohne Auftrag geht es nur als Entwurf.</template>
+          </span>
+          <span v-else-if="form.entwurf" class="text-xs text-muted-color">
+            Solange ein Entwurf im Monat steht, lässt sich kein Excel-Nachweis erstellen.
+          </span>
+          <span v-else-if="bearbeitet === null" class="text-xs text-muted-color">
             Vorbelegt mit dem letzten Eintrag und dem nächsten freien Werktag.
           </span>
         </div>
@@ -376,12 +446,25 @@ async function importiert() {
   </Message>
 
   <KarteBox titel="Einträge" :untertitel="daten ? `${daten.eintraege.length} im Monat` : ''">
-    <DataTable :value="daten?.eintraege ?? []" size="small" data-key="id">
+    <DataTable
+      :value="daten?.eintraege ?? []"
+      size="small"
+      data-key="id"
+      :row-class="(t: Taetigkeit) => (t.entwurf ? '!bg-amber-50 dark:!bg-amber-950/40' : '')"
+    >
       <template #empty><span class="text-muted-color">Noch nichts eingetragen.</span></template>
       <Column header="Datum" class="whitespace-nowrap">
-        <template #body="{ data }">{{ tagKurz(data.datum) }}</template>
+        <template #body="{ data }">
+          <div>{{ tagKurz(data.datum) }}</div>
+          <Tag v-if="data.entwurf" value="Entwurf" severity="warn" icon="pi pi-pencil" class="mt-1 !px-1.5 !py-0 !text-xs" />
+        </template>
       </Column>
-      <Column field="auftrag" header="Auftrag" />
+      <Column header="Auftrag">
+        <template #body="{ data }">
+          <span v-if="data.auftrag">{{ data.auftrag }}</span>
+          <span v-else-if="data.entwurf" class="text-xs italic text-amber-700 dark:text-amber-400">fehlt noch</span>
+        </template>
+      </Column>
       <Column field="referenz" header="Referenz" />
       <Column header="Tätigkeit">
         <template #body="{ data }">
@@ -397,6 +480,16 @@ async function importiert() {
       </Column>
       <Column class="w-0 whitespace-nowrap text-right">
         <template #body="{ data }">
+          <Button
+            v-if="data.entwurf"
+            v-tooltip.top="data.auftrag ? 'Fertigstellen' : 'Fertigstellen: Auftrag ergänzen'"
+            icon="pi pi-check"
+            severity="warn"
+            text
+            size="small"
+            aria-label="Entwurf fertigstellen"
+            @click="fertigstellen(data)"
+          />
           <Button
             v-tooltip.top="'Als Vorlage für den nächsten Tag'"
             icon="pi pi-copy"
