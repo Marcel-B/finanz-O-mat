@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS bank_konten (  -- Konten mit Freigabe über Enable Ba
     saldo_stand TEXT NOT NULL DEFAULT '',
     abrufe TEXT NOT NULL DEFAULT '',
     fehler TEXT NOT NULL DEFAULT '',
-    fints TEXT NOT NULL DEFAULT ''  -- letzter Abruf über FinTS (ustva/ing_konten.py)
+    fints TEXT NOT NULL DEFAULT '',  -- letzter Abruf über FinTS (ustva/ing_konten.py)
+    bic TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS konto_vorgemerkt (  -- vorgemerkte Umsätze, bei jedem Abruf je Konto ersetzt
     konto TEXT NOT NULL,  -- bank_konten.schluessel
@@ -396,7 +397,7 @@ class Datenbank:
             if "abgeglichen" not in spalten:
                 self._con.execute("ALTER TABLE sitzungen ADD COLUMN abgeglichen REAL NOT NULL DEFAULT 0")
             spalten = {z["name"] for z in self._con.execute("PRAGMA table_info(bank_konten)")}
-            for spalte in ("saldo", "saldo_stand", "abrufe", "fehler", "fints"):  # von vor Übersicht bzw. FinTS
+            for spalte in ("saldo", "saldo_stand", "abrufe", "fehler", "fints", "bic"):  # von vor Übersicht, FinTS, BIC
                 if spalte not in spalten:
                     self._con.execute(f"ALTER TABLE bank_konten ADD COLUMN {spalte} TEXT NOT NULL DEFAULT ''")
             spalten = {z["name"] for z in self._con.execute("PRAGMA table_info(konto_namen)")}

@@ -43,6 +43,23 @@ NAME_LAENGE = 60
 FARBE = re.compile(r"#[0-9a-f]{6}")
 
 
+# BIC der Banken, die der Reiter kennt, nach Land und Bankkennung in der IBAN. Gilt, solange die Bank selbst keine
+# BIC mitgeschickt hat (über FinTS kommt keine, Enable Banking schickt sie erst mit der nächsten Freigabe).
+BEKANNTE_BIC = {
+    ("DE", depot.ING_BLZ): depot.ING_BIC,
+    ("DE", "10011001"): "NTSBDEB1XXX",  # N26
+    ("NL", "BUNQ"): "BUNQNL2AXXX",  # bunq
+}
+
+
+def bic(k: BankKonto) -> str:
+    if k.bic:
+        return k.bic
+    land = k.iban[:2]
+    kennung = k.iban[4:12] if land == "DE" else k.iban[4:8]
+    return BEKANNTE_BIC.get((land, kennung), "")
+
+
 def _anzeige(anzeige: dict[str, dict], schluessel: str) -> tuple[str, str, int | None]:
     a = anzeige.get(schluessel) or {}
     return a.get("name") or "", a.get("farbe") or "", a.get("reihenfolge")
@@ -68,6 +85,7 @@ def _konto(k: BankKonto, jetzt: datetime, anzeige: dict[str, dict], vorgemerkt: 
         "bank": k.bank,
         "bezeichnung": k.bezeichnung,
         "iban": k.iban,
+        "bic": bic(k),
         "waehrung": k.waehrung,
         "saldo": k.saldo or None,
         "saldo_stand": k.saldo_stand,

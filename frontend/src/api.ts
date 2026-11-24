@@ -474,6 +474,7 @@ export interface BankKonto {
   bank: string;
   bezeichnung: string;
   iban: string;
+  bic: string; // leer, wenn weder die Bank sie schickt noch die Bank bekannt ist
   waehrung: string;
   saldo: string | null;
   saldo_stand: string; // Stichtag (JJJJ-MM-TT) oder Zeitpunkt des Abrufs
