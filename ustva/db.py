@@ -178,7 +178,8 @@ CREATE TABLE IF NOT EXISTS taetigkeiten (
     satz TEXT,
     rolle TEXT NOT NULL DEFAULT '',
     ort TEXT NOT NULL DEFAULT '',
-    leistungsart TEXT NOT NULL DEFAULT ''
+    leistungsart TEXT NOT NULL DEFAULT '',
+    entwurf INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS taetigkeiten_datum ON taetigkeiten(datum);
 CREATE TABLE IF NOT EXISTS stundenzettel (
@@ -336,13 +337,14 @@ def _zeile_zu_umsatz(z: sqlite3.Row) -> Umsatz:
     )
 
 
-TAETIGKEIT_FELDER = ["datum", "auftrag", "referenz", "taetigkeit", "stunden", "satz", "rolle", "ort", "leistungsart"]
+TAETIGKEIT_FELDER = ["datum", "auftrag", "referenz", "taetigkeit", "stunden", "satz", "rolle", "ort", "leistungsart",
+                     "entwurf"]
 
 
 def _taetigkeit_zu_werten(t: Taetigkeit) -> list:
     return [
         t.datum.isoformat(), t.auftrag, t.referenz, t.taetigkeit, str(t.stunden),
-        None if t.satz is None else str(t.satz), t.rolle, t.ort, t.leistungsart,
+        None if t.satz is None else str(t.satz), t.rolle, t.ort, t.leistungsart, int(t.entwurf),
     ]
 
 
@@ -358,6 +360,7 @@ def _zeile_zu_taetigkeit(z: sqlite3.Row) -> Taetigkeit:
         rolle=z["rolle"],
         ort=z["ort"],
         leistungsart=z["leistungsart"],
+        entwurf=bool(z["entwurf"]),
     )
 
 
@@ -405,6 +408,9 @@ class Datenbank:
                 self._con.execute("ALTER TABLE fints_zustand ADD COLUMN konten TEXT NOT NULL DEFAULT ''")
             if "abgelehnt" not in spalten:
                 self._con.execute("ALTER TABLE fints_zustand ADD COLUMN abgelehnt INTEGER NOT NULL DEFAULT 0")
+            spalten = {z["name"] for z in self._con.execute("PRAGMA table_info(taetigkeiten)")}
+            if "entwurf" not in spalten:  # von vor den Entwürfen
+                self._con.execute("ALTER TABLE taetigkeiten ADD COLUMN entwurf INTEGER NOT NULL DEFAULT 0")
 
     # Einstellungen aus der Oberfläche (überschreiben die Umgebungsvariablen)
     def einstellungen(self) -> dict[str, str]:

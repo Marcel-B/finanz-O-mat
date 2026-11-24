@@ -143,6 +143,7 @@ class Taetigkeit:
     rolle: str = ""
     ort: str = ""
     leistungsart: str = ""
+    entwurf: bool = False  # noch unvollständig; solange ein Entwurf im Monat steht, gibt es keinen Excel-Nachweis
     id: int | None = None
 
     def to_dict(self) -> dict:

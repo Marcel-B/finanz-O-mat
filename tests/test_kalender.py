@@ -146,7 +146,8 @@ def test_taetigkeiten_ohne_urlaub_und_feiertage(client):
     assert "AbC123" not in r.text
 
     for tag in ("2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08"):
-        assert client.post("/api/taetigkeiten", json={"datum": tag, "stunden": "8"}).status_code == 201
+        eintrag = {"datum": tag, "stunden": "8", "taetigkeit": "Entwicklung", "auftrag": "Projekt A"}
+        assert client.post("/api/taetigkeiten", json=eintrag).status_code == 201
     m = client.get("/api/taetigkeiten?zeitraum=2026-10").json()
     # 3.10. Feiertag (Samstag, zählt nicht), 12./13. krank, 19.–21. Urlaub; heute ist der 23.10.
     assert m["fehlende_tage"] == ["2026-10-09", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-22",

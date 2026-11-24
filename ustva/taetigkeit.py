@@ -120,6 +120,37 @@ def betrag(t: Taetigkeit, v: Vorlage) -> Decimal | None:
     return None if s is None else s * t.stunden
 
 
+# Entwürfe
+
+def fehlende_angaben(t: Taetigkeit) -> list[str]:
+    """Was einem fertigen Eintrag noch fehlt. Ein Entwurf braucht nur Datum, Stunden und die Tätigkeit."""
+    fehlt = [] if t.taetigkeit.strip() else ["Tätigkeit"]
+    if not t.entwurf and not t.auftrag.strip():
+        fehlt.append("Auftrag")
+    return fehlt
+
+
+def pruefen(t: Taetigkeit) -> None:
+    fehlt = fehlende_angaben(t)
+    if not fehlt:
+        return
+    if "Tätigkeit" in fehlt:
+        raise ValueError("Bitte die Tätigkeit beschreiben, auch ein Entwurf braucht sie.")
+    raise ValueError(f"Es fehlt noch: {', '.join(fehlt)}. Ist das noch offen, speichere den Eintrag als Entwurf.")
+
+
+def entwurf_sperre(eintraege: list[Taetigkeit], jahr: int, monat: int) -> str | None:
+    """Hinweis, warum es (noch) keinen Nachweis gibt, oder None, wenn kein Entwurf im Monat steht."""
+    tage = sorted({t.datum for t in eintraege if t.entwurf})
+    if not tage:
+        return None
+    anzahl = sum(1 for t in eintraege if t.entwurf)
+    liste = ", ".join(f"{t:%d.%m.}" for t in tage)
+    was = "steht noch 1 Entwurf" if anzahl == 1 else f"stehen noch {anzahl} Entwürfe"
+    return (f"Im {MONATE[monat - 1]} {jahr} {was} ({liste}). "
+            "Bitte erst fertigstellen, dann lässt sich der Excel-Nachweis erstellen.")
+
+
 # Auftragsliste einfügen
 
 # Spaltenköpfe bzw. JSON-Felder, wie sie in Auftragslisten vorkommen (klein geschrieben, ohne Satzzeichen),
@@ -346,7 +377,8 @@ def vorschlag(db: Datenbank, v: Vorlage, jahr: int, monat: int, bundesland: str,
     """Vorbelegung für den nächsten Eintrag: Felder vom letzten Eintrag, Datum der nächste freie Werktag."""
     im_monat = db.taetigkeiten(f"{jahr:04d}-{monat:02d}")
     alle = im_monat or db.taetigkeiten()
-    letzter = alle[-1] if alle else None
+    # Felder lieber von einem fertigen Eintrag übernehmen; einem Entwurf fehlt womöglich der Auftrag
+    letzter = next((t for t in reversed(alle) if not t.entwurf), alle[-1] if alle else None)
     belegt = {t.datum for t in im_monat}
     ab = im_monat[-1].datum if im_monat else date(jahr, monat, 1) - timedelta(days=1)
     frei = [t for t in _arbeitstage(jahr, monat, bundesland, urlaub) if t > ab and t not in belegt]

@@ -219,6 +219,7 @@ class TaetigkeitEingabe(BaseModel):
     rolle: str = ""
     ort: str = ""
     leistungsart: str = ""
+    entwurf: bool = False  # Pflicht sind dann nur Datum, Stunden und Tätigkeit
 
     @field_validator("stunden")
     @classmethod
@@ -835,6 +836,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
             "freie_tage": [{"datum": t.isoformat(), "name": name, "art": art}
                            for t, (name, art) in taetigkeit.freie_tage(jahr, monat, bundesland, urlaub).items()],
             "kalender": {"verknuepft": bool(c.kalender_url), "fehler": kalender_fehler},
+            "entwurf_sperre": taetigkeit.entwurf_sperre(eintraege, jahr, monat),
             "vorschlag": taetigkeit.vorschlag(db, v, jahr, monat, bundesland, urlaub),
             "texte": taetigkeit.fruehere_texte(db),
         }
@@ -848,6 +850,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     @app.post("/api/taetigkeiten", status_code=201)
     def taetigkeit_anlegen(eingabe: TaetigkeitEingabe):
         t = Taetigkeit(**eingabe.model_dump())
+        taetigkeit.pruefen(t)
         if t.satz is None:  # Satz festhalten, damit ein neuer Stundensatz alte Monate nicht ändert
             t.satz = taetigkeit.vorlage_laden(db).stundensatz
         return db.taetigkeit_anlegen(t).to_dict()
@@ -856,6 +859,7 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     def taetigkeit_aendern(taetigkeit_id: int, eingabe: TaetigkeitEingabe):
         alt = _taetigkeit(taetigkeit_id)
         t = Taetigkeit(**eingabe.model_dump(), id=taetigkeit_id)
+        taetigkeit.pruefen(t)
         if t.satz is None:
             t.satz = alt.satz if alt.satz is not None else taetigkeit.vorlage_laden(db).stundensatz
         return db.taetigkeit_aktualisieren(t).to_dict()
@@ -890,7 +894,10 @@ def create_app(cfg: Config | None = None, db: Datenbank | None = None, umrechner
     @app.get("/api/taetigkeiten/nachweis/{zr}")
     def taetigkeit_nachweis(zr: str):
         jahr, monat = _zeitraum(zr)
-        inhalt = taetigkeit.nachweis_xlsx(taetigkeit.vorlage_laden(db), db.taetigkeiten(zr), jahr, monat)
+        eintraege = db.taetigkeiten(zr)
+        if sperre := taetigkeit.entwurf_sperre(eintraege, jahr, monat):
+            raise HTTPException(409, sperre)
+        inhalt = taetigkeit.nachweis_xlsx(taetigkeit.vorlage_laden(db), eintraege, jahr, monat)
         name = taetigkeit.dateiname(jahr, monat)
         ascii_name = f"Taetigkeitsnachweis-{zr}.xlsx"
         return Response(inhalt, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

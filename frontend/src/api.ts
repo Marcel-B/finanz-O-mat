@@ -243,10 +243,14 @@ export interface Taetigkeit {
   rolle: string;
   ort: string;
   leistungsart: string;
+  entwurf: boolean; // Pflicht nur Datum, Stunden, Tätigkeit; sperrt den Excel-Nachweis des Monats
   betrag?: string | null;
 }
 
-export type TaetigkeitEingabe = Omit<Taetigkeit, "id" | "satz" | "betrag"> & { satz?: string | null };
+export type TaetigkeitEingabe = Omit<Taetigkeit, "id" | "satz" | "betrag" | "entwurf"> & {
+  satz?: string | null;
+  entwurf?: boolean;
+};
 
 export interface TaetigkeitenMonat {
   eintraege: Taetigkeit[];
@@ -255,6 +259,7 @@ export interface TaetigkeitenMonat {
   fehlende_tage: string[]; // Werktage bis heute ohne Eintrag, ohne Feiertage und Urlaub
   freie_tage: { datum: string; name: string; art: "feiertag" | "urlaub" }[]; // Werktage im Monat ohne Arbeit
   kalender: { verknuepft: boolean; fehler: string };
+  entwurf_sperre: string | null; // warum es noch keinen Excel-Nachweis gibt (Entwürfe im Monat)
   vorschlag: TaetigkeitEingabe; // Vorbelegung für den nächsten Eintrag
   texte: { taetigkeit: string; auftrag: string; referenz: string }[]; // frühere Tätigkeiten, neueste zuerst
 }
